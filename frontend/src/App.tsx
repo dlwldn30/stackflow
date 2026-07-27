@@ -2,7 +2,16 @@ import { useEffect, useMemo, useRef, useState, startTransition } from 'react'
 import { Background, Controls, MiniMap, ReactFlow } from '@xyflow/react'
 import './App.css'
 import { buildGraph, getNodeDetail } from './lib/graph'
-import type { EventStatus, ProductPayload, TraceDetail, TraceEvent, TraceSummary } from './types/trace'
+import type {
+  EventStatus,
+  ProductPayload,
+  TraceDetail,
+  TraceEvent,
+  TraceSessionResponse,
+  TraceStartedEvent,
+  TraceSummary,
+  TraceTerminalEvent,
+} from './types/trace'
 
 const SCENARIOS = [
   { value: 'normal', label: 'Normal' },
@@ -11,9 +20,6 @@ const SCENARIOS = [
   { value: 'service-error', label: 'Service Error' },
 ] as const
 
-const MIN_REPLAY_STEP_MS = 420
-const MAX_REPLAY_STEP_MS = 1100
-
 function App() {
   const [productId, setProductId] = useState('1001')
   const [scenario, setScenario] = useState<(typeof SCENARIOS)[number]['value']>('normal')
@@ -21,70 +27,23 @@ function App() {
   const [recentTraces, setRecentTraces] = useState<TraceSummary[]>([])
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [requestState, setRequestState] = useState<'idle' | 'loading' | 'error'>('idle')
-  const [requestMessage, setRequestMessage] = useState<string>('Run a request to capture the first flow.')
-  const [replayIndex, setReplayIndex] = useState(0)
-  const [isReplaying, setIsReplaying] = useState(false)
-  const replayTimersRef = useRef<number[]>([])
+  const [streamStatus, setStreamStatus] = useState<'idle' | 'connecting' | 'streaming' | 'completed' | 'error'>('idle')
+  const [requestMessage, setRequestMessage] = useState<string>('Open a live stream and run a request.')
+  const activeStreamRef = useRef<EventSource | null>(null)
 
-  function clearReplayTimers() {
-    replayTimersRef.current.forEach((timerId) => window.clearTimeout(timerId))
-    replayTimersRef.current = []
-  }
-
-  const visibleTrace = useMemo(() => {
-    if (!traceDetail) {
-      return null
-    }
-
-    return {
-      ...traceDetail,
-      events: traceDetail.events.slice(0, replayIndex),
-    }
-  }, [traceDetail, replayIndex])
-
-  const graph = buildGraph(visibleTrace)
+  const graph = buildGraph(traceDetail)
   const selectedNode = getNodeDetail(graph.states, selectedNodeId ?? graph.states.find((state) => state.active)?.id ?? null)
+
+  const recentEvents = useMemo(() => {
+    return traceDetail?.events.slice().reverse().slice(0, 6) ?? []
+  }, [traceDetail])
 
   useEffect(() => {
     void loadRecentTraces()
-  }, [])
-
-  useEffect(() => {
     return () => {
-      clearReplayTimers()
+      closeActiveStream()
     }
   }, [])
-
-  useEffect(() => {
-    if (!traceDetail) {
-      setReplayIndex(0)
-      setIsReplaying(false)
-      return
-    }
-
-    clearReplayTimers()
-    setReplayIndex(0)
-    setIsReplaying(true)
-
-    const events = traceDetail.events
-    if (events.length === 0) {
-      setIsReplaying(false)
-      return
-    }
-
-    events.forEach((event, index) => {
-      const timeoutId = window.setTimeout(() => {
-        startTransition(() => {
-          setReplayIndex(index + 1)
-          setSelectedNodeId(event.component)
-          if (index === events.length - 1) {
-            setIsReplaying(false)
-          }
-        })
-      }, getReplayDelay(events, index))
-      replayTimersRef.current.push(timeoutId)
-    })
-  }, [traceDetail])
 
   async function loadRecentTraces() {
     const response = await fetch('/api/traces')
@@ -99,49 +58,192 @@ function App() {
   }
 
   async function runRequest() {
+    closeActiveStream()
     setRequestState('loading')
-    setRequestMessage('Running request through StackFlow...')
+    setStreamStatus('connecting')
+    setRequestMessage('Creating trace session and opening live stream...')
 
-    const search = new URLSearchParams()
-    if (scenario !== 'normal') {
-      search.set('scenario', scenario)
-    }
+    try {
+      const sessionResponse = await fetch('/api/traces/session', { method: 'POST' })
+      if (!sessionResponse.ok) {
+        throw new Error('Trace session could not be created.')
+      }
 
-    const response = await fetch(`/api/products/${productId}?${search.toString()}`)
-    const payload = (await response.json()) as ProductPayload
+      const session = (await sessionResponse.json()) as TraceSessionResponse
+      const traceId = session.traceId
+      const endpoint = `/api/products/${productId}`
 
-    if (!payload.traceId) {
-      setRequestState('error')
-      setRequestMessage('Request did not return a trace id.')
-      return
-    }
-
-    const traceResponse = await fetch(`/api/traces/${payload.traceId}`)
-    if (!traceResponse.ok) {
-      setRequestState('error')
-      setRequestMessage('Trace detail could not be loaded.')
-      return
-    }
-
-    const trace = (await traceResponse.json()) as TraceDetail
-    startTransition(() => {
-      setTraceDetail(trace)
-      setSelectedNodeId(null)
-      setRequestState(response.ok ? 'idle' : 'error')
-      setRequestMessage(buildRequestMessage(trace.resultStatus, payload))
-      setRecentTraces((current) => {
-        const next = current.filter((item) => item.traceId !== trace.traceId)
-        next.unshift({
-          traceId: trace.traceId,
-          endpoint: trace.endpoint,
-          scenario: trace.scenario,
-          resultStatus: trace.resultStatus,
-          httpStatus: trace.httpStatus,
-          durationMs: trace.durationMs,
-          startedAt: trace.startedAt,
-        })
-        return next.slice(0, 8)
+      startTransition(() => {
+        setTraceDetail(createPlaceholderTrace(traceId, endpoint, scenario))
+        setSelectedNodeId(null)
       })
+
+      try {
+        const stream = await openTraceStream(traceId)
+        activeStreamRef.current = stream
+        setStreamStatus('streaming')
+        setRequestMessage('Live stream connected. Running request through StackFlow...')
+      } catch {
+        setStreamStatus('error')
+        setRequestMessage('Live stream unavailable. Running request and falling back to final trace load...')
+      }
+
+      const search = new URLSearchParams({ traceId })
+      if (scenario !== 'normal') {
+        search.set('scenario', scenario)
+      }
+
+      const response = await fetch(`${endpoint}?${search.toString()}`)
+      const payload = (await response.json()) as ProductPayload
+
+      if (!payload.traceId) {
+        throw new Error('Request did not return a trace id.')
+      }
+
+      const finalTrace = await fetchTraceWithRetry(payload.traceId)
+
+      startTransition(() => {
+        setTraceDetail(finalTrace)
+        setSelectedNodeId((current) => current ?? finalTrace.events.at(-1)?.component ?? null)
+        setRequestState(response.ok ? 'idle' : 'error')
+        setRequestMessage(buildRequestMessage(finalTrace.resultStatus, payload, streamStatus))
+        setRecentTraces((current) => {
+          const next = current.filter((item) => item.traceId !== finalTrace.traceId)
+          next.unshift({
+            traceId: finalTrace.traceId,
+            endpoint: finalTrace.endpoint,
+            scenario: finalTrace.scenario,
+            resultStatus: finalTrace.resultStatus,
+            httpStatus: finalTrace.httpStatus,
+            durationMs: finalTrace.durationMs,
+            startedAt: finalTrace.startedAt,
+          })
+          return next.slice(0, 8)
+        })
+      })
+    } catch (error) {
+      setRequestState('error')
+      setStreamStatus('error')
+      setRequestMessage(error instanceof Error ? error.message : 'Request failed unexpectedly.')
+    }
+  }
+
+  async function openTraceStream(traceId: string) {
+    let terminalReceived = false
+
+    return await new Promise<EventSource>((resolve, reject) => {
+      const stream = new EventSource(`/api/traces/${traceId}/stream`)
+      let opened = false
+
+      const onOpen = () => {
+        opened = true
+        resolve(stream)
+      }
+
+      const onStarted = (rawEvent: MessageEvent<string>) => {
+        const payload = JSON.parse(rawEvent.data) as TraceStartedEvent
+        startTransition(() => {
+          setStreamStatus('streaming')
+          setTraceDetail((current) => {
+            if (!current || current.traceId !== payload.traceId) {
+              return current
+            }
+
+            return {
+              ...current,
+              method: payload.method,
+              endpoint: payload.endpoint,
+              scenario: payload.scenario,
+              startedAt: payload.timestamp,
+            }
+          })
+          setRequestMessage('Receiving live events...')
+        })
+      }
+
+      const onTraceEvent = (rawEvent: MessageEvent<string>) => {
+        const payload = JSON.parse(rawEvent.data) as TraceEvent
+        startTransition(() => {
+          setTraceDetail((current) => {
+            if (!current || current.traceId !== payload.traceId) {
+              return current
+            }
+
+            return {
+              ...current,
+              events: [...current.events, payload],
+              endedAt: payload.endedAt,
+            }
+          })
+          setSelectedNodeId(payload.component)
+        })
+      }
+
+      const onTerminal = (rawEvent: MessageEvent<string>, nextStatus: 'completed' | 'error') => {
+        terminalReceived = true
+        const payload = JSON.parse(rawEvent.data) as TraceTerminalEvent
+        startTransition(() => {
+          setStreamStatus(nextStatus)
+          setTraceDetail((current) => {
+            if (!current || current.traceId !== payload.traceId) {
+              return current
+            }
+
+            return {
+              ...current,
+              endedAt: payload.timestamp,
+              durationMs: payload.durationMs,
+              httpStatus: payload.httpStatus,
+              resultStatus: payload.resultStatus,
+            }
+          })
+          setRequestMessage(
+            nextStatus === 'completed'
+              ? 'Live trace completed. Finalizing detail view...'
+              : `Live trace failed at ${payload.errorType ?? 'unknown component'}. Finalizing detail view...`,
+          )
+        })
+      }
+
+      const onError = () => {
+        stream.close()
+        if (terminalReceived) {
+          return
+        }
+
+        if (!opened) {
+          reject(new Error('Live stream could not be opened.'))
+          return
+        }
+
+        startTransition(() => {
+          setStreamStatus('error')
+        })
+      }
+
+      stream.addEventListener('open', onOpen as EventListener)
+      stream.addEventListener('trace_started', onStarted as EventListener)
+      stream.addEventListener('trace_event', onTraceEvent as EventListener)
+      stream.addEventListener('trace_completed', ((event: Event) => onTerminal(event as MessageEvent<string>, 'completed')) as EventListener)
+      stream.addEventListener('trace_failed', ((event: Event) => onTerminal(event as MessageEvent<string>, 'error')) as EventListener)
+      stream.addEventListener('error', onError as EventListener)
+    })
+  }
+
+  function closeActiveStream() {
+    activeStreamRef.current?.close()
+    activeStreamRef.current = null
+  }
+
+  async function selectTrace(traceId: string) {
+    closeActiveStream()
+    const detail = await fetchTraceWithRetry(traceId)
+    startTransition(() => {
+      setTraceDetail(detail)
+      setSelectedNodeId(null)
+      setStreamStatus('idle')
+      setRequestState('idle')
+      setRequestMessage(`Loaded trace ${detail.traceId.slice(0, 8)} from history.`)
     })
   }
 
@@ -152,8 +254,8 @@ function App() {
           <p className="eyebrow">StackFlow MVP</p>
           <h1>Trace the request. See the failure node.</h1>
           <p className="hero-copy">
-            Run a sample product lookup and inspect how the request moved through
-            Controller, Service, Redis, Repository, MySQL, and Response.
+            Open a live stream before the request starts, then watch Controller, Service, Redis, Repository, MySQL,
+            and Response activate in real time.
           </p>
         </div>
         <div className="hero-stats">
@@ -168,8 +270,8 @@ function App() {
             </strong>
           </article>
           <article>
-            <span>Latency</span>
-            <strong>{traceDetail?.durationMs ?? 0}ms</strong>
+            <span>Stream</span>
+            <strong>{streamStatus.toUpperCase()}</strong>
           </article>
         </div>
       </section>
@@ -196,7 +298,7 @@ function App() {
               </select>
             </label>
             <button className="run-button" type="button" onClick={() => void runRequest()} disabled={requestState === 'loading'}>
-              {requestState === 'loading' ? 'Running...' : 'Run Request'}
+              {requestState === 'loading' ? 'Streaming...' : 'Run Live Request'}
             </button>
             <p className="request-message">{requestMessage}</p>
           </div>
@@ -215,16 +317,7 @@ function App() {
                     key={trace.traceId}
                     type="button"
                     className={`trace-item${traceDetail?.traceId === trace.traceId ? ' is-selected' : ''}`}
-                    onClick={async () => {
-                      const response = await fetch(`/api/traces/${trace.traceId}`)
-                      if (!response.ok) return
-                      const detail = (await response.json()) as TraceDetail
-                      startTransition(() => {
-                        setTraceDetail(detail)
-                        setSelectedNodeId(null)
-                        setRequestMessage(`Loaded trace ${detail.traceId.slice(0, 8)} from history.`)
-                      })
-                    }}
+                    onClick={() => void selectTrace(trace.traceId)}
                   >
                     <div>
                       <strong>{trace.endpoint}</strong>
@@ -248,23 +341,17 @@ function App() {
                 <h2>Request Flow Graph</h2>
                 <p>
                   {traceDetail
-                    ? `${traceDetail.method} ${traceDetail.endpoint} · HTTP ${traceDetail.httpStatus}`
-                    : 'Run the first request to activate the graph.'}
+                    ? `${traceDetail.method} ${traceDetail.endpoint} · HTTP ${traceDetail.httpStatus || '-'}`
+                    : 'Run the first request to activate the live graph.'}
                 </p>
               </div>
-              {traceDetail ? (
-                <button className="replay-button" type="button" onClick={() => setTraceDetail({ ...traceDetail })}>
-                  Replay Flow
-                </button>
-              ) : null}
+              <span className={`pill pill--inline pill--${streamStatus === 'completed' ? 'success' : streamStatus === 'streaming' ? 'loading' : streamStatus}`}>
+                {streamStatus.toUpperCase()}
+              </span>
             </div>
             <div className="replay-status">
-              <span className={`pill pill--inline pill--${isReplaying ? 'loading' : 'success'}`}>
-                {isReplaying ? 'REPLAYING' : 'COMPLETE'}
-              </span>
-              <span>
-                {visibleTrace?.events.length ?? 0} / {traceDetail?.events.length ?? 0} events shown
-              </span>
+              <span>{traceDetail?.events.length ?? 0} live events captured</span>
+              <span>{traceDetail ? `${traceDetail.durationMs}ms total` : 'waiting for stream'}</span>
             </div>
             <div className="graph-surface">
               <ReactFlow
@@ -354,34 +441,84 @@ function App() {
               </div>
             )}
           </div>
+
+          <div className="panel-card">
+            <div className="panel-header">
+              <h2>Live Event Log</h2>
+              <span>{recentEvents.length}</span>
+            </div>
+            <div className="visit-list">
+              {recentEvents.length === 0 ? (
+                <p className="empty-copy">No live event received yet.</p>
+              ) : (
+                recentEvents.map((event) => (
+                  <article key={event.eventId} className="visit-card">
+                    <header>
+                      <strong>{event.component}</strong>
+                      <span className={`pill pill--inline pill--${event.status.toLowerCase()}`}>{event.status}</span>
+                    </header>
+                    <dl>
+                      <div>
+                        <dt>Type</dt>
+                        <dd>{event.eventType}</dd>
+                      </div>
+                      <div>
+                        <dt>Duration</dt>
+                        <dd>{event.durationMs}ms</dd>
+                      </div>
+                    </dl>
+                  </article>
+                ))
+              )}
+            </div>
+          </div>
         </aside>
       </section>
     </main>
   )
 }
 
-function buildRequestMessage(resultStatus: EventStatus, payload: ProductPayload) {
+function createPlaceholderTrace(traceId: string, endpoint: string, scenario: string): TraceDetail {
+  const now = new Date().toISOString()
+  return {
+    traceId,
+    method: 'GET',
+    endpoint,
+    scenario,
+    startedAt: now,
+    endedAt: now,
+    durationMs: 0,
+    httpStatus: 0,
+    resultStatus: 'SUCCESS',
+    events: [],
+  }
+}
+
+async function fetchTraceWithRetry(traceId: string) {
+  const attempts = 5
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const response = await fetch(`/api/traces/${traceId}`)
+    if (response.ok) {
+      return (await response.json()) as TraceDetail
+    }
+
+    await new Promise((resolve) => window.setTimeout(resolve, 220))
+  }
+
+  throw new Error('Trace detail could not be loaded.')
+}
+
+function buildRequestMessage(resultStatus: EventStatus, payload: ProductPayload, currentStreamStatus: string) {
   if (payload.errorMessage) {
     return `${resultStatus}: ${payload.errorMessage}`
   }
 
   if (payload.cacheStatus) {
-    return `${resultStatus}: product flow captured with cache ${payload.cacheStatus}.`
+    return `${resultStatus}: product flow captured with cache ${payload.cacheStatus} (${currentStreamStatus}).`
   }
 
-  return `${resultStatus}: request captured successfully.`
-}
-
-function getReplayDelay(events: TraceEvent[], index: number): number {
-  if (index === 0) {
-    return MIN_REPLAY_STEP_MS
-  }
-
-  const current = new Date(events[index].startedAt).getTime()
-  const previous = new Date(events[index - 1].startedAt).getTime()
-  const rawGap = current - previous
-  const boundedGap = Math.max(MIN_REPLAY_STEP_MS, Math.min(MAX_REPLAY_STEP_MS, rawGap))
-  return getReplayDelay(events, index - 1) + boundedGap
+  return `${resultStatus}: request captured successfully (${currentStreamStatus}).`
 }
 
 export default App

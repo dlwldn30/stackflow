@@ -37,10 +37,20 @@ public class ProductController {
 	@GetMapping("/products/{productId}")
 	public ResponseEntity<?> getProduct(
 		@PathVariable Long productId,
-		@RequestParam(required = false) String scenario
+		@RequestParam(required = false) String scenario,
+		@RequestParam(required = false) String traceId
 	) {
 		ScenarioMode scenarioMode = ScenarioMode.from(scenario);
-		TraceSession traceSession = traceService.startTrace("GET", "/api/products/" + productId, scenarioMode.apiValue());
+		String resolvedTraceId = traceId == null || traceId.isBlank()
+			? traceService.createTraceSession().traceId()
+			: traceId;
+		TraceSession traceSession = traceService.startTrace(
+			resolvedTraceId,
+			"GET",
+			"/api/products/" + productId,
+			scenarioMode.apiValue()
+		);
+		traceService.publishTraceStarted(traceSession);
 
 		traceSession.recordInstant(
 			ComponentType.CLIENT,

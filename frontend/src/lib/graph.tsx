@@ -51,12 +51,13 @@ export function buildGraph(trace: TraceDetail | null): {
   edges: Edge[]
   states: GraphNodeState[]
 } {
+  const orderedEvents = sortEventsByStartTime(trace?.events ?? [])
   const states = COMPONENT_ORDER.map((component) =>
-    createNodeState(component, trace?.events.filter((event) => event.component === component) ?? []),
+    createNodeState(component, orderedEvents.filter((event) => event.component === component)),
   )
 
   const statesById = new Map(states.map((state) => [state.id, state]))
-  const componentPath = buildComponentPath(trace?.events ?? [])
+  const componentPath = buildComponentPath(orderedEvents)
   const activeEdges = new Set(componentPath.map(([source, target]) => `${source}-${target}`))
 
   const nodes: Node[] = states.map((state) => ({
@@ -141,4 +142,10 @@ function buildComponentPath(events: TraceEvent[]): Array<[ComponentType, Compone
     }
   }
   return path
+}
+
+function sortEventsByStartTime(events: TraceEvent[]) {
+  return events
+    .slice()
+    .sort((left, right) => new Date(left.startedAt).getTime() - new Date(right.startedAt).getTime())
 }

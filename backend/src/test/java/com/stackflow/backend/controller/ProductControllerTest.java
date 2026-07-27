@@ -25,7 +25,7 @@ class ProductControllerTest {
 
 	@BeforeEach
 	void setUp() {
-		TraceService traceService = new TraceService();
+		TraceService traceService = new TraceService(new com.stackflow.backend.service.TraceStreamService());
 		ProductCatalogStore productCatalogStore = new ProductCatalogStore();
 		ProductRepositoryService repositoryService = new ProductRepositoryService(productCatalogStore);
 		ProductCacheService cacheService = new ProductCacheService();
@@ -37,7 +37,7 @@ class ProductControllerTest {
 
 	@Test
 	void returnsProductAndTraceIdForNormalRequest() {
-		ResponseEntity<?> response = productController.getProduct(1001L, null);
+		ResponseEntity<?> response = productController.getProduct(1001L, null, null);
 
 		assertEquals(HttpStatus.OK, response.getStatusCode());
 		ProductLookupResponse body = assertInstanceOf(ProductLookupResponse.class, response.getBody());
@@ -47,7 +47,7 @@ class ProductControllerTest {
 
 	@Test
 	void marksRedisFallbackAsWarning() {
-		ResponseEntity<?> response = productController.getProduct(1001L, "redis-down");
+		ResponseEntity<?> response = productController.getProduct(1001L, "redis-down", null);
 
 		assertEquals(HttpStatus.OK, response.getStatusCode());
 		ProductLookupResponse body = assertInstanceOf(ProductLookupResponse.class, response.getBody());
@@ -57,7 +57,7 @@ class ProductControllerTest {
 
 	@Test
 	void storesTraceForLaterInspection() {
-		ResponseEntity<?> response = productController.getProduct(1002L, null);
+		ResponseEntity<?> response = productController.getProduct(1002L, null, null);
 		ProductLookupResponse body = assertInstanceOf(ProductLookupResponse.class, response.getBody());
 
 		Trace trace = traceController.getTrace(body.traceId());
@@ -69,7 +69,7 @@ class ProductControllerTest {
 
 	@Test
 	void returnsTimeoutForDatabaseScenario() {
-		ResponseEntity<?> response = productController.getProduct(1001L, "db-timeout");
+		ResponseEntity<?> response = productController.getProduct(1001L, "db-timeout", null);
 
 		assertEquals(HttpStatus.GATEWAY_TIMEOUT, response.getStatusCode());
 		ErrorResponse body = assertInstanceOf(ErrorResponse.class, response.getBody());
@@ -78,8 +78,8 @@ class ProductControllerTest {
 
 	@Test
 	void exposesRecentTraceList() {
-		productController.getProduct(1001L, null);
-		productController.getProduct(1002L, "redis-down");
+		productController.getProduct(1001L, null, null);
+		productController.getProduct(1002L, "redis-down", null);
 
 		List<?> traces = traceController.getRecentTraces();
 

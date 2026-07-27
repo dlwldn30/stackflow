@@ -27,13 +27,6 @@ public class ProductService {
 
 		try {
 			if (scenarioMode == ScenarioMode.SERVICE_ERROR) {
-				traceSession.finishStep(
-					serviceStep,
-					EventStatus.ERROR,
-					"ServiceProcessingException",
-					"Simulated service-layer exception.",
-					Map.of()
-				);
 				throw new ServiceProcessingException("Simulated service-layer exception.");
 			}
 
