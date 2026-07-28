@@ -33,6 +33,15 @@ public class TraceStreamService {
 		});
 		emitter.onError(error -> removeEmitter(traceId, emitter));
 
+		// Send an immediate bootstrap event so the browser can confirm the stream is live
+		// before the traced request begins.
+		trySend(traceId, emitter, new TraceStreamMessage(
+			"stream_ready",
+			Map.of(
+				"traceId", traceId,
+				"timestamp", Instant.now().toString()
+			)
+		));
 		replayHistory(traceId, emitter);
 		return emitter;
 	}
