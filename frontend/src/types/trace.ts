@@ -46,6 +46,28 @@ export interface TraceSummary {
   startedAt: string
 }
 
+export interface TraceSessionResponse {
+  traceId: string
+}
+
+export interface TraceStartedEvent {
+  traceId: string
+  method: string
+  endpoint: string
+  scenario: string
+  timestamp: string
+}
+
+export interface TraceTerminalEvent {
+  traceId: string
+  resultStatus: EventStatus
+  httpStatus: number
+  durationMs: number
+  errorType: string | null
+  errorMessage: string | null
+  timestamp: string
+}
+
 export interface ProductPayload {
   traceId: string
   scenario: string

@@ -11,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 public class TraceSession {
 
@@ -20,14 +21,16 @@ public class TraceSession {
 	private final String scenario;
 	private final Instant startedAt;
 	private final List<TraceEvent> events;
+	private final Consumer<TraceEvent> eventSink;
 
-	TraceSession(String method, String endpoint, String scenario) {
-		this.traceId = UUID.randomUUID().toString();
+	TraceSession(String traceId, String method, String endpoint, String scenario, Consumer<TraceEvent> eventSink) {
+		this.traceId = traceId;
 		this.method = method;
 		this.endpoint = endpoint;
 		this.scenario = scenario;
 		this.startedAt = Instant.now();
 		this.events = new ArrayList<>();
+		this.eventSink = eventSink;
 	}
 
 	public TraceStep startStep(ComponentType component, String eventType, Map<String, String> metadata) {
@@ -46,7 +49,7 @@ public class TraceSession {
 		if (metadataUpdates != null) {
 			mergedMetadata.putAll(metadataUpdates);
 		}
-		events.add(new TraceEvent(
+		TraceEvent traceEvent = new TraceEvent(
 			UUID.randomUUID().toString(),
 			traceId,
 			step.component(),
@@ -58,12 +61,14 @@ public class TraceSession {
 			errorType,
 			errorMessage,
 			Map.copyOf(mergedMetadata)
-		));
+		);
+		events.add(traceEvent);
+		eventSink.accept(traceEvent);
 	}
 
 	public void recordInstant(ComponentType component, String eventType, EventStatus status, Map<String, String> metadata) {
 		Instant now = Instant.now();
-		events.add(new TraceEvent(
+		TraceEvent traceEvent = new TraceEvent(
 			UUID.randomUUID().toString(),
 			traceId,
 			component,
@@ -75,7 +80,9 @@ public class TraceSession {
 			null,
 			null,
 			metadata == null ? Map.of() : Map.copyOf(metadata)
-		));
+		);
+		events.add(traceEvent);
+		eventSink.accept(traceEvent);
 	}
 
 	public Trace complete(int httpStatus, EventStatus resultStatus) {
@@ -96,6 +103,18 @@ public class TraceSession {
 
 	public String traceId() {
 		return traceId;
+	}
+
+	public String method() {
+		return method;
+	}
+
+	public String endpoint() {
+		return endpoint;
+	}
+
+	public String scenario() {
+		return scenario;
 	}
 
 	public record TraceStep(

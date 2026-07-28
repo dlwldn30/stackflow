@@ -1,3 +1,4 @@
+import { MarkerType } from '@xyflow/react'
 import type { Edge, Node } from '@xyflow/react'
 import type { ComponentType, EventStatus, GraphNodeState, TraceDetail, TraceEvent } from '../types/trace'
 
@@ -21,14 +22,34 @@ const LABELS: Record<ComponentType, string> = {
   RESPONSE: 'Response',
 }
 
+const BADGES: Record<ComponentType, string> = {
+  CLIENT: 'CL',
+  CONTROLLER: 'CTL',
+  SERVICE: 'SVC',
+  REDIS: 'RDS',
+  REPOSITORY: 'REP',
+  MYSQL: 'SQL',
+  RESPONSE: 'RES',
+}
+
+const DESCRIPTIONS: Record<ComponentType, string> = {
+  CLIENT: 'Request source',
+  CONTROLLER: 'HTTP entry',
+  SERVICE: 'Business rule',
+  REDIS: 'Cache branch',
+  REPOSITORY: 'Data access',
+  MYSQL: 'Persistence',
+  RESPONSE: 'Final result',
+}
+
 const POSITIONS: Record<ComponentType, { x: number; y: number }> = {
-  CLIENT: { x: 30, y: 140 },
-  CONTROLLER: { x: 250, y: 50 },
-  SERVICE: { x: 250, y: 230 },
-  REDIS: { x: 500, y: 50 },
-  REPOSITORY: { x: 500, y: 230 },
-  MYSQL: { x: 760, y: 230 },
-  RESPONSE: { x: 980, y: 140 },
+  CLIENT: { x: 10, y: 190 },
+  CONTROLLER: { x: 225, y: 72 },
+  SERVICE: { x: 225, y: 306 },
+  REDIS: { x: 490, y: 72 },
+  REPOSITORY: { x: 490, y: 306 },
+  MYSQL: { x: 755, y: 306 },
+  RESPONSE: { x: 1000, y: 190 },
 }
 
 const BASE_EDGES = [
@@ -51,12 +72,13 @@ export function buildGraph(trace: TraceDetail | null): {
   edges: Edge[]
   states: GraphNodeState[]
 } {
+  const orderedEvents = sortEventsByStartTime(trace?.events ?? [])
   const states = COMPONENT_ORDER.map((component) =>
-    createNodeState(component, trace?.events.filter((event) => event.component === component) ?? []),
+    createNodeState(component, orderedEvents.filter((event) => event.component === component)),
   )
 
   const statesById = new Map(states.map((state) => [state.id, state]))
-  const componentPath = buildComponentPath(trace?.events ?? [])
+  const componentPath = buildComponentPath(orderedEvents)
   const activeEdges = new Set(componentPath.map(([source, target]) => `${source}-${target}`))
 
   const nodes: Node[] = states.map((state) => ({
@@ -65,9 +87,15 @@ export function buildGraph(trace: TraceDetail | null): {
     data: {
       label: (
         <div className="flow-node__body">
+          <div className="flow-node__topline">
+            <span className="flow-node__badge">{BADGES[state.component]}</span>
+            <span className="flow-node__status-dot" />
+          </div>
+          <span className="flow-node__kicker">{state.component}</span>
           <span className="flow-node__title">{state.label}</span>
+          <span className="flow-node__description">{DESCRIPTIONS[state.component]}</span>
           <span className="flow-node__meta">
-            {state.active ? `${state.durationMs}ms` : 'idle'}
+            {state.active ? `${state.durationMs}ms · ${state.visits.length} event${state.visits.length === 1 ? '' : 's'}` : 'not visited'}
           </span>
         </div>
       ),
@@ -87,8 +115,17 @@ export function buildGraph(trace: TraceDetail | null): {
       id: edgeId,
       source,
       target,
+      type: 'smoothstep',
       animated: active && Boolean(sourceState?.active && targetState?.active),
       className: `flow-edge${active ? ' is-active' : ''}`,
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        width: active ? 18 : 14,
+        height: active ? 18 : 14,
+        color: active ? '#37f2d0' : '#59708d',
+      },
+      zIndex: active ? 8 : 1,
+      interactionWidth: 24,
     }
   })
 
@@ -141,4 +178,10 @@ function buildComponentPath(events: TraceEvent[]): Array<[ComponentType, Compone
     }
   }
   return path
+}
+
+function sortEventsByStartTime(events: TraceEvent[]) {
+  return events
+    .slice()
+    .sort((left, right) => new Date(left.startedAt).getTime() - new Date(right.startedAt).getTime())
 }

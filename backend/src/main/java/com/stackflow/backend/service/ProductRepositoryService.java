@@ -5,6 +5,7 @@ import com.stackflow.backend.domain.EventStatus;
 import com.stackflow.backend.domain.Product;
 import com.stackflow.backend.domain.ScenarioMode;
 import com.stackflow.backend.store.ProductCatalogStore;
+import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Service;
 
@@ -85,5 +86,119 @@ public class ProductRepositoryService {
 		} catch (RuntimeException exception) {
 			throw exception;
 		}
+	}
+
+	public List<Product> findProducts(ScenarioMode scenarioMode, TraceSession traceSession) {
+		TraceSession.TraceStep repositoryStep = traceSession.startStep(
+			ComponentType.REPOSITORY,
+			"ProductRepository.findProducts",
+			Map.of("query", "all-products")
+		);
+		TraceSession.TraceStep mysqlStep = traceSession.startStep(
+			ComponentType.MYSQL,
+			"mysql.select.products",
+			Map.of("query", "catalog-list")
+		);
+
+		if (scenarioMode == ScenarioMode.DB_TIMEOUT) {
+			traceSession.finishStep(
+				mysqlStep,
+				EventStatus.TIMEOUT,
+				"DatabaseTimeoutException",
+				"Simulated MySQL timeout while loading product list.",
+				Map.of("latencyProfile", "slow-list-query")
+			);
+			traceSession.finishStep(
+				repositoryStep,
+				EventStatus.TIMEOUT,
+				"DatabaseTimeoutException",
+				"Repository could not list products because MySQL timed out.",
+				Map.of()
+			);
+			throw new DatabaseTimeoutException("Simulated MySQL timeout while loading product list.");
+		}
+
+		List<Product> products = productCatalogStore.findAll();
+		traceSession.finishStep(
+			mysqlStep,
+			EventStatus.SUCCESS,
+			null,
+			null,
+			Map.of("rows", Integer.toString(products.size()))
+		);
+		traceSession.finishStep(
+			repositoryStep,
+			EventStatus.SUCCESS,
+			null,
+			null,
+			Map.of("source", "catalog-store")
+		);
+		return products;
+	}
+
+	public int findProductStock(Long productId, ScenarioMode scenarioMode, TraceSession traceSession) {
+		TraceSession.TraceStep repositoryStep = traceSession.startStep(
+			ComponentType.REPOSITORY,
+			"ProductRepository.findProductStock",
+			Map.of("productId", productId.toString())
+		);
+		TraceSession.TraceStep mysqlStep = traceSession.startStep(
+			ComponentType.MYSQL,
+			"mysql.select.product_stock",
+			Map.of("productId", productId.toString())
+		);
+
+		if (scenarioMode == ScenarioMode.DB_TIMEOUT) {
+			traceSession.finishStep(
+				mysqlStep,
+				EventStatus.TIMEOUT,
+				"DatabaseTimeoutException",
+				"Simulated MySQL timeout while loading product stock.",
+				Map.of("latencyProfile", "slow-stock-query")
+			);
+			traceSession.finishStep(
+				repositoryStep,
+				EventStatus.TIMEOUT,
+				"DatabaseTimeoutException",
+				"Repository could not load stock because MySQL timed out.",
+				Map.of()
+			);
+			throw new DatabaseTimeoutException("Simulated MySQL timeout while loading product stock.");
+		}
+
+		int stock = productCatalogStore.stockById(productId);
+		if (stock < 0) {
+			traceSession.finishStep(
+				mysqlStep,
+				EventStatus.ERROR,
+				"ProductNotFoundException",
+				"Requested product stock does not exist.",
+				Map.of()
+			);
+			traceSession.finishStep(
+				repositoryStep,
+				EventStatus.ERROR,
+				"ProductNotFoundException",
+				"Repository stock lookup failed because the product was missing.",
+				Map.of()
+			);
+			throw new ProductNotFoundException(productId);
+		}
+
+		traceSession.finishStep(
+			mysqlStep,
+			EventStatus.SUCCESS,
+			null,
+			null,
+			Map.of("stock", Integer.toString(stock))
+		);
+		traceSession.finishStep(
+			repositoryStep,
+			EventStatus.SUCCESS,
+			null,
+			null,
+			Map.of("source", "catalog-store")
+		);
+		return stock;
 	}
 }
