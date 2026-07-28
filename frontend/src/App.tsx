@@ -3,7 +3,9 @@ import { Background, Controls, MiniMap, ReactFlow } from '@xyflow/react'
 import './App.css'
 import { buildGraph, getNodeDetail } from './lib/graph'
 import type {
+  ApiCatalogItem,
   EventStatus,
+  HttpMethod,
   ProductPayload,
   TraceDetail,
   TraceEvent,
@@ -22,15 +24,18 @@ const SCENARIOS = [
 
 type ApiDefinition = {
   id: string
-  method: 'GET' | 'POST'
+  method: HttpMethod
   label: string
   pathTemplate: string
   description: string
   requiresProductId: boolean
+  controller: string
+  handler: string
+  source: 'analyzed' | 'fallback'
   buildPath: (productId: string) => string
 }
 
-const API_CATALOG: ApiDefinition[] = [
+const FALLBACK_API_CATALOG: ApiDefinition[] = [
   {
     id: 'product-detail',
     method: 'GET',
@@ -38,6 +43,9 @@ const API_CATALOG: ApiDefinition[] = [
     pathTemplate: '/api/products/{productId}',
     description: 'Redis cache hit/miss와 DB fallback을 확인하는 기본 상품 조회 API입니다.',
     requiresProductId: true,
+    controller: 'ProductController',
+    handler: 'getProduct',
+    source: 'fallback',
     buildPath: (productId) => `/api/products/${productId}`,
   },
   {
@@ -47,6 +55,9 @@ const API_CATALOG: ApiDefinition[] = [
     pathTemplate: '/api/products',
     description: '상품 목록을 조회하며 Redis 없이 Service -> Repository -> MySQL 경로를 확인합니다.',
     requiresProductId: false,
+    controller: 'ProductController',
+    handler: 'listProducts',
+    source: 'fallback',
     buildPath: () => '/api/products',
   },
   {
@@ -56,6 +67,9 @@ const API_CATALOG: ApiDefinition[] = [
     pathTemplate: '/api/products/{productId}/stock',
     description: '상품 재고 조회 API로 DB timeout과 Service 예외 위치를 확인합니다.',
     requiresProductId: true,
+    controller: 'ProductController',
+    handler: 'getProductStock',
+    source: 'fallback',
     buildPath: (productId) => `/api/products/${productId}/stock`,
   },
   {
@@ -65,6 +79,9 @@ const API_CATALOG: ApiDefinition[] = [
     pathTemplate: '/api/products/{productId}/cache-refresh',
     description: 'DB에서 상품을 다시 읽고 Redis에 저장하는 쓰기성 요청 흐름을 확인합니다.',
     requiresProductId: true,
+    controller: 'ProductController',
+    handler: 'refreshProductCache',
+    source: 'fallback',
     buildPath: (productId) => `/api/products/${productId}/cache-refresh`,
   },
 ]
@@ -74,7 +91,6 @@ const DOMAINS = [
     id: 'product',
     name: 'Product',
     description: '상품 조회 요청이 cache, repository, database를 어떻게 통과하는지 확인합니다.',
-    endpoints: API_CATALOG.map((api) => `${api.method} ${api.pathTemplate}`),
     layers: ['Controller', 'Service', 'Redis', 'Repository', 'MySQL'],
   },
 ]
@@ -89,7 +105,9 @@ const PROJECT_FACTS = [
 function App() {
   const [productId, setProductId] = useState('1001')
   const [scenario, setScenario] = useState<(typeof SCENARIOS)[number]['value']>('normal')
-  const [selectedApiId, setSelectedApiId] = useState(API_CATALOG[0].id)
+  const [apiCatalog, setApiCatalog] = useState<ApiDefinition[]>(FALLBACK_API_CATALOG)
+  const [catalogSource, setCatalogSource] = useState<'analyzed' | 'fallback'>('fallback')
+  const [selectedApiId, setSelectedApiId] = useState(FALLBACK_API_CATALOG[0].id)
   const [selectedDomainId, setSelectedDomainId] = useState(DOMAINS[0].id)
   const [traceDetail, setTraceDetail] = useState<TraceDetail | null>(null)
   const [recentTraces, setRecentTraces] = useState<TraceSummary[]>([])
@@ -105,7 +123,8 @@ function App() {
   const activeNodeCount = graph.states.filter((state) => state.active).length
   const latestEvent = traceDetail?.events.at(-1) ?? null
   const selectedDomain = DOMAINS.find((domain) => domain.id === selectedDomainId) ?? DOMAINS[0]
-  const selectedApi = API_CATALOG.find((api) => api.id === selectedApiId) ?? API_CATALOG[0]
+  const selectedApi = apiCatalog.find((api) => api.id === selectedApiId) ?? apiCatalog[0] ?? FALLBACK_API_CATALOG[0]
+  const domainEndpoints = apiCatalog.map((api) => `${api.method} ${api.pathTemplate}`)
   const activeRoute = graph.states.filter((state) => state.active)
 
   const recentEvents = useMemo(() => {
@@ -113,11 +132,39 @@ function App() {
   }, [traceDetail])
 
   useEffect(() => {
+    void loadApiCatalog()
     void loadRecentTraces()
     return () => {
       closeActiveStream()
     }
   }, [])
+
+  async function loadApiCatalog() {
+    try {
+      const response = await fetch('/api/project/apis')
+      if (!response.ok) {
+        throw new Error('API catalog request failed.')
+      }
+
+      const items = (await response.json()) as ApiCatalogItem[]
+      const analyzedCatalog = items.map(toApiDefinition)
+      if (analyzedCatalog.length === 0) {
+        throw new Error('No API mapping detected.')
+      }
+
+      startTransition(() => {
+        setApiCatalog(analyzedCatalog)
+        setCatalogSource('analyzed')
+        setSelectedApiId((current) => analyzedCatalog.some((api) => api.id === current) ? current : analyzedCatalog[0].id)
+      })
+    } catch {
+      startTransition(() => {
+        setApiCatalog(FALLBACK_API_CATALOG)
+        setCatalogSource('fallback')
+        setSelectedApiId((current) => FALLBACK_API_CATALOG.some((api) => api.id === current) ? current : FALLBACK_API_CATALOG[0].id)
+      })
+    }
+  }
 
   async function loadRecentTraces() {
     const response = await fetch('/api/traces')
@@ -472,7 +519,7 @@ function App() {
               ))}
             </div>
             <div className="endpoint-list">
-              {selectedDomain.endpoints.map((endpoint) => (
+              {domainEndpoints.map((endpoint) => (
                 <div key={endpoint} className="endpoint-item">
                   <span>Endpoint</span>
                   <strong>{endpoint}</strong>
@@ -483,11 +530,14 @@ function App() {
 
           <div className="panel-card">
             <div className="panel-header">
-              <h2>Run request</h2>
-              <span className={`pill pill--${requestState}`}>{requestState}</span>
+              <div>
+                <h2>Run request</h2>
+                <p>{apiCatalog.length} APIs loaded from {catalogSource === 'analyzed' ? 'Spring mapping scan' : 'fallback catalog'}.</p>
+              </div>
+              <span className={`pill pill--${catalogSource === 'analyzed' ? 'success' : 'warning'}`}>{catalogSource}</span>
             </div>
             <div className="api-list">
-              {API_CATALOG.map((api) => (
+              {apiCatalog.map((api) => (
                 <button
                   key={api.id}
                   type="button"
@@ -499,13 +549,14 @@ function App() {
                     <strong>{api.label}</strong>
                     <span>{api.pathTemplate}</span>
                     <p>{api.description}</p>
+                    <span className="api-item__handler">{api.controller}.{api.handler}</span>
                   </div>
                 </button>
               ))}
             </div>
             {selectedApi.requiresProductId ? (
               <label className="field">
-                <span>Product ID</span>
+                <span>{selectedApi.source === 'analyzed' ? 'Path variable value' : 'Product ID'}</span>
                 <input value={productId} onChange={(event) => setProductId(event.target.value)} />
               </label>
             ) : null}
@@ -747,6 +798,31 @@ function App() {
       </section>
     </main>
   )
+}
+
+function toApiDefinition(item: ApiCatalogItem): ApiDefinition {
+  return {
+    id: item.id,
+    method: item.method,
+    label: humanizeHandler(item.handler),
+    pathTemplate: item.path,
+    description: `Detected from ${item.controller}.${item.handler}.`,
+    requiresProductId: item.requiresPathVariable,
+    controller: item.controller,
+    handler: item.handler,
+    source: 'analyzed',
+    buildPath: (productId) => buildPathFromTemplate(item.path, productId),
+  }
+}
+
+function buildPathFromTemplate(pathTemplate: string, pathVariableValue: string) {
+  return pathTemplate.replaceAll(/\{[^}/]+}/g, encodeURIComponent(pathVariableValue))
+}
+
+function humanizeHandler(handler: string) {
+  return handler
+    .replace(/([A-Z])/g, ' $1')
+    .replace(/^./, (first) => first.toUpperCase())
 }
 
 function createPlaceholderTrace(traceId: string, method: string, endpoint: string, scenario: string): TraceDetail {

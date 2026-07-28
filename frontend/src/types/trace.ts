@@ -1,5 +1,7 @@
 export type EventStatus = 'SUCCESS' | 'WARNING' | 'ERROR' | 'TIMEOUT' | 'SKIPPED'
 
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH'
+
 export type ComponentType =
   | 'CLIENT'
   | 'CONTROLLER'
@@ -82,6 +84,16 @@ export interface ProductPayload {
     price: number
     summary: string
   }
+}
+
+export interface ApiCatalogItem {
+  id: string
+  method: HttpMethod
+  path: string
+  controller: string
+  handler: string
+  requiresPathVariable: boolean
+  pathVariables: string[]
 }
 
 export interface GraphNodeState {

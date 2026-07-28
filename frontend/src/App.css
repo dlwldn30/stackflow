@@ -308,6 +308,13 @@
   overflow-wrap: anywhere;
 }
 
+.api-item__handler {
+  margin-top: 8px;
+  color: #aefaf0 !important;
+  font-size: 0.7rem !important;
+  font-weight: 800;
+}
+
 .api-item p {
   margin: 6px 0 0;
   color: #7f91ad;
