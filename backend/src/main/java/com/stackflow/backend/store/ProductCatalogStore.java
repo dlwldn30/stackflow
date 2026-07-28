@@ -2,6 +2,7 @@ package com.stackflow.backend.store;
 
 import com.stackflow.backend.domain.Product;
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.stereotype.Component;
@@ -19,5 +20,20 @@ public class ProductCatalogStore {
 
 	public Product findById(Long productId) {
 		return products.get(productId);
+	}
+
+	public List<Product> findAll() {
+		return products.values().stream()
+			.sorted((left, right) -> left.id().compareTo(right.id()))
+			.toList();
+	}
+
+	public int stockById(Long productId) {
+		return switch (productId.intValue()) {
+			case 1001 -> 42;
+			case 1002 -> 8;
+			case 1003 -> 0;
+			default -> -1;
+		};
 	}
 }

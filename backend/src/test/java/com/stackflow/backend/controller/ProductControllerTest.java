@@ -6,7 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import com.stackflow.backend.domain.EventStatus;
 import com.stackflow.backend.domain.Trace;
 import com.stackflow.backend.dto.ErrorResponse;
+import com.stackflow.backend.dto.ProductListResponse;
 import com.stackflow.backend.dto.ProductLookupResponse;
+import com.stackflow.backend.dto.ProductStockResponse;
 import com.stackflow.backend.service.ProductCacheService;
 import com.stackflow.backend.service.ProductRepositoryService;
 import com.stackflow.backend.service.ProductService;
@@ -46,6 +48,36 @@ class ProductControllerTest {
 	}
 
 	@Test
+	void returnsProductListWithTraceId() {
+		ResponseEntity<?> response = productController.listProducts(null, null);
+
+		assertEquals(HttpStatus.OK, response.getStatusCode());
+		ProductListResponse body = assertInstanceOf(ProductListResponse.class, response.getBody());
+		assertEquals(EventStatus.SUCCESS, body.resultStatus());
+		assertEquals(3, body.products().size());
+	}
+
+	@Test
+	void returnsProductStockWithTraceId() {
+		ResponseEntity<?> response = productController.getProductStock(1001L, null, null);
+
+		assertEquals(HttpStatus.OK, response.getStatusCode());
+		ProductStockResponse body = assertInstanceOf(ProductStockResponse.class, response.getBody());
+		assertEquals(EventStatus.SUCCESS, body.resultStatus());
+		assertEquals(42, body.stock());
+	}
+
+	@Test
+	void refreshesProductCacheWithPostFlow() {
+		ResponseEntity<?> response = productController.refreshProductCache(1001L, null, null);
+
+		assertEquals(HttpStatus.OK, response.getStatusCode());
+		ProductLookupResponse body = assertInstanceOf(ProductLookupResponse.class, response.getBody());
+		assertEquals(EventStatus.SUCCESS, body.resultStatus());
+		assertEquals("refreshed", body.cacheStatus());
+	}
+
+	@Test
 	void marksRedisFallbackAsWarning() {
 		ResponseEntity<?> response = productController.getProduct(1001L, "redis-down", null);
 
@@ -73,6 +105,18 @@ class ProductControllerTest {
 
 		assertEquals(HttpStatus.GATEWAY_TIMEOUT, response.getStatusCode());
 		ErrorResponse body = assertInstanceOf(ErrorResponse.class, response.getBody());
+		assertEquals(EventStatus.TIMEOUT, body.resultStatus());
+	}
+
+	@Test
+	void databaseTimeoutBypassesProductCacheHit() {
+		ResponseEntity<?> cachedResponse = productController.getProduct(1001L, null, null);
+		assertEquals(HttpStatus.OK, cachedResponse.getStatusCode());
+
+		ResponseEntity<?> timeoutResponse = productController.getProduct(1001L, "db-timeout", null);
+
+		assertEquals(HttpStatus.GATEWAY_TIMEOUT, timeoutResponse.getStatusCode());
+		ErrorResponse body = assertInstanceOf(ErrorResponse.class, timeoutResponse.getBody());
 		assertEquals(EventStatus.TIMEOUT, body.resultStatus());
 	}
 
