@@ -3,6 +3,7 @@ package com.stackflow.backend.controller;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
+import com.stackflow.backend.domain.ComponentType;
 import com.stackflow.backend.domain.EventStatus;
 import com.stackflow.backend.domain.Trace;
 import com.stackflow.backend.dto.ErrorResponse;
@@ -97,6 +98,31 @@ class ProductControllerTest {
 		assertEquals(body.traceId(), trace.traceId());
 		assertEquals("/api/products/1002", trace.endpoint());
 		assertEquals(EventStatus.SUCCESS, trace.resultStatus());
+	}
+
+	@Test
+	void storesTraceEventsByActualStartOrder() {
+		ResponseEntity<?> response = productController.getProduct(1002L, null, null);
+		ProductLookupResponse body = assertInstanceOf(ProductLookupResponse.class, response.getBody());
+
+		Trace trace = traceController.getTrace(body.traceId());
+		List<ComponentType> components = trace.events().stream()
+			.map(event -> event.component())
+			.toList();
+
+		assertEquals(
+			List.of(
+				ComponentType.CLIENT,
+				ComponentType.CONTROLLER,
+				ComponentType.SERVICE,
+				ComponentType.REDIS,
+				ComponentType.REPOSITORY,
+				ComponentType.MYSQL,
+				ComponentType.REDIS,
+				ComponentType.RESPONSE
+			),
+			components
+		);
 	}
 
 	@Test
