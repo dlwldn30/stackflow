@@ -52,6 +52,17 @@ export interface TraceSessionResponse {
   traceId: string
 }
 
+export interface ExternalRequestResponse {
+  method: string
+  targetUrl: string
+  httpStatus: number
+  durationMs: number
+  resultStatus: 'SUCCESS' | 'ERROR'
+  contentType: string
+  responseBody: string
+  errorMessage: string | null
+}
+
 export interface TraceStartedEvent {
   traceId: string
   method: string

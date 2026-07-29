@@ -163,7 +163,9 @@ public class SpringApiCatalogService {
 	}
 
 	private boolean isInternalController(String controller) {
-		return controller.equals("TraceController") || controller.equals("ProjectAnalysisController");
+		return controller.equals("TraceController")
+			|| controller.equals("ProjectAnalysisController")
+			|| controller.equals("ExternalRequestController");
 	}
 
 	private boolean isRestControllerAnnotation(String line) {

@@ -2,7 +2,7 @@
 
 Date: 2026-07-29
 Status: Draft
-Branch context: `feat/5-spring-api-static-analysis`
+Branch context: `feat/9-external-api-target-base-url`
 
 ## Purpose
 
@@ -57,11 +57,19 @@ The repository also has early static project analysis:
 - Group APIs into domains.
 - Summarize layers such as Controller, Service, Repository, Cache, Store, DTO, and Domain.
 
+The repository is adding external target execution:
+
+- Configure a target base URL for an analyzed Spring Boot project.
+- Call the selected external endpoint through the StackFlow backend proxy.
+- Show HTTP status, duration, content type, response body, and transport error message.
+- Keep external execution results separate from runtime trace evidence.
+
 Current limitation:
 
 - External project analysis and StackFlow sample runtime tracing are still separate concepts.
 - Selecting an analyzed external API does not automatically mean StackFlow can trace that external app internally.
 - Without instrumentation inside the external app, StackFlow can only show structure and estimated flow.
+- External API execution confirms the endpoint response, but it still cannot prove the internal Controller -> Service -> Repository path.
 
 ## Product Information Architecture
 
@@ -219,17 +227,21 @@ Scope:
 
 - Let users configure a target base URL.
 - Allow StackFlow to call external project APIs.
+- Keep this as HTTP execution evidence, not internal runtime trace evidence.
 
 Implementation:
 
 - Add target base URL input.
 - Build request URL from selected API path and user input values.
+- Route the call through `POST /api/external/request` so browser CORS does not block local target projects.
 - Show HTTP response result.
+- Show transport errors inside the response panel instead of crashing the UI.
 - Keep internal trace unavailable unless instrumentation is installed.
 
 Reason:
 
 - Calling an external API is useful, but it is still not enough for internal node-level tracing.
+- Backend proxy is safer for the MVP user flow than direct browser `fetch`, because many local Spring Boot apps will not have CORS configured for the Vite dev server.
 
 ## Phase 5. Design Spring Boot Instrumentation
 
