@@ -104,3 +104,4 @@ npm run build
 ## Planning docs
 
 - [Product direction and implementation plan](docs/product-direction-and-implementation-plan.md)
+- [Development convention](docs/development-convention.md)
