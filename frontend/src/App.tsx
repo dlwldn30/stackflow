@@ -41,6 +41,42 @@ type ApiDefinition = {
   buildPath: (productId: string) => string
 }
 
+type ViewMode = 'project' | 'api' | 'runtime'
+
+type EstimatedFlowStep = {
+  id: string
+  layer: string
+  label: string
+  detail: string
+  source: string
+}
+
+const VIEW_MODES: Array<{
+  id: ViewMode
+  label: string
+  title: string
+  description: string
+}> = [
+  {
+    id: 'project',
+    label: 'Project Map',
+    title: 'Understand the project first',
+    description: 'Domains, layers, controllers, and infrastructure from static Spring analysis.',
+  },
+  {
+    id: 'api',
+    label: 'API Flow',
+    title: 'Estimate the selected API path',
+    description: 'A static, best-effort route before runtime instrumentation exists.',
+  },
+  {
+    id: 'runtime',
+    label: 'Runtime Trace',
+    title: 'Run actual evidence',
+    description: 'SSE events, response payload, and the first failing node for runnable sample APIs.',
+  },
+]
+
 const FALLBACK_API_CATALOG: ApiDefinition[] = [
   {
     id: 'product-detail',
@@ -146,9 +182,11 @@ function App() {
   const [productId, setProductId] = useState('1001')
   const [projectPath, setProjectPath] = useState('')
   const [scenario, setScenario] = useState<(typeof SCENARIOS)[number]['value']>('normal')
+  const [activeView, setActiveView] = useState<ViewMode>('project')
   const [apiCatalog, setApiCatalog] = useState<ApiDefinition[]>(FALLBACK_API_CATALOG)
   const [projectStructure, setProjectStructure] = useState<ProjectStructure>(FALLBACK_PROJECT_STRUCTURE)
   const [catalogSource, setCatalogSource] = useState<'analyzed' | 'fallback'>('fallback')
+  const [analysisTarget, setAnalysisTarget] = useState<'sample' | 'external'>('sample')
   const [analysisState, setAnalysisState] = useState<'idle' | 'loading' | 'error'>('idle')
   const [analysisMessage, setAnalysisMessage] = useState('Using the default StackFlow backend project.')
   const [selectedApiId, setSelectedApiId] = useState(FALLBACK_API_CATALOG[0].id)
@@ -174,31 +212,34 @@ function App() {
   const selectedApi = visibleApis.find((api) => api.id === selectedApiId) ?? visibleApis[0] ?? FALLBACK_API_CATALOG[0]
   const projectFacts = buildProjectFacts(projectStructure)
   const activeRoute = graph.states.filter((state) => state.active)
+  const estimatedFlow = buildEstimatedFlow(selectedApi, selectedDomain)
+  const runtimeSupported = analysisTarget === 'sample' && isStackFlowRuntimeApi(selectedApi)
+  const runtimeModeLabel = runtimeSupported ? 'Run trace' : 'Analyze only'
   const graphFitKey = `${traceDetail?.traceId ?? 'empty'}-${traceDetail?.events.length ?? 0}`
   const workflowSteps = [
     {
       number: '01',
       title: 'Read project map',
       detail: `${projectStructure.projectName} · ${projectStructure.domains.length} domain`,
-      state: analysisState === 'loading' ? 'active' : catalogSource === 'analyzed' ? 'done' : 'warning',
+      state: activeView === 'project' || analysisState === 'loading' ? 'active' : catalogSource === 'analyzed' ? 'done' : 'warning',
     },
     {
       number: '02',
       title: 'Choose endpoint',
       detail: `${selectedApi.method} ${selectedApi.pathTemplate}`,
-      state: 'active',
+      state: activeView === 'api' ? 'active' : 'done',
     },
     {
       number: '03',
-      title: requestState === 'loading' ? 'Streaming request' : 'Run trace',
+      title: requestState === 'loading' ? 'Streaming request' : runtimeModeLabel,
       detail: requestState === 'loading' ? 'SSE events are arriving' : selectedApi.requestType,
-      state: requestState === 'loading' ? 'active' : traceDetail ? 'done' : 'idle',
+      state: activeView === 'runtime' || requestState === 'loading' ? 'active' : traceDetail ? 'done' : 'idle',
     },
     {
       number: '04',
       title: 'Inspect result',
       detail: selectedNode ? `${selectedNode.label} node selected` : traceDetail ? 'Select a graph node' : 'Waiting for trace',
-      state: selectedNode ? 'active' : traceDetail ? 'done' : 'idle',
+      state: activeView === 'runtime' && selectedNode ? 'active' : traceDetail ? 'done' : 'idle',
     },
   ]
 
@@ -247,12 +288,13 @@ function App() {
         throw new Error('No API mapping detected.')
       }
 
-      applyProjectStructure(structure, analyzedCatalog, 'Loaded the default StackFlow backend project.')
+      applyProjectStructure(structure, analyzedCatalog, 'Loaded the default StackFlow backend project.', 'sample')
     } catch {
       startTransition(() => {
         setProjectStructure(FALLBACK_PROJECT_STRUCTURE)
         setApiCatalog(FALLBACK_API_CATALOG)
         setCatalogSource('fallback')
+        setAnalysisTarget('sample')
         setAnalysisMessage('Default analysis failed. Showing fallback sample project.')
         setSelectedDomainId((current) =>
           FALLBACK_PROJECT_STRUCTURE.domains.some((domain) => domain.id === current)
@@ -267,6 +309,7 @@ function App() {
   async function analyzeProjectPath() {
     setAnalysisState('loading')
     setAnalysisMessage('Reading project files and Spring mappings...')
+    const nextAnalysisTarget = projectPath.trim() === '' ? 'sample' : 'external'
 
     try {
       const response = await fetch('/api/project/structure/analyze', {
@@ -288,27 +331,48 @@ function App() {
         structure,
         analyzedCatalog,
         `Loaded ${structure.projectName}: ${structure.domains.length} domain, ${analyzedCatalog.length} APIs.`,
+        nextAnalysisTarget,
       )
       setAnalysisState('idle')
+      setActiveView('project')
     } catch (error) {
       setAnalysisState('error')
       setAnalysisMessage(error instanceof Error ? error.message : 'Project analysis failed.')
     }
   }
 
-  function applyProjectStructure(structure: ProjectStructure, analyzedCatalog: ApiDefinition[], message: string) {
+  function applyProjectStructure(
+    structure: ProjectStructure,
+    analyzedCatalog: ApiDefinition[],
+    message: string,
+    target: 'sample' | 'external',
+  ) {
+    if (target === 'external') {
+      closeActiveStream()
+    }
+
     startTransition(() => {
       setProjectStructure(structure)
       setApiCatalog(analyzedCatalog)
       setCatalogSource('analyzed')
+      setAnalysisTarget(target)
       setAnalysisMessage(message)
       setSelectedDomainId((current) => structure.domains.some((domain) => domain.id === current) ? current : structure.domains[0].id)
       setSelectedApiId((current) => analyzedCatalog.some((api) => api.id === current) ? current : analyzedCatalog[0].id)
+      if (target === 'external') {
+        setTraceDetail(null)
+        setSelectedNodeId(null)
+        setLastResponseBody(null)
+        setStreamStatus('idle')
+        setRequestState('idle')
+        setRequestMessage('External project loaded. Inspect the estimated API flow; runtime trace requires instrumentation.')
+      }
     })
   }
 
   function selectDomain(domain: ProjectDomain) {
     setSelectedDomainId(domain.id)
+    setActiveView('project')
     const nextApi = apiCatalog.find((api) => api.domainId === domain.id)
     if (nextApi) {
       setSelectedApiId(nextApi.id)
@@ -328,11 +392,20 @@ function App() {
   }
 
   async function runRequest() {
+    if (!runtimeSupported) {
+      setActiveView('api')
+      setRequestState('error')
+      setStreamStatus('idle')
+      setRequestMessage('This API is analysis-only. Configure runtime instrumentation before tracing external project internals.')
+      return
+    }
+
     const runId = activeRunIdRef.current + 1
     activeRunIdRef.current = runId
     closeActiveStream()
     setRequestState('loading')
     setStreamStatus('connecting')
+    setActiveView('runtime')
     setRequestMessage('Creating trace session and opening live stream...')
     setLastResponseBody(null)
 
@@ -631,14 +704,29 @@ function App() {
         ))}
       </nav>
 
-      <section className="workspace">
+      <nav className="view-switcher" aria-label="StackFlow view modes">
+        {VIEW_MODES.map((mode) => (
+          <button
+            key={mode.id}
+            type="button"
+            className={`view-switcher__item${activeView === mode.id ? ' is-active' : ''}`}
+            onClick={() => setActiveView(mode.id)}
+          >
+            <span>{mode.label}</span>
+            <strong>{mode.title}</strong>
+            <small>{mode.description}</small>
+          </button>
+        ))}
+      </nav>
+
+      <section className={`workspace workspace--${activeView}`}>
         <aside className="left-panel control-rail">
           <div className="panel-card control-card">
             <div className="panel-header">
               <div>
                 <span className="section-label">Operator runbook</span>
-                <h2>Trace one API in order</h2>
-                <p>Start with the detected domain, choose an endpoint, then run a live request.</p>
+                <h2>Map, estimate, then trace</h2>
+                <p>Static analysis and actual runtime evidence stay separated.</p>
               </div>
               <span className={`pill pill--${catalogSource === 'analyzed' ? 'success' : 'warning'}`}>{catalogSource}</span>
             </div>
@@ -733,7 +821,10 @@ function App() {
                     key={api.id}
                     type="button"
                     className={`api-item${selectedApi.id === api.id ? ' is-selected' : ''}`}
-                    onClick={() => setSelectedApiId(api.id)}
+                    onClick={() => {
+                      setSelectedApiId(api.id)
+                      setActiveView('api')
+                    }}
                   >
                     <span className={`method-badge method-badge--${api.method.toLowerCase()}`}>{api.method}</span>
                     <div>
@@ -762,6 +853,9 @@ function App() {
                   <strong>{selectedApi.label}</strong>
                   <small>{selectedApi.pathTemplate}</small>
                 </div>
+                <span className={`pill pill--inline ${runtimeSupported ? 'pill--success' : 'pill--warning'}`}>
+                  {runtimeModeLabel}
+                </span>
               </div>
 
               <div className="request-form">
@@ -781,8 +875,8 @@ function App() {
                     ))}
                   </select>
                 </label>
-                <button className="run-button" type="button" onClick={() => void runRequest()} disabled={requestState === 'loading'}>
-                  {requestState === 'loading' ? 'Streaming events...' : 'Run trace for selected API'}
+                <button className="run-button" type="button" onClick={() => void runRequest()} disabled={requestState === 'loading' || !runtimeSupported}>
+                  {requestState === 'loading' ? 'Streaming events...' : runtimeSupported ? 'Run runtime trace' : 'Analyze only'}
                 </button>
                 <p className="request-message">{requestMessage}</p>
               </div>
@@ -821,238 +915,430 @@ function App() {
         </aside>
 
         <section className="graph-panel">
-          <div className="panel-card panel-card--graph">
-            <div className="graph-head">
-              <div>
-                <span className="section-label">04 Watch the route</span>
-                <h2>{selectedDomain.name} request flow</h2>
+          {activeView === 'project' ? (
+            <div className="panel-card panel-card--map">
+              <div className="graph-head">
+                <div>
+                  <span className="section-label">Project Map · static</span>
+                  <h2>{projectStructure.projectName}</h2>
+                  <p>Start here. This is the project structure StackFlow detected from source files.</p>
+                </div>
+                <span className="pill pill--inline pill--loading">STATIC ANALYSIS</span>
+              </div>
+
+              <div className="map-board" aria-label="Detected project map">
+                <section className="map-column map-column--domain">
+                  <span className="section-label">Domains</span>
+                  {projectStructure.domains.map((domain) => (
+                    <button
+                      key={domain.id}
+                      type="button"
+                      className={`map-domain-card${selectedDomain.id === domain.id ? ' is-selected' : ''}`}
+                      onClick={() => selectDomain(domain)}
+                    >
+                      <strong>{domain.name}</strong>
+                      <span>{domain.endpoints.length} APIs</span>
+                      <small>{domain.description}</small>
+                    </button>
+                  ))}
+                </section>
+
+                <section className="map-column">
+                  <span className="section-label">Controllers</span>
+                  {selectedDomain.controllers.map((controller) => (
+                    <article key={controller.name} className="map-node-card">
+                      <strong>{controller.name}</strong>
+                      <span>{controller.basePath || '/'} · {controller.endpointCount} endpoints</span>
+                      <small>{controller.packageName}</small>
+                    </article>
+                  ))}
+                </section>
+
+                <section className="map-column">
+                  <span className="section-label">Layers</span>
+                  {selectedDomain.layers.map((layer) => (
+                    <article key={layer.name} className="map-node-card">
+                      <strong>{layer.name}</strong>
+                      <span>{layer.classes.length} classes</span>
+                      <small>{layer.classes.join(', ')}</small>
+                    </article>
+                  ))}
+                </section>
+
+                <section className="map-column map-column--infra">
+                  <span className="section-label">Infrastructure</span>
+                  {(selectedDomain.infrastructure.length > 0 ? selectedDomain.infrastructure : ['Not detected']).map((item) => (
+                    <article key={item} className="map-node-card map-node-card--infra">
+                      <strong>{item}</strong>
+                      <span>Detected from names and mappings</span>
+                    </article>
+                  ))}
+                </section>
+              </div>
+            </div>
+          ) : null}
+
+          {activeView === 'api' ? (
+            <div className="panel-card panel-card--api-flow">
+              <div className="graph-head">
+                <div>
+                  <span className="section-label">API Flow · estimated</span>
+                  <h2>{selectedApi.method} {selectedApi.pathTemplate}</h2>
+                  <p>This path is inferred from static structure. It is not runtime evidence yet.</p>
+                </div>
+                <span className={`pill pill--inline ${runtimeSupported ? 'pill--success' : 'pill--warning'}`}>
+                  {runtimeModeLabel}
+                </span>
+              </div>
+
+              <div className="api-flow-summary">
+                <span>
+                  <strong>Domain</strong>
+                  {selectedDomain.name}
+                </span>
+                <span>
+                  <strong>Handler</strong>
+                  {selectedApi.controller}.{selectedApi.handler}
+                </span>
+                <span>
+                  <strong>Request type</strong>
+                  {selectedApi.requestType}
+                </span>
+                <span>
+                  <strong>Evidence level</strong>
+                  Estimated from code shape
+                </span>
+              </div>
+
+              <div className="estimated-flow" aria-label="Estimated API flow">
+                {estimatedFlow.map((step, index) => (
+                  <article key={step.id} className="estimated-step">
+                    <span>{String(index + 1).padStart(2, '0')}</span>
+                    <div>
+                      <em>{step.layer}</em>
+                      <strong>{step.label}</strong>
+                    </div>
+                    <small>
+                      {step.detail}
+                      <b>{step.source}</b>
+                    </small>
+                  </article>
+                ))}
+              </div>
+
+              <div className="analysis-boundary">
+                <strong>{runtimeSupported ? 'Runtime trace is available for this sample API.' : 'This endpoint is analysis-only right now.'}</strong>
                 <p>
-                  {traceDetail
-                    ? `${traceDetail.method} ${traceDetail.endpoint} · HTTP ${traceDetail.httpStatus || '-'}`
-                    : `Run ${selectedApi.method} ${selectedApi.pathTemplate} to activate the live graph.`}
+                  {runtimeSupported
+                    ? 'Switch to Runtime Trace to open SSE and run the request through StackFlow.'
+                    : 'External project internals require a future Spring Boot starter or agent before StackFlow can show actual node events.'}
                 </p>
               </div>
-              <span className={`pill pill--inline pill--${streamStatus === 'completed' ? 'success' : streamStatus === 'streaming' ? 'loading' : streamStatus}`}>
+            </div>
+          ) : null}
+
+          {activeView === 'runtime' ? (
+            <div className="panel-card panel-card--graph">
+              <div className="graph-head">
+                <div>
+                  <span className="section-label">Runtime Trace · actual</span>
+                  <h2>{selectedDomain.name} request flow</h2>
+                  <p>
+                    {traceDetail
+                      ? `${traceDetail.method} ${traceDetail.endpoint} · HTTP ${traceDetail.httpStatus || '-'}`
+                      : runtimeSupported
+                        ? `Run ${selectedApi.method} ${selectedApi.pathTemplate} to activate the live graph.`
+                        : 'This selected API is analysis-only. Runtime instrumentation is not connected.'}
+                  </p>
+                </div>
+                <span className={`pill pill--inline pill--${streamStatus === 'completed' ? 'success' : streamStatus === 'streaming' ? 'loading' : streamStatus}`}>
                   {streamStatus.toUpperCase()}
                 </span>
               </div>
 
-            <div className="graph-context" aria-label="Current graph context">
-              <span>
-                <strong>Domain</strong>
-                {selectedDomain.name}
-              </span>
-              <span>
-                <strong>Controller</strong>
-                {selectedApi.controller}
-              </span>
-              <span>
-                <strong>Endpoint</strong>
-                {selectedApi.method} {selectedApi.pathTemplate}
-              </span>
-              <span>
-                <strong>Trace goal</strong>
-                Find the first failing node
-              </span>
-            </div>
+              <div className="graph-context" aria-label="Current graph context">
+                <span>
+                  <strong>Domain</strong>
+                  {selectedDomain.name}
+                </span>
+                <span>
+                  <strong>Controller</strong>
+                  {selectedApi.controller}
+                </span>
+                <span>
+                  <strong>Endpoint</strong>
+                  {selectedApi.method} {selectedApi.pathTemplate}
+                </span>
+                <span>
+                  <strong>Trace goal</strong>
+                  Find the first failing node
+                </span>
+              </div>
 
-            <div className="flow-route">
-              {graph.states.map((state) => (
-                <button
-                  key={state.id}
-                  type="button"
-                  className={`route-step route-step--${state.status.toLowerCase()}${state.active ? ' is-active' : ''}${selectedNode?.id === state.id ? ' is-selected' : ''}`}
-                  onClick={() => setSelectedNodeId(state.id)}
+              <div className="flow-route">
+                {graph.states.map((state) => (
+                  <button
+                    key={state.id}
+                    type="button"
+                    className={`route-step route-step--${state.status.toLowerCase()}${state.active ? ' is-active' : ''}${selectedNode?.id === state.id ? ' is-selected' : ''}`}
+                    onClick={() => setSelectedNodeId(state.id)}
+                  >
+                    <span>{state.label}</span>
+                    <strong>{state.active ? `${state.durationMs}ms` : 'idle'}</strong>
+                  </button>
+                ))}
+              </div>
+
+              <div className="graph-toolbar">
+                <div>
+                  <span>{traceDetail?.events.length ?? 0} live events</span>
+                  <strong>{activeRoute.length > 0 ? activeRoute.map((state) => state.label).join(' -> ') : 'Run a request to activate the path'}</strong>
+                </div>
+                <div className="legend-strip" aria-label="Graph status legend">
+                  <span className="legend-chip legend-chip--success">success</span>
+                  <span className="legend-chip legend-chip--warning">warning</span>
+                  <span className="legend-chip legend-chip--error">error</span>
+                  <span className="legend-chip legend-chip--idle">idle</span>
+                </div>
+              </div>
+
+              <div className="graph-surface">
+                <div className="graph-lanes" aria-hidden="true">
+                  <span>client</span>
+                  <span>application</span>
+                  <span>cache</span>
+                  <span>data</span>
+                  <span>response</span>
+                </div>
+                <ReactFlow
+                  key={traceDetail?.traceId ?? 'empty-flow'}
+                  fitView
+                  fitViewOptions={{ padding: 0.16 }}
+                  onInit={(instance) => {
+                    flowInstanceRef.current = instance
+                    window.requestAnimationFrame(() => {
+                      instance.fitView({ padding: 0.18, duration: 180, includeHiddenNodes: true })
+                    })
+                  }}
+                  nodes={graph.nodes}
+                  edges={graph.edges}
+                  onNodeClick={(_, node) => setSelectedNodeId(node.id)}
+                  nodesConnectable={false}
+                  nodesDraggable={false}
+                  elementsSelectable
+                  minZoom={0.35}
+                  maxZoom={1.35}
+                  proOptions={{ hideAttribution: true }}
                 >
-                  <span>{state.label}</span>
-                  <strong>{state.active ? `${state.durationMs}ms` : 'idle'}</strong>
-                </button>
-              ))}
-            </div>
-
-            <div className="graph-toolbar">
-              <div>
-                <span>{traceDetail?.events.length ?? 0} live events</span>
-                <strong>{activeRoute.length > 0 ? activeRoute.map((state) => state.label).join(' -> ') : 'Run a request to activate the path'}</strong>
-              </div>
-              <div className="legend-strip" aria-label="Graph status legend">
-                <span className="legend-chip legend-chip--success">success</span>
-                <span className="legend-chip legend-chip--warning">warning</span>
-                <span className="legend-chip legend-chip--error">error</span>
-                <span className="legend-chip legend-chip--idle">idle</span>
+                  <Controls showInteractive={false} />
+                  <Background gap={20} size={1} />
+                </ReactFlow>
               </div>
             </div>
-
-            <div className="graph-surface">
-              <div className="graph-lanes" aria-hidden="true">
-                <span>client</span>
-                <span>application</span>
-                <span>cache</span>
-                <span>data</span>
-                <span>response</span>
-              </div>
-              <ReactFlow
-                key={traceDetail?.traceId ?? 'empty-flow'}
-                fitView
-                fitViewOptions={{ padding: 0.16 }}
-                onInit={(instance) => {
-                  flowInstanceRef.current = instance
-                  window.requestAnimationFrame(() => {
-                    instance.fitView({ padding: 0.18, duration: 180, includeHiddenNodes: true })
-                  })
-                }}
-                nodes={graph.nodes}
-                edges={graph.edges}
-                onNodeClick={(_, node) => setSelectedNodeId(node.id)}
-                nodesConnectable={false}
-                nodesDraggable={false}
-                elementsSelectable
-                minZoom={0.35}
-                maxZoom={1.35}
-                proOptions={{ hideAttribution: true }}
-              >
-                <Controls showInteractive={false} />
-                <Background gap={20} size={1} />
-              </ReactFlow>
-            </div>
-          </div>
+          ) : null}
         </section>
 
         <aside className="right-panel inspector-rail">
-          <div className="panel-card inspector-workbench">
-            <div className="panel-header">
-              <div>
-                <span className="section-label">05 Inspect result</span>
-                <h2>{latestEvent ? latestEvent.component : 'No trace yet'}</h2>
-                <p>{latestEvent ? latestEvent.eventType : 'Run a trace, then click a graph node to inspect evidence.'}</p>
-              </div>
-              <span className={`pill pill--inline pill--${(traceDetail?.resultStatus ?? 'success').toLowerCase()}`}>
-                HTTP {traceDetail?.httpStatus || '-'}
-              </span>
-            </div>
-
-            <div className="runtime-meter runtime-meter--compact">
-              <span>{traceDetail ? `${traceDetail.durationMs}ms` : '0ms'}</span>
-              <span>{activeNodeCount} active nodes</span>
-            </div>
-
-            <section className="inspector-section response-card">
-              <div className="section-row">
-                <span className="section-label">Returned JSON</span>
-                <span>{traceDetail?.resultStatus ?? 'IDLE'}</span>
-              </div>
-              {formattedResponseBody ? (
-                <pre className="response-body">{formattedResponseBody}</pre>
-              ) : (
-                <p className="empty-copy">Run a request to inspect the response payload.</p>
-              )}
-            </section>
-
-            <section className="inspector-section inspector-card">
-              <div className="section-row">
-                <span className="section-label">Clicked node evidence</span>
-                {selectedNode ? (
-                  <span className={`pill pill--inline pill--${selectedNode.status.toLowerCase()}`}>
-                    {selectedNode.status}
-                  </span>
-                ) : null}
-              </div>
-              {!selectedNode ? (
-                <p className="empty-copy">Click Controller, Service, Redis, Repository, MySQL, or Response in the graph.</p>
-              ) : (
-                <div className="detail-stack">
-                  <div className="detail-summary">
-                    <strong>{selectedNode.label}</strong>
-                    <span>{selectedNode.durationMs}ms total</span>
-                  </div>
-                  <div className="detail-grid">
-                    <div>
-                      <span>Trace ID</span>
-                      <strong>{traceDetail?.traceId ?? '-'}</strong>
-                    </div>
-                    <div>
-                      <span>Visits</span>
-                      <strong>{selectedNode.visits.length}</strong>
-                    </div>
-                  </div>
-                  <div className="visit-list">
-                    {selectedNode.visits.length === 0 ? (
-                      <p className="empty-copy">This node was not visited in the current trace.</p>
-                    ) : (
-                      selectedNode.visits.map((event) => (
-                        <article key={event.eventId} className="visit-card">
-                          <header>
-                            <strong>{event.eventType}</strong>
-                            <span className={`pill pill--inline pill--${event.status.toLowerCase()}`}>{event.status}</span>
-                          </header>
-                          <dl>
-                            <div>
-                              <dt>Duration</dt>
-                              <dd>{event.durationMs}ms</dd>
-                            </div>
-                            <div>
-                              <dt>Error Type</dt>
-                              <dd>{event.errorType ?? '-'}</dd>
-                            </div>
-                            <div>
-                              <dt>Error Message</dt>
-                              <dd>{event.errorMessage ?? '-'}</dd>
-                            </div>
-                          </dl>
-                          <div className="metadata-list">
-                            {Object.keys(event.metadata).length === 0 ? (
-                              <span className="metadata-item">No metadata</span>
-                            ) : (
-                              Object.entries(event.metadata).map(([key, value]) => (
-                                <span key={key} className="metadata-item">
-                                  {key}: {value}
-                                </span>
-                              ))
-                            )}
-                          </div>
-                        </article>
-                      ))
-                    )}
-                  </div>
+          {activeView === 'project' ? (
+            <div className="panel-card inspector-workbench">
+              <div className="panel-header">
+                <div>
+                  <span className="section-label">Project evidence</span>
+                  <h2>{selectedDomain.name}</h2>
+                  <p>Static structure only. No request has been executed from this panel.</p>
                 </div>
-              )}
-            </section>
-          </div>
-
-          <div className="panel-card timeline-card timeline-card--compact">
-            <div className="panel-header">
-              <div>
-                <h2>Live event log</h2>
-                <p>Latest event first. Click graph nodes for full detail.</p>
+                <span className="pill pill--inline pill--loading">ESTIMATED</span>
               </div>
-              <span>{recentEvents.length}</span>
-            </div>
-            <div className="timeline-list">
-            {recentEvents.length === 0 ? (
-              <p className="empty-copy">No live event received yet.</p>
-            ) : (
-              recentEvents.map((event, index) => (
-                <article key={event.eventId} className="timeline-item">
-                  <div className="timeline-item__marker">
-                    <span>{index + 1}</span>
-                  </div>
-                  <div className="timeline-item__body">
-                    <header>
-                      <strong>{event.component}</strong>
-                      <span className={`pill pill--inline pill--${event.status.toLowerCase()}`}>{event.status}</span>
-                    </header>
-                    <p>{event.eventType}</p>
-                    <div className="timeline-item__meta">
-                      <span>{event.durationMs}ms</span>
-                      <span>{new Date(event.startedAt).toLocaleTimeString()}</span>
-                      <span>{event.errorType ?? 'no error'}</span>
-                    </div>
-                  </div>
+              <div className="insight-list">
+                <article>
+                  <span>Project</span>
+                  <strong>{projectStructure.projectName}</strong>
+                  <p>{projectStructure.framework}</p>
                 </article>
-              ))
-            )}
+                <article>
+                  <span>Domain APIs</span>
+                  <strong>{selectedDomain.endpoints.length}</strong>
+                  <p>{selectedDomain.responsibilities.join(' / ') || 'No request type detected'}</p>
+                </article>
+                <article>
+                  <span>Detected infra</span>
+                  <strong>{selectedDomain.infrastructure.join(' / ') || 'None'}</strong>
+                  <p>Based on class names and endpoint paths.</p>
+                </article>
+              </div>
             </div>
-          </div>
+          ) : null}
+
+          {activeView === 'api' ? (
+            <div className="panel-card inspector-workbench">
+              <div className="panel-header">
+                <div>
+                  <span className="section-label">API evidence</span>
+                  <h2>{selectedApi.label}</h2>
+                  <p>{selectedApi.description}</p>
+                </div>
+                <span className={`pill pill--inline ${runtimeSupported ? 'pill--success' : 'pill--warning'}`}>
+                  {runtimeModeLabel}
+                </span>
+              </div>
+              <div className="insight-list">
+                <article>
+                  <span>Selected handler</span>
+                  <strong>{selectedApi.controller}.{selectedApi.handler}</strong>
+                  <p>{selectedApi.method} {selectedApi.pathTemplate}</p>
+                </article>
+                <article>
+                  <span>Estimated path</span>
+                  <strong>{estimatedFlow.map((step) => step.label).join(' -> ')}</strong>
+                  <p>Class names come from detected domain layers where available.</p>
+                </article>
+                <article>
+                  <span>Runtime boundary</span>
+                  <strong>{runtimeSupported ? 'Actual trace available' : 'Instrumentation required'}</strong>
+                  <p>{runtimeSupported ? 'Switch to Runtime Trace and run the sample API.' : 'External app internals cannot be traced yet.'}</p>
+                </article>
+              </div>
+            </div>
+          ) : null}
+
+          {activeView === 'runtime' ? (
+            <>
+              <div className="panel-card inspector-workbench">
+                <div className="panel-header">
+                  <div>
+                    <span className="section-label">Runtime evidence</span>
+                    <h2>{latestEvent ? latestEvent.component : 'No trace yet'}</h2>
+                    <p>{latestEvent ? latestEvent.eventType : 'Run a trace, then click a graph node to inspect evidence.'}</p>
+                  </div>
+                  <span className={`pill pill--inline pill--${(traceDetail?.resultStatus ?? 'success').toLowerCase()}`}>
+                    HTTP {traceDetail?.httpStatus || '-'}
+                  </span>
+                </div>
+
+                <div className="runtime-meter runtime-meter--compact">
+                  <span>{traceDetail ? `${traceDetail.durationMs}ms` : '0ms'}</span>
+                  <span>{activeNodeCount} active nodes</span>
+                </div>
+
+                <section className="inspector-section response-card">
+                  <div className="section-row">
+                    <span className="section-label">Returned JSON</span>
+                    <span>{traceDetail?.resultStatus ?? 'IDLE'}</span>
+                  </div>
+                  {formattedResponseBody ? (
+                    <pre className="response-body">{formattedResponseBody}</pre>
+                  ) : (
+                    <p className="empty-copy">Run a request to inspect the response payload.</p>
+                  )}
+                </section>
+
+                <section className="inspector-section inspector-card">
+                  <div className="section-row">
+                    <span className="section-label">Clicked node evidence</span>
+                    {selectedNode ? (
+                      <span className={`pill pill--inline pill--${selectedNode.status.toLowerCase()}`}>
+                        {selectedNode.status}
+                      </span>
+                    ) : null}
+                  </div>
+                  {!selectedNode ? (
+                    <p className="empty-copy">Click Controller, Service, Redis, Repository, MySQL, or Response in the graph.</p>
+                  ) : (
+                    <div className="detail-stack">
+                      <div className="detail-summary">
+                        <strong>{selectedNode.label}</strong>
+                        <span>{selectedNode.durationMs}ms total</span>
+                      </div>
+                      <div className="detail-grid">
+                        <div>
+                          <span>Trace ID</span>
+                          <strong>{traceDetail?.traceId ?? '-'}</strong>
+                        </div>
+                        <div>
+                          <span>Visits</span>
+                          <strong>{selectedNode.visits.length}</strong>
+                        </div>
+                      </div>
+                      <div className="visit-list">
+                        {selectedNode.visits.length === 0 ? (
+                          <p className="empty-copy">This node was not visited in the current trace.</p>
+                        ) : (
+                          selectedNode.visits.map((event) => (
+                            <article key={event.eventId} className="visit-card">
+                              <header>
+                                <strong>{event.eventType}</strong>
+                                <span className={`pill pill--inline pill--${event.status.toLowerCase()}`}>{event.status}</span>
+                              </header>
+                              <dl>
+                                <div>
+                                  <dt>Duration</dt>
+                                  <dd>{event.durationMs}ms</dd>
+                                </div>
+                                <div>
+                                  <dt>Error Type</dt>
+                                  <dd>{event.errorType ?? '-'}</dd>
+                                </div>
+                                <div>
+                                  <dt>Error Message</dt>
+                                  <dd>{event.errorMessage ?? '-'}</dd>
+                                </div>
+                              </dl>
+                              <div className="metadata-list">
+                                {Object.keys(event.metadata).length === 0 ? (
+                                  <span className="metadata-item">No metadata</span>
+                                ) : (
+                                  Object.entries(event.metadata).map(([key, value]) => (
+                                    <span key={key} className="metadata-item">
+                                      {key}: {value}
+                                    </span>
+                                  ))
+                                )}
+                              </div>
+                            </article>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </section>
+              </div>
+
+              <div className="panel-card timeline-card timeline-card--compact">
+                <div className="panel-header">
+                  <div>
+                    <h2>Live event log</h2>
+                    <p>Latest event first. Click graph nodes for full detail.</p>
+                  </div>
+                  <span>{recentEvents.length}</span>
+                </div>
+                <div className="timeline-list">
+                {recentEvents.length === 0 ? (
+                  <p className="empty-copy">No live event received yet.</p>
+                ) : (
+                  recentEvents.map((event, index) => (
+                    <article key={event.eventId} className="timeline-item">
+                      <div className="timeline-item__marker">
+                        <span>{index + 1}</span>
+                      </div>
+                      <div className="timeline-item__body">
+                        <header>
+                          <strong>{event.component}</strong>
+                          <span className={`pill pill--inline pill--${event.status.toLowerCase()}`}>{event.status}</span>
+                        </header>
+                        <p>{event.eventType}</p>
+                        <div className="timeline-item__meta">
+                          <span>{event.durationMs}ms</span>
+                          <span>{new Date(event.startedAt).toLocaleTimeString()}</span>
+                          <span>{event.errorType ?? 'no error'}</span>
+                        </div>
+                      </div>
+                    </article>
+                  ))
+                )}
+                </div>
+              </div>
+            </>
+          ) : null}
         </aside>
       </section>
     </main>
@@ -1098,6 +1384,114 @@ function buildProjectFacts(structure: ProjectStructure) {
     { label: 'Infra path', value: structure.infrastructure.join(' / ') || 'not detected' },
     { label: 'Layers', value: layerNames.join(' / ') || 'not detected' },
   ]
+}
+
+function buildEstimatedFlow(api: ApiDefinition, domain: ProjectDomain): EstimatedFlowStep[] {
+  const layerNames = new Set(domain.layers.map((layer) => layer.name))
+  const flow: EstimatedFlowStep[] = [
+    {
+      id: 'client',
+      layer: 'Client',
+      label: 'Client',
+      detail: 'Request source before Spring handles it.',
+      source: 'fixed runtime boundary',
+    },
+    {
+      id: 'controller',
+      layer: 'Controller',
+      label: api.controller,
+      detail: `${api.handler} receives ${api.method} ${api.pathTemplate}.`,
+      source: 'detected handler',
+    },
+  ]
+
+  if (layerNames.has('Service')) {
+    const serviceClass = pickLayerClass(domain, 'Service', api)
+    flow.push({
+      id: 'service',
+      layer: 'Service',
+      label: serviceClass ?? 'Service',
+      detail: 'Business rules are likely coordinated here.',
+      source: serviceClass ? 'detected class' : 'estimated layer',
+    })
+  }
+
+  if (api.requestType === 'QUERY_DETAIL' && domain.infrastructure.includes('Redis')) {
+    const cacheClass = pickLayerClass(domain, 'Cache', api)
+    flow.push({
+      id: 'cache-read',
+      layer: 'Cache',
+      label: cacheClass ?? 'Redis',
+      detail: 'Cache lookup is expected for detail-style reads.',
+      source: cacheClass ? 'detected cache class' : 'inferred infrastructure',
+    })
+  }
+
+  if (layerNames.has('Repository') || layerNames.has('Store')) {
+    const layer = layerNames.has('Repository') ? 'Repository' : 'Store'
+    const dataClass = pickLayerClass(domain, layer, api)
+    flow.push({
+      id: 'data-access',
+      layer,
+      label: dataClass ?? layer,
+      detail: 'Data access boundary inferred from layer naming.',
+      source: dataClass ? 'detected class' : 'estimated layer',
+    })
+  }
+
+  if (domain.infrastructure.includes('MySQL')) {
+    flow.push({
+      id: 'mysql',
+      layer: 'Database',
+      label: 'MySQL',
+      detail: 'Persistence dependency inferred from repository/store classes.',
+      source: 'inferred infrastructure',
+    })
+  }
+
+  if (api.requestType === 'CACHE_WRITE' && domain.infrastructure.includes('Redis')) {
+    const cacheClass = pickLayerClass(domain, 'Cache', api)
+    flow.push({
+      id: 'cache-write',
+      layer: 'Cache write',
+      label: cacheClass ? `${cacheClass}.save` : 'Redis Save',
+      detail: 'Cache write is expected after data refresh.',
+      source: cacheClass ? 'detected cache class' : 'inferred infrastructure',
+    })
+  }
+
+  flow.push({
+    id: 'response',
+    layer: 'Response',
+    label: 'HTTP Response',
+    detail: 'Final HTTP response leaves the application.',
+    source: 'fixed runtime boundary',
+  })
+  return flow
+}
+
+function pickLayerClass(domain: ProjectDomain, layerName: string, api: ApiDefinition) {
+  const layer = domain.layers.find((item) => item.name === layerName)
+  if (!layer || layer.classes.length === 0) {
+    return null
+  }
+
+  const domainKey = domain.name.replaceAll(/\s+/g, '').toLowerCase()
+  const handlerKey = api.handler.toLowerCase()
+  const exactDomainClass = layer.classes.find((className) => className.toLowerCase().includes(domainKey))
+  if (exactDomainClass) {
+    return exactDomainClass
+  }
+
+  return layer.classes.find((className) => handlerKey.includes(stripLayerSuffix(className).toLowerCase())) ?? layer.classes[0]
+}
+
+function stripLayerSuffix(className: string) {
+  return className.replace(/(Controller|RepositoryService|Repository|CacheService|CatalogStore|Service|Store|Response)$/u, '')
+}
+
+function isStackFlowRuntimeApi(api: ApiDefinition) {
+  return api.controller === 'ProductController' && api.pathTemplate.startsWith('/api/products')
 }
 
 function buildPathFromTemplate(pathTemplate: string, pathVariableValue: string) {
