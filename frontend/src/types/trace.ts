@@ -92,8 +92,41 @@ export interface ApiCatalogItem {
   path: string
   controller: string
   handler: string
+  requestType: string
   requiresPathVariable: boolean
   pathVariables: string[]
+}
+
+export interface ProjectController {
+  name: string
+  packageName: string
+  basePath: string
+  endpointCount: number
+}
+
+export interface ProjectLayer {
+  name: string
+  type: string
+  classes: string[]
+}
+
+export interface ProjectDomain {
+  id: string
+  name: string
+  description: string
+  responsibilities: string[]
+  infrastructure: string[]
+  controllers: ProjectController[]
+  layers: ProjectLayer[]
+  endpoints: ApiCatalogItem[]
+}
+
+export interface ProjectStructure {
+  projectName: string
+  framework: string
+  infrastructure: string[]
+  layers: ProjectLayer[]
+  domains: ProjectDomain[]
 }
 
 export interface GraphNodeState {

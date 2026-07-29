@@ -7,6 +7,7 @@ import com.stackflow.backend.domain.TraceEvent;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -87,6 +88,9 @@ public class TraceSession {
 
 	public Trace complete(int httpStatus, EventStatus resultStatus) {
 		Instant endedAt = Instant.now();
+		List<TraceEvent> orderedEvents = events.stream()
+			.sorted(Comparator.comparing(TraceEvent::startedAt).thenComparing(TraceEvent::endedAt))
+			.toList();
 		return new Trace(
 			traceId,
 			method,
@@ -97,7 +101,7 @@ public class TraceSession {
 			Duration.between(startedAt, endedAt).toMillis(),
 			httpStatus,
 			resultStatus,
-			List.copyOf(events)
+			orderedEvents
 		);
 	}
 

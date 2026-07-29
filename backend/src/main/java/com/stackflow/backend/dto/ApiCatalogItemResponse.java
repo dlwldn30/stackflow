@@ -8,6 +8,7 @@ public record ApiCatalogItemResponse(
 	String path,
 	String controller,
 	String handler,
+	String requestType,
 	boolean requiresPathVariable,
 	List<String> pathVariables
 ) {
