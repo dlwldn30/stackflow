@@ -47,6 +47,13 @@ cd backend
 
 Backend runs on `http://localhost:8080`.
 
+If port `8080` is already in use, run the backend on `8081`:
+
+```bash
+cd backend
+./gradlew bootRun --args='--server.port=8081'
+```
+
 ### Frontend
 
 ```bash
@@ -58,6 +65,13 @@ npm run dev
 Frontend runs on `http://localhost:5173`.
 
 Vite proxies `/api` requests to the backend.
+
+If the backend is running on `8081`, start the frontend with:
+
+```bash
+cd frontend
+VITE_API_TARGET=http://localhost:8081 npm run dev
+```
 
 ## Sample scenarios
 
@@ -86,3 +100,7 @@ Frontend:
 cd frontend
 npm run build
 ```
+
+## Planning docs
+
+- [Product direction and implementation plan](docs/product-direction-and-implementation-plan.md)
