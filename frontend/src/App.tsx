@@ -6,6 +6,7 @@ import { buildGraph, getNodeDetail } from './lib/graph'
 import type {
   ApiCatalogItem,
   EventStatus,
+  ExternalRequestResponse,
   HttpMethod,
   ProductPayload,
   ProjectDomain,
@@ -181,6 +182,7 @@ const FALLBACK_PROJECT_STRUCTURE: ProjectStructure = {
 function App() {
   const [productId, setProductId] = useState('1001')
   const [projectPath, setProjectPath] = useState('')
+  const [targetBaseUrl, setTargetBaseUrl] = useState('http://localhost:8081')
   const [scenario, setScenario] = useState<(typeof SCENARIOS)[number]['value']>('normal')
   const [activeView, setActiveView] = useState<ViewMode>('project')
   const [apiCatalog, setApiCatalog] = useState<ApiDefinition[]>(FALLBACK_API_CATALOG)
@@ -198,6 +200,7 @@ function App() {
   const [streamStatus, setStreamStatus] = useState<'idle' | 'connecting' | 'streaming' | 'completed' | 'error'>('idle')
   const [requestMessage, setRequestMessage] = useState<string>('Open a live stream and run a request.')
   const [lastResponseBody, setLastResponseBody] = useState<unknown>(null)
+  const [externalResponse, setExternalResponse] = useState<ExternalRequestResponse | null>(null)
   const activeStreamRef = useRef<EventSource | null>(null)
   const activeRunIdRef = useRef(0)
   const flowInstanceRef = useRef<ReactFlowInstance | null>(null)
@@ -214,7 +217,9 @@ function App() {
   const activeRoute = graph.states.filter((state) => state.active)
   const estimatedFlow = buildEstimatedFlow(selectedApi, selectedDomain)
   const runtimeSupported = analysisTarget === 'sample' && isStackFlowRuntimeApi(selectedApi)
-  const runtimeModeLabel = runtimeSupported ? 'Run trace' : 'Analyze only'
+  const externalRunnable = analysisTarget === 'external'
+  const runtimeModeLabel = runtimeSupported ? 'Run trace' : externalRunnable ? 'Run target' : 'Analyze only'
+  const currentResultStatus = externalResponse?.resultStatus ?? traceDetail?.resultStatus ?? 'IDLE'
   const graphFitKey = `${traceDetail?.traceId ?? 'empty'}-${traceDetail?.events.length ?? 0}`
   const workflowSteps = [
     {
@@ -231,15 +236,17 @@ function App() {
     },
     {
       number: '03',
-      title: requestState === 'loading' ? 'Streaming request' : runtimeModeLabel,
-      detail: requestState === 'loading' ? 'SSE events are arriving' : selectedApi.requestType,
-      state: activeView === 'runtime' || requestState === 'loading' ? 'active' : traceDetail ? 'done' : 'idle',
+      title: requestState === 'loading' ? (runtimeSupported ? 'Streaming request' : 'Calling target API') : runtimeModeLabel,
+      detail: requestState === 'loading'
+        ? runtimeSupported ? 'SSE events are arriving' : targetBaseUrl
+        : selectedApi.requestType,
+      state: activeView === 'runtime' || requestState === 'loading' ? 'active' : traceDetail || externalResponse ? 'done' : 'idle',
     },
     {
       number: '04',
       title: 'Inspect result',
-      detail: selectedNode ? `${selectedNode.label} node selected` : traceDetail ? 'Select a graph node' : 'Waiting for trace',
-      state: activeView === 'runtime' && selectedNode ? 'active' : traceDetail ? 'done' : 'idle',
+      detail: selectedNode ? `${selectedNode.label} node selected` : externalResponse ? `HTTP ${externalResponse.httpStatus || '-'}` : traceDetail ? 'Select a graph node' : 'Waiting for result',
+      state: activeView === 'runtime' && selectedNode ? 'active' : traceDetail || externalResponse ? 'done' : 'idle',
     },
   ]
 
@@ -254,6 +261,14 @@ function App() {
 
     return JSON.stringify(lastResponseBody, null, 2)
   }, [lastResponseBody])
+
+  const formattedExternalResponseBody = useMemo(() => {
+    if (!externalResponse) {
+      return null
+    }
+
+    return formatResponseBody(externalResponse.responseBody)
+  }, [externalResponse])
 
   useEffect(() => {
     void loadApiCatalog()
@@ -363,9 +378,15 @@ function App() {
         setTraceDetail(null)
         setSelectedNodeId(null)
         setLastResponseBody(null)
+        setExternalResponse(null)
         setStreamStatus('idle')
         setRequestState('idle')
-        setRequestMessage('External project loaded. Inspect the estimated API flow; runtime trace requires instrumentation.')
+        setRequestMessage('External project loaded. Enter a target base URL, then run the selected endpoint.')
+      }
+      if (target === 'sample') {
+        setExternalResponse(null)
+        setRequestState('idle')
+        setRequestMessage('Open a live stream and run a request.')
       }
     })
   }
@@ -376,6 +397,7 @@ function App() {
     const nextApi = apiCatalog.find((api) => api.domainId === domain.id)
     if (nextApi) {
       setSelectedApiId(nextApi.id)
+      setExternalResponse(null)
     }
   }
 
@@ -393,10 +415,7 @@ function App() {
 
   async function runRequest() {
     if (!runtimeSupported) {
-      setActiveView('api')
-      setRequestState('error')
-      setStreamStatus('idle')
-      setRequestMessage('This API is analysis-only. Configure runtime instrumentation before tracing external project internals.')
+      await runExternalRequest()
       return
     }
 
@@ -408,6 +427,7 @@ function App() {
     setActiveView('runtime')
     setRequestMessage('Creating trace session and opening live stream...')
     setLastResponseBody(null)
+    setExternalResponse(null)
 
     try {
       const sessionResponse = await fetch('/api/traces/session', { method: 'POST' })
@@ -491,6 +511,61 @@ function App() {
       setRequestState('error')
       setStreamStatus('error')
       setRequestMessage(error instanceof Error ? error.message : 'Request failed unexpectedly.')
+    }
+  }
+
+  async function runExternalRequest() {
+    if (!externalRunnable) {
+      setActiveView('api')
+      setRequestState('error')
+      setStreamStatus('idle')
+      setRequestMessage('This API is analysis-only. Configure runtime instrumentation before tracing external project internals.')
+      return
+    }
+
+    const normalizedTargetBaseUrl = targetBaseUrl.trim()
+    if (!normalizedTargetBaseUrl) {
+      setActiveView('api')
+      setRequestState('error')
+      setStreamStatus('idle')
+      setRequestMessage('Target base URL is required before running an external endpoint.')
+      return
+    }
+
+    closeActiveStream()
+    setActiveView('api')
+    setRequestState('loading')
+    setStreamStatus('idle')
+    setTraceDetail(null)
+    setSelectedNodeId(null)
+    setLastResponseBody(null)
+    setExternalResponse(null)
+    setRequestMessage(`Calling ${selectedApi.method} ${normalizedTargetBaseUrl}${selectedApi.buildPath(productId)}...`)
+
+    try {
+      const response = await fetch('/api/external/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          targetBaseUrl: normalizedTargetBaseUrl,
+          method: selectedApi.method,
+          path: selectedApi.buildPath(productId),
+          requestBody: null,
+        }),
+      })
+      if (!response.ok) {
+        throw new Error('External request proxy failed.')
+      }
+
+      const payload = (await response.json()) as ExternalRequestResponse
+      startTransition(() => {
+        setExternalResponse(payload)
+        setRequestState(payload.resultStatus === 'SUCCESS' ? 'idle' : 'error')
+        setRequestMessage(buildExternalRequestMessage(payload))
+      })
+    } catch (error) {
+      setRequestState('error')
+      setRequestMessage(error instanceof Error ? error.message : 'External request failed unexpectedly.')
     }
   }
 
@@ -677,8 +752,8 @@ function App() {
           </div>
           <div>
             <span>Result</span>
-            <strong className={`status-text status-text--${(traceDetail?.resultStatus ?? 'SUCCESS').toLowerCase()}`}>
-              {traceDetail?.resultStatus ?? 'IDLE'}
+            <strong className={`status-text status-text--${currentResultStatus.toLowerCase()}`}>
+              {currentResultStatus}
             </strong>
           </div>
           <div>
@@ -823,6 +898,7 @@ function App() {
                     className={`api-item${selectedApi.id === api.id ? ' is-selected' : ''}`}
                     onClick={() => {
                       setSelectedApiId(api.id)
+                      setExternalResponse(null)
                       setActiveView('api')
                     }}
                   >
@@ -842,8 +918,12 @@ function App() {
               <div className="setup-step__head">
                 <span>03</span>
                 <div>
-                  <strong>Run live trace</strong>
-                  <small>The stream opens first, then the selected API request runs.</small>
+                  <strong>{runtimeSupported ? 'Run live trace' : 'Run endpoint'}</strong>
+                  <small>
+                    {runtimeSupported
+                      ? 'The stream opens first, then the selected API request runs.'
+                      : 'Call the selected endpoint through the StackFlow backend proxy.'}
+                  </small>
                 </div>
               </div>
 
@@ -859,24 +939,36 @@ function App() {
               </div>
 
               <div className="request-form">
+                {externalRunnable ? (
+                  <label className="field">
+                    <span>Target base URL</span>
+                    <input
+                      value={targetBaseUrl}
+                      onChange={(event) => setTargetBaseUrl(event.target.value)}
+                      placeholder="http://localhost:8081"
+                    />
+                  </label>
+                ) : null}
                 {selectedApi.requiresProductId ? (
                   <label className="field">
                     <span>{selectedApi.source === 'analyzed' ? 'Path variable value' : 'Product ID'}</span>
                     <input value={productId} onChange={(event) => setProductId(event.target.value)} />
                   </label>
                 ) : null}
-                <label className="field">
-                  <span>Failure scenario</span>
-                  <select value={scenario} onChange={(event) => setScenario(event.target.value as (typeof SCENARIOS)[number]['value'])}>
-                    {SCENARIOS.map((item) => (
-                      <option key={item.value} value={item.value}>
-                        {item.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <button className="run-button" type="button" onClick={() => void runRequest()} disabled={requestState === 'loading' || !runtimeSupported}>
-                  {requestState === 'loading' ? 'Streaming events...' : runtimeSupported ? 'Run runtime trace' : 'Analyze only'}
+                {runtimeSupported ? (
+                  <label className="field">
+                    <span>Failure scenario</span>
+                    <select value={scenario} onChange={(event) => setScenario(event.target.value as (typeof SCENARIOS)[number]['value'])}>
+                      {SCENARIOS.map((item) => (
+                        <option key={item.value} value={item.value}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+                <button className="run-button" type="button" onClick={() => void runRequest()} disabled={requestState === 'loading'}>
+                  {requestState === 'loading' ? (runtimeSupported ? 'Streaming events...' : 'Calling target...') : runtimeSupported ? 'Run runtime trace' : 'Run external request'}
                 </button>
                 <p className="request-message">{requestMessage}</p>
               </div>
@@ -1198,6 +1290,44 @@ function App() {
                   <p>{runtimeSupported ? 'Switch to Runtime Trace and run the sample API.' : 'External app internals cannot be traced yet.'}</p>
                 </article>
               </div>
+              {externalRunnable ? (
+                <section className="inspector-section response-card external-response-card">
+                  <div className="section-row">
+                    <span className="section-label">External response</span>
+                    <span className={`pill pill--inline pill--${(externalResponse?.resultStatus ?? 'idle').toLowerCase()}`}>
+                      {externalResponse ? `HTTP ${externalResponse.httpStatus || '-'}` : 'WAITING'}
+                    </span>
+                  </div>
+                  {externalResponse ? (
+                    <>
+                      <div className="external-response-meta">
+                        <span>
+                          <strong>Target</strong>
+                          {externalResponse.targetUrl}
+                        </span>
+                        <span>
+                          <strong>Duration</strong>
+                          {externalResponse.durationMs}ms
+                        </span>
+                        <span>
+                          <strong>Content type</strong>
+                          {externalResponse.contentType || '-'}
+                        </span>
+                      </div>
+                      {externalResponse.errorMessage ? (
+                        <p className="external-error">{externalResponse.errorMessage}</p>
+                      ) : null}
+                      {formattedExternalResponseBody ? (
+                        <pre className="response-body response-body--external">{formattedExternalResponseBody}</pre>
+                      ) : (
+                        <p className="empty-copy">The target returned an empty body.</p>
+                      )}
+                    </>
+                  ) : (
+                    <p className="empty-copy">Enter a target base URL, then run this endpoint to inspect the returned payload.</p>
+                  )}
+                </section>
+              ) : null}
             </div>
           ) : null}
 
@@ -1545,6 +1675,26 @@ function buildRequestMessage(resultStatus: EventStatus, payload: ProductPayload)
   }
 
   return `${resultStatus}: request captured successfully.`
+}
+
+function buildExternalRequestMessage(response: ExternalRequestResponse) {
+  if (response.errorMessage) {
+    return `ERROR: ${response.errorMessage}`
+  }
+
+  return `${response.resultStatus}: ${response.method} ${response.targetUrl} returned HTTP ${response.httpStatus} in ${response.durationMs}ms.`
+}
+
+function formatResponseBody(responseBody: string) {
+  if (!responseBody) {
+    return ''
+  }
+
+  try {
+    return JSON.stringify(JSON.parse(responseBody), null, 2)
+  } catch {
+    return responseBody
+  }
 }
 
 export default App
