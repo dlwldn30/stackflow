@@ -1265,6 +1265,91 @@
 	padding: 12px;
 }
 
+.folder-picker-row {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.folder-picker-input {
+  display: none;
+}
+
+.folder-picker-button {
+  width: 100%;
+  border: 1px solid rgba(55, 242, 208, 0.2);
+  border-radius: 15px;
+  background:
+    linear-gradient(135deg, rgba(55, 242, 208, 0.12), rgba(106, 169, 255, 0.08)),
+    rgba(13, 25, 45, 0.74);
+  color: #d9fff9;
+  cursor: pointer;
+  padding: 11px 12px;
+  font-weight: 900;
+}
+
+.folder-picker-row p {
+  margin: 0;
+  color: #8495af;
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+.folder-selection-card {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+  border: 1px solid rgba(55, 242, 208, 0.16);
+  border-radius: 15px;
+  background: rgba(20, 240, 209, 0.06);
+  padding: 11px;
+}
+
+.folder-selection-card > div {
+  display: grid;
+  gap: 3px;
+}
+
+.folder-selection-card span {
+  color: #8294ad;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.folder-selection-card strong {
+  color: #f5f8ff;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.folder-selection-card > span {
+  border: 1px solid rgba(128, 149, 190, 0.12);
+  border-radius: 999px;
+  justify-self: start;
+  background: rgba(13, 25, 45, 0.64);
+  padding: 5px 8px;
+  color: #aefaf0;
+  font-size: 0.62rem;
+}
+
+.folder-selection-card ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.folder-selection-card li {
+  overflow: hidden;
+  color: #9badc6;
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .field input,
 .field select {
   width: 100%;
@@ -1280,6 +1365,7 @@
 .field select:focus,
 .run-button:focus-visible,
 .analyze-button:focus-visible,
+.folder-picker-button:focus-visible,
 .trace-item:focus-visible,
 .domain-item:focus-visible,
 .api-item:focus-visible,

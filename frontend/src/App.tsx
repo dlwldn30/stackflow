@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, startTransition } from 'react'
+import type { ChangeEvent } from 'react'
 import { Background, Controls, ReactFlow } from '@xyflow/react'
 import type { ReactFlowInstance } from '@xyflow/react'
 import './App.css'
@@ -59,6 +60,12 @@ type ExternalRequestSnapshot = {
   queryParams: ExternalRequestEntry[]
   headers: ExternalRequestEntry[]
   requestBody: string
+}
+
+type SelectedFolderInfo = {
+  name: string
+  fileCount: number
+  sampleFiles: string[]
 }
 
 const VIEW_MODES: Array<{
@@ -191,6 +198,7 @@ const FALLBACK_PROJECT_STRUCTURE: ProjectStructure = {
 function App() {
   const [productId, setProductId] = useState('1001')
   const [projectPath, setProjectPath] = useState('')
+  const [selectedFolderInfo, setSelectedFolderInfo] = useState<SelectedFolderInfo | null>(null)
   const [targetBaseUrl, setTargetBaseUrl] = useState('http://localhost:8081')
   const [queryParams, setQueryParams] = useState<ExternalRequestEntry[]>([
     createRequestEntry('page', '1', false),
@@ -222,6 +230,7 @@ function App() {
   const activeStreamRef = useRef<EventSource | null>(null)
   const activeRunIdRef = useRef(0)
   const flowInstanceRef = useRef<ReactFlowInstance | null>(null)
+  const folderInputRef = useRef<HTMLInputElement | null>(null)
 
   const graph = buildGraph(traceDetail)
   const selectedNode = getNodeDetail(graph.states, selectedNodeId ?? graph.states.find((state) => state.active)?.id ?? null)
@@ -428,6 +437,22 @@ function App() {
 
   function updateRequestHeader(id: string, patch: Partial<ExternalRequestEntry>) {
     setRequestHeaders((current) => updateRequestEntries(current, id, patch))
+  }
+
+  function handleFolderSelection(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? [])
+    if (files.length === 0) {
+      return
+    }
+
+    const firstPath = files[0].webkitRelativePath || files[0].name
+    const rootName = firstPath.split('/')[0] || 'Selected folder'
+    setSelectedFolderInfo({
+      name: rootName,
+      fileCount: files.length,
+      sampleFiles: files.slice(0, 4).map((file) => file.webkitRelativePath || file.name),
+    })
+    event.target.value = ''
   }
 
   function removeQueryParam(id: string) {
@@ -892,6 +917,38 @@ function App() {
                     placeholder="/Users/jiwoo/Desktop/my-spring-project"
                   />
                 </label>
+                <div className="folder-picker-row">
+                  <button
+                    className="folder-picker-button"
+                    type="button"
+                    onClick={() => folderInputRef.current?.click()}
+                  >
+                    Browse folder
+                  </button>
+                  <input
+                    ref={folderInputRef}
+                    className="folder-picker-input"
+                    type="file"
+                    multiple
+                    onChange={handleFolderSelection}
+                    {...{ webkitdirectory: '', directory: '' }}
+                  />
+                  <p>Browser mode can preview the chosen folder, but cannot read its absolute path. Paste the root path above to run backend analysis.</p>
+                </div>
+                {selectedFolderInfo ? (
+                  <div className="folder-selection-card">
+                    <div>
+                      <span>Selected folder</span>
+                      <strong>{selectedFolderInfo.name}</strong>
+                    </div>
+                    <span>{selectedFolderInfo.fileCount} files detected</span>
+                    <ul>
+                      {selectedFolderInfo.sampleFiles.map((file) => (
+                        <li key={file}>{file}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
                 <button
                   className="analyze-button"
                   type="button"
