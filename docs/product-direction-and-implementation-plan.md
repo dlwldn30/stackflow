@@ -65,6 +65,7 @@ The repository is adding external target execution:
 - Show HTTP status, duration, content type, response body, and transport error message.
 - Show the request summary next to the response so users can compare what was sent and what came back.
 - Keep external execution results separate from runtime trace evidence.
+- Preview a browser-selected local folder, while keeping explicit project path input for backend analysis because browser mode cannot reliably expose the absolute local path.
 
 Current limitation:
 
@@ -202,6 +203,19 @@ Implementation:
 Reason:
 
 - This is the first feature that makes StackFlow useful when a user points it at any Spring Boot project.
+
+## Phase 2-1. Improve Local Project Selection UX
+
+Scope:
+
+- Add a browser folder picker to reduce project path typing friction.
+- Show selected folder name and file count as confirmation.
+- Keep explicit path input for actual backend analysis in the web MVP.
+
+Reason:
+
+- Browser security prevents a normal Vite web app from reliably reading the selected folder's absolute path.
+- A future Tauri or Electron wrapper can replace this with a native folder picker that passes the absolute project path directly to the backend.
 
 ## Phase 3. Add API Estimated Flow
 

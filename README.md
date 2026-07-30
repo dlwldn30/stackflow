@@ -108,11 +108,15 @@ Use this view to understand a Spring Boot project structure.
 
 - Leave the project path empty to load the bundled StackFlow sample project.
 - Enter a Spring Boot project root path to analyze an external local project.
+- Use `Browse folder` to preview a local folder selection in the browser.
+- Browser mode cannot reliably read the selected folder's absolute path, so paste the root path into the path field to run backend analysis.
 - Example path:
 
 ```text
 /Users/jiwoo/Desktop/stackflow/backend
 ```
+
+Future desktop packaging with Tauri or Electron can replace this limitation with a native folder picker that returns the absolute project path directly.
 
 ### 2. Request
 
