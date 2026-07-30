@@ -52,6 +52,13 @@ export interface TraceSessionResponse {
   traceId: string
 }
 
+export interface ExternalRequestEntry {
+  id: string
+  key: string
+  value: string
+  enabled: boolean
+}
+
 export interface ExternalRequestResponse {
   method: string
   targetUrl: string

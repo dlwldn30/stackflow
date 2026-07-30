@@ -4,12 +4,16 @@ import com.stackflow.backend.dto.ExternalRequestPayload;
 import com.stackflow.backend.dto.ExternalRequestResponse;
 import java.io.IOException;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -17,6 +21,14 @@ public class ExternalRequestService {
 
 	private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(3);
 	private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(8);
+	private static final Set<String> BLOCKED_HEADERS = Set.of(
+		"connection",
+		"content-length",
+		"expect",
+		"host",
+		"upgrade",
+		"transfer-encoding"
+	);
 
 	private final HttpClient httpClient;
 
@@ -34,8 +46,8 @@ public class ExternalRequestService {
 		Instant startedAt = Instant.now();
 		try {
 			String method = normalizeMethod(payload.method());
-			URI targetUri = buildTargetUri(payload.targetBaseUrl(), payload.path());
-			HttpRequest request = buildRequest(targetUri, method, payload.requestBody());
+			URI targetUri = buildTargetUri(payload.targetBaseUrl(), payload.path(), payload.queryParams());
+			HttpRequest request = buildRequest(targetUri, method, payload.headers(), payload.requestBody());
 			HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 			long durationMs = Duration.between(startedAt, Instant.now()).toMillis();
 			return new ExternalRequestResponse(
@@ -68,6 +80,10 @@ public class ExternalRequestService {
 	}
 
 	URI buildTargetUri(String targetBaseUrl, String path) {
+		return buildTargetUri(targetBaseUrl, path, List.of());
+	}
+
+	URI buildTargetUri(String targetBaseUrl, String path, List<com.stackflow.backend.dto.ExternalRequestEntry> queryParams) {
 		if (targetBaseUrl == null || targetBaseUrl.isBlank()) {
 			throw new IllegalArgumentException("targetBaseUrl is required.");
 		}
@@ -82,10 +98,16 @@ public class ExternalRequestService {
 		if (!normalizedPath.startsWith("/")) {
 			normalizedPath = "/" + normalizedPath;
 		}
-		return URI.create(normalizedBase + normalizedPath);
+		String queryString = buildQueryString(queryParams);
+		return URI.create(normalizedBase + normalizedPath + queryString);
 	}
 
-	private HttpRequest buildRequest(URI targetUri, String method, String requestBody) {
+	private HttpRequest buildRequest(
+		URI targetUri,
+		String method,
+		List<com.stackflow.backend.dto.ExternalRequestEntry> headers,
+		String requestBody
+	) {
 		HttpRequest.BodyPublisher bodyPublisher = shouldUseBody(method, requestBody)
 			? HttpRequest.BodyPublishers.ofString(requestBody)
 			: HttpRequest.BodyPublishers.noBody();
@@ -95,10 +117,52 @@ public class ExternalRequestService {
 			.header("Accept", "application/json, text/plain, */*")
 			.method(method, bodyPublisher);
 
+		addHeaders(builder, headers);
+
 		if (shouldUseBody(method, requestBody)) {
 			builder.header("Content-Type", "application/json");
 		}
 		return builder.build();
+	}
+
+	private void addHeaders(HttpRequest.Builder builder, List<com.stackflow.backend.dto.ExternalRequestEntry> headers) {
+		if (headers == null) {
+			return;
+		}
+
+		headers.stream()
+			.filter(this::isEnabledEntry)
+			.filter(entry -> !isBlockedHeader(entry.key()))
+			.forEach(entry -> builder.header(entry.key().trim(), entry.value() == null ? "" : entry.value()));
+	}
+
+	private boolean isBlockedHeader(String key) {
+		return key == null || key.isBlank() || BLOCKED_HEADERS.contains(key.trim().toLowerCase(Locale.ROOT));
+	}
+
+	private String buildQueryString(List<com.stackflow.backend.dto.ExternalRequestEntry> queryParams) {
+		if (queryParams == null || queryParams.isEmpty()) {
+			return "";
+		}
+
+		String query = queryParams.stream()
+			.filter(this::isEnabledEntry)
+			.map(entry -> encode(entry.key().trim()) + "=" + encode(entry.value() == null ? "" : entry.value()))
+			.reduce((left, right) -> left + "&" + right)
+			.orElse("");
+
+		return query.isBlank() ? "" : "?" + query;
+	}
+
+	private boolean isEnabledEntry(com.stackflow.backend.dto.ExternalRequestEntry entry) {
+		return entry != null
+			&& entry.enabled()
+			&& entry.key() != null
+			&& !entry.key().isBlank();
+	}
+
+	private String encode(String value) {
+		return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
 	}
 
 	private boolean shouldUseBody(String method, String requestBody) {

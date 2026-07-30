@@ -61,7 +61,9 @@ The repository is adding external target execution:
 
 - Configure a target base URL for an analyzed Spring Boot project.
 - Call the selected external endpoint through the StackFlow backend proxy.
+- Compose query parameters, headers, and JSON request body for external endpoint execution.
 - Show HTTP status, duration, content type, response body, and transport error message.
+- Show the request summary next to the response so users can compare what was sent and what came back.
 - Keep external execution results separate from runtime trace evidence.
 
 Current limitation:
@@ -234,6 +236,8 @@ Implementation:
 - Add target base URL input.
 - Build request URL from selected API path and user input values.
 - Route the call through `POST /api/external/request` so browser CORS does not block local target projects.
+- Add a request editor for query parameters, headers, and JSON body.
+- Validate JSON body before execution so the failed request is not sent with malformed input.
 - Show HTTP response result.
 - Show transport errors inside the response panel instead of crashing the UI.
 - Keep internal trace unavailable unless instrumentation is installed.

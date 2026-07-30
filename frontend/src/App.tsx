@@ -6,6 +6,7 @@ import { buildGraph, getNodeDetail } from './lib/graph'
 import type {
   ApiCatalogItem,
   EventStatus,
+  ExternalRequestEntry,
   ExternalRequestResponse,
   HttpMethod,
   ProductPayload,
@@ -52,6 +53,14 @@ type EstimatedFlowStep = {
   source: string
 }
 
+type ExternalRequestSnapshot = {
+  method: HttpMethod
+  targetUrl: string
+  queryParams: ExternalRequestEntry[]
+  headers: ExternalRequestEntry[]
+  requestBody: string
+}
+
 const VIEW_MODES: Array<{
   id: ViewMode
   label: string
@@ -60,21 +69,21 @@ const VIEW_MODES: Array<{
 }> = [
   {
     id: 'project',
-    label: 'Project Map',
-    title: 'Understand the project first',
+    label: 'Project',
+    title: 'See structure only',
     description: 'Domains, layers, controllers, and infrastructure from static Spring analysis.',
   },
   {
     id: 'api',
-    label: 'API Flow',
-    title: 'Estimate the selected API path',
-    description: 'A static, best-effort route before runtime instrumentation exists.',
+    label: 'Request',
+    title: 'Send one API call',
+    description: 'Pick an endpoint, edit request options, and inspect the HTTP response.',
   },
   {
     id: 'runtime',
-    label: 'Runtime Trace',
-    title: 'Run actual evidence',
-    description: 'SSE events, response payload, and the first failing node for runnable sample APIs.',
+    label: 'Trace',
+    title: 'Inspect the flow',
+    description: 'Open the graph only when you need runtime events and the failing node.',
   },
 ]
 
@@ -183,6 +192,15 @@ function App() {
   const [productId, setProductId] = useState('1001')
   const [projectPath, setProjectPath] = useState('')
   const [targetBaseUrl, setTargetBaseUrl] = useState('http://localhost:8081')
+  const [queryParams, setQueryParams] = useState<ExternalRequestEntry[]>([
+    createRequestEntry('page', '1', false),
+  ])
+  const [requestHeaders, setRequestHeaders] = useState<ExternalRequestEntry[]>([
+    createRequestEntry('Authorization', 'Bearer local-token', false),
+  ])
+  const [requestBody, setRequestBody] = useState('{\n  "name": "Sample product"\n}')
+  const [requestBodyError, setRequestBodyError] = useState<string | null>(null)
+  const [externalRequestSnapshot, setExternalRequestSnapshot] = useState<ExternalRequestSnapshot | null>(null)
   const [scenario, setScenario] = useState<(typeof SCENARIOS)[number]['value']>('normal')
   const [activeView, setActiveView] = useState<ViewMode>('project')
   const [apiCatalog, setApiCatalog] = useState<ApiDefinition[]>(FALLBACK_API_CATALOG)
@@ -220,6 +238,9 @@ function App() {
   const externalRunnable = analysisTarget === 'external'
   const runtimeModeLabel = runtimeSupported ? 'Run trace' : externalRunnable ? 'Run target' : 'Analyze only'
   const currentResultStatus = externalResponse?.resultStatus ?? traceDetail?.resultStatus ?? 'IDLE'
+  const externalPath = selectedApi.buildPath(productId)
+  const externalTargetPreview = buildExternalTargetPreview(targetBaseUrl, externalPath, queryParams)
+  const bodyAllowed = ['POST', 'PUT', 'PATCH'].includes(selectedApi.method)
   const graphFitKey = `${traceDetail?.traceId ?? 'empty'}-${traceDetail?.events.length ?? 0}`
   const workflowSteps = [
     {
@@ -310,7 +331,7 @@ function App() {
         setApiCatalog(FALLBACK_API_CATALOG)
         setCatalogSource('fallback')
         setAnalysisTarget('sample')
-        setAnalysisMessage('Default analysis failed. Showing fallback sample project.')
+        setAnalysisMessage('Showing the bundled StackFlow sample project. Enter a project path to analyze your own Spring Boot app.')
         setSelectedDomainId((current) =>
           FALLBACK_PROJECT_STRUCTURE.domains.some((domain) => domain.id === current)
             ? current
@@ -399,6 +420,22 @@ function App() {
       setSelectedApiId(nextApi.id)
       setExternalResponse(null)
     }
+  }
+
+  function updateQueryParam(id: string, patch: Partial<ExternalRequestEntry>) {
+    setQueryParams((current) => updateRequestEntries(current, id, patch))
+  }
+
+  function updateRequestHeader(id: string, patch: Partial<ExternalRequestEntry>) {
+    setRequestHeaders((current) => updateRequestEntries(current, id, patch))
+  }
+
+  function removeQueryParam(id: string) {
+    setQueryParams((current) => removeRequestEntry(current, id))
+  }
+
+  function removeRequestHeader(id: string) {
+    setRequestHeaders((current) => removeRequestEntry(current, id))
   }
 
   async function loadRecentTraces() {
@@ -540,7 +577,30 @@ function App() {
     setSelectedNodeId(null)
     setLastResponseBody(null)
     setExternalResponse(null)
-    setRequestMessage(`Calling ${selectedApi.method} ${normalizedTargetBaseUrl}${selectedApi.buildPath(productId)}...`)
+    setExternalRequestSnapshot(null)
+    setRequestBodyError(null)
+
+    const nextRequestBody = bodyAllowed ? requestBody.trim() : ''
+    if (nextRequestBody) {
+      try {
+        JSON.parse(nextRequestBody)
+      } catch {
+        setRequestState('error')
+        setRequestBodyError('Request body must be valid JSON before running this endpoint.')
+        setRequestMessage('Fix the JSON request body before running the external request.')
+        return
+      }
+    }
+
+    const requestSnapshot: ExternalRequestSnapshot = {
+      method: selectedApi.method,
+      targetUrl: externalTargetPreview,
+      queryParams,
+      headers: requestHeaders,
+      requestBody: nextRequestBody,
+    }
+
+    setRequestMessage(`Calling ${selectedApi.method} ${externalTargetPreview}...`)
 
     try {
       const response = await fetch('/api/external/request', {
@@ -549,8 +609,10 @@ function App() {
         body: JSON.stringify({
           targetBaseUrl: normalizedTargetBaseUrl,
           method: selectedApi.method,
-          path: selectedApi.buildPath(productId),
-          requestBody: null,
+          path: externalPath,
+          queryParams: toEnabledEntries(queryParams),
+          headers: toEnabledEntries(requestHeaders),
+          requestBody: nextRequestBody || null,
         }),
       })
       if (!response.ok) {
@@ -560,6 +622,7 @@ function App() {
       const payload = (await response.json()) as ExternalRequestResponse
       startTransition(() => {
         setExternalResponse(payload)
+        setExternalRequestSnapshot(requestSnapshot)
         setRequestState(payload.resultStatus === 'SUCCESS' ? 'idle' : 'error')
         setRequestMessage(buildExternalRequestMessage(payload))
       })
@@ -784,12 +847,17 @@ function App() {
           <button
             key={mode.id}
             type="button"
-            className={`view-switcher__item${activeView === mode.id ? ' is-active' : ''}`}
+            className={`view-switcher__item${activeView === mode.id ? ' is-active' : ''}${analysisTarget === 'external' && mode.id === 'runtime' ? ' is-disabled' : ''}`}
+            disabled={analysisTarget === 'external' && mode.id === 'runtime'}
             onClick={() => setActiveView(mode.id)}
           >
             <span>{mode.label}</span>
             <strong>{mode.title}</strong>
-            <small>{mode.description}</small>
+            <small>
+              {analysisTarget === 'external' && mode.id === 'runtime'
+                ? 'Instrumentation is required before external internals can be traced.'
+                : mode.description}
+            </small>
           </button>
         ))}
       </nav>
@@ -806,7 +874,7 @@ function App() {
               <span className={`pill pill--${catalogSource === 'analyzed' ? 'success' : 'warning'}`}>{catalogSource}</span>
             </div>
 
-            <section className="setup-step">
+            <section className="setup-step setup-step--project">
               <div className="setup-step__head">
                 <span>01</span>
                 <div>
@@ -877,7 +945,7 @@ function App() {
               </div>
             </section>
 
-            <section className="setup-step">
+            <section className="setup-step setup-step--endpoint">
               <div className="setup-step__head">
                 <span>02</span>
                 <div>
@@ -940,18 +1008,130 @@ function App() {
 
               <div className="request-form">
                 {externalRunnable ? (
-                  <label className="field">
-                    <span>Target base URL</span>
-                    <input
-                      value={targetBaseUrl}
-                      onChange={(event) => setTargetBaseUrl(event.target.value)}
-                      placeholder="http://localhost:8081"
-                    />
-                  </label>
+                  <>
+                    <div className="request-block request-block--basic">
+                      <div className="request-block__head">
+                        <span>Basic request</span>
+                        <small>Choose the target app and required path value.</small>
+                      </div>
+                      <label className="field">
+                        <span>Target base URL</span>
+                        <input
+                          value={targetBaseUrl}
+                          onChange={(event) => setTargetBaseUrl(event.target.value)}
+                          placeholder="http://localhost:8081"
+                        />
+                      </label>
+                      {selectedApi.requiresProductId ? (
+                        <label className="field">
+                          <span>Path variable value</span>
+                          <input value={productId} onChange={(event) => setProductId(event.target.value)} />
+                        </label>
+                      ) : null}
+                    </div>
+                    <details className="advanced-request">
+                      <summary>
+                        <span>Advanced request options</span>
+                        <small>{countEnabledEntries(queryParams)} query / {countEnabledEntries(requestHeaders)} headers / {bodyAllowed ? 'body available' : 'no body'}</small>
+                      </summary>
+                      <div className="advanced-request__body">
+                        <div className="request-editor">
+                          <div className="request-editor__head">
+                            <span>Query params</span>
+                            <button type="button" onClick={() => setQueryParams((current) => [...current, createRequestEntry('', '', true)])}>
+                              Add query
+                            </button>
+                          </div>
+                          <div className="request-entry-list">
+                            {queryParams.map((entry) => (
+                              <div key={entry.id} className={`request-entry${entry.enabled ? '' : ' is-disabled'}`}>
+                                <label className="entry-toggle">
+                                  <input
+                                    type="checkbox"
+                                    checked={entry.enabled}
+                                    onChange={(event) => updateQueryParam(entry.id, { enabled: event.target.checked })}
+                                  />
+                                  <span>{entry.enabled ? 'on' : 'off'}</span>
+                                </label>
+                                <input
+                                  value={entry.key}
+                                  onChange={(event) => updateQueryParam(entry.id, { key: event.target.value })}
+                                  placeholder="key"
+                                />
+                                <input
+                                  value={entry.value}
+                                  onChange={(event) => updateQueryParam(entry.id, { value: event.target.value })}
+                                  placeholder="value"
+                                />
+                                <button type="button" onClick={() => removeQueryParam(entry.id)} aria-label="Remove query parameter">
+                                  Remove
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="request-editor">
+                          <div className="request-editor__head">
+                            <span>Headers</span>
+                            <button type="button" onClick={() => setRequestHeaders((current) => [...current, createRequestEntry('', '', true)])}>
+                              Add header
+                            </button>
+                          </div>
+                          <div className="request-entry-list">
+                            {requestHeaders.map((entry) => (
+                              <div key={entry.id} className={`request-entry${entry.enabled ? '' : ' is-disabled'}`}>
+                                <label className="entry-toggle">
+                                  <input
+                                    type="checkbox"
+                                    checked={entry.enabled}
+                                    onChange={(event) => updateRequestHeader(entry.id, { enabled: event.target.checked })}
+                                  />
+                                  <span>{entry.enabled ? 'on' : 'off'}</span>
+                                </label>
+                                <input
+                                  value={entry.key}
+                                  onChange={(event) => updateRequestHeader(entry.id, { key: event.target.value })}
+                                  placeholder="Authorization"
+                                />
+                                <input
+                                  value={entry.value}
+                                  onChange={(event) => updateRequestHeader(entry.id, { value: event.target.value })}
+                                  placeholder="Bearer token"
+                                />
+                                <button type="button" onClick={() => removeRequestHeader(entry.id)} aria-label="Remove request header">
+                                  Remove
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        <label className={`field request-body-field${bodyAllowed ? '' : ' is-disabled'}`}>
+                          <span>{bodyAllowed ? 'JSON body' : 'JSON body unavailable for this method'}</span>
+                          <textarea
+                            value={requestBody}
+                            onChange={(event) => {
+                              setRequestBody(event.target.value)
+                              setRequestBodyError(null)
+                            }}
+                            disabled={!bodyAllowed}
+                            rows={6}
+                          />
+                        </label>
+                      </div>
+                    </details>
+                    <div className="request-preview request-preview--send">
+                      <span>Request to be sent</span>
+                      <div>
+                        <span className={`method-badge method-badge--${selectedApi.method.toLowerCase()}`}>{selectedApi.method}</span>
+                        <strong>{externalTargetPreview}</strong>
+                      </div>
+                    </div>
+                    {requestBodyError ? <p className="request-message request-message--error">{requestBodyError}</p> : null}
+                  </>
                 ) : null}
-                {selectedApi.requiresProductId ? (
+                {selectedApi.requiresProductId && !externalRunnable ? (
                   <label className="field">
-                    <span>{selectedApi.source === 'analyzed' ? 'Path variable value' : 'Product ID'}</span>
+                    <span>Product ID</span>
                     <input value={productId} onChange={(event) => setProductId(event.target.value)} />
                   </label>
                 ) : null}
@@ -1011,60 +1191,71 @@ function App() {
             <div className="panel-card panel-card--map">
               <div className="graph-head">
                 <div>
-                  <span className="section-label">Project Map · static</span>
+                  <span className="section-label">Project · static map</span>
                   <h2>{projectStructure.projectName}</h2>
-                  <p>Start here. This is the project structure StackFlow detected from source files.</p>
+                  <p>Start here. Keep this screen for structure only, then switch to Request when you want to run an API.</p>
                 </div>
                 <span className="pill pill--inline pill--loading">STATIC ANALYSIS</span>
               </div>
 
               <div className="map-board" aria-label="Detected project map">
-                <section className="map-column map-column--domain">
-                  <span className="section-label">Domains</span>
-                  {projectStructure.domains.map((domain) => (
-                    <button
-                      key={domain.id}
-                      type="button"
-                      className={`map-domain-card${selectedDomain.id === domain.id ? ' is-selected' : ''}`}
-                      onClick={() => selectDomain(domain)}
-                    >
-                      <strong>{domain.name}</strong>
-                      <span>{domain.endpoints.length} APIs</span>
-                      <small>{domain.description}</small>
-                    </button>
-                  ))}
+                <section className="map-column map-column--summary">
+                  <span className="section-label">Detected summary</span>
+                  <div className="project-strip project-strip--map">
+                    {projectFacts.map((item) => (
+                      <span key={item.label}>
+                        <strong>{item.label}</strong>
+                        {item.value}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="map-domain-list">
+                    {projectStructure.domains.map((domain) => (
+                      <button
+                        key={domain.id}
+                        type="button"
+                        className={`map-domain-card${selectedDomain.id === domain.id ? ' is-selected' : ''}`}
+                        onClick={() => selectDomain(domain)}
+                      >
+                        <strong>{domain.name}</strong>
+                        <span>{domain.endpoints.length} APIs</span>
+                        <small>{domain.description}</small>
+                      </button>
+                    ))}
+                  </div>
                 </section>
 
-                <section className="map-column">
-                  <span className="section-label">Controllers</span>
-                  {selectedDomain.controllers.map((controller) => (
-                    <article key={controller.name} className="map-node-card">
-                      <strong>{controller.name}</strong>
-                      <span>{controller.basePath || '/'} · {controller.endpointCount} endpoints</span>
-                      <small>{controller.packageName}</small>
+                <section className="map-column map-column--domain-detail">
+                  <div className="map-detail-head">
+                    <div>
+                      <span className="section-label">Selected domain</span>
+                      <strong>{selectedDomain.name}</strong>
+                      <p>{selectedDomain.description}</p>
+                    </div>
+                    <span className="pill pill--inline pill--success">{selectedDomain.endpoints.length} APIs</span>
+                  </div>
+                  <div className="map-node-grid">
+                    <article className="map-node-card">
+                      <strong>Controllers</strong>
+                      <span>{selectedDomain.controllers.map((controller) => controller.name).join(', ') || 'Not detected'}</span>
+                      <small>{selectedDomain.controllers.map((controller) => `${controller.basePath || '/'} · ${controller.endpointCount} endpoints`).join(' / ')}</small>
                     </article>
-                  ))}
-                </section>
-
-                <section className="map-column">
-                  <span className="section-label">Layers</span>
-                  {selectedDomain.layers.map((layer) => (
-                    <article key={layer.name} className="map-node-card">
-                      <strong>{layer.name}</strong>
-                      <span>{layer.classes.length} classes</span>
-                      <small>{layer.classes.join(', ')}</small>
+                    <article className="map-node-card">
+                      <strong>Layers</strong>
+                      <span>{selectedDomain.layers.map((layer) => layer.name).join(' -> ') || 'Not detected'}</span>
+                      <small>{selectedDomain.layers.flatMap((layer) => layer.classes).join(', ')}</small>
                     </article>
-                  ))}
-                </section>
-
-                <section className="map-column map-column--infra">
-                  <span className="section-label">Infrastructure</span>
-                  {(selectedDomain.infrastructure.length > 0 ? selectedDomain.infrastructure : ['Not detected']).map((item) => (
-                    <article key={item} className="map-node-card map-node-card--infra">
-                      <strong>{item}</strong>
-                      <span>Detected from names and mappings</span>
+                    <article className="map-node-card map-node-card--infra">
+                      <strong>Infrastructure</strong>
+                      <span>{selectedDomain.infrastructure.join(' / ') || 'Not detected'}</span>
+                      <small>Inferred from class names, mappings, and dependencies.</small>
                     </article>
-                  ))}
+                    <article className="map-node-card">
+                      <strong>Responsibilities</strong>
+                      <span>{selectedDomain.responsibilities.join(' / ') || 'Not detected'}</span>
+                      <small>Use Request view to inspect one selected endpoint.</small>
+                    </article>
+                  </div>
                 </section>
               </div>
             </div>
@@ -1074,9 +1265,9 @@ function App() {
             <div className="panel-card panel-card--api-flow">
               <div className="graph-head">
                 <div>
-                  <span className="section-label">API Flow · estimated</span>
+                  <span className="section-label">Request path · estimated</span>
                   <h2>{selectedApi.method} {selectedApi.pathTemplate}</h2>
-                  <p>This path is inferred from static structure. It is not runtime evidence yet.</p>
+                  <p>Use this as a preview. Actual node timing lives in the Trace view.</p>
                 </div>
                 <span className={`pill pill--inline ${runtimeSupported ? 'pill--success' : 'pill--warning'}`}>
                   {runtimeModeLabel}
@@ -1119,10 +1310,10 @@ function App() {
               </div>
 
               <div className="analysis-boundary">
-                <strong>{runtimeSupported ? 'Runtime trace is available for this sample API.' : 'This endpoint is analysis-only right now.'}</strong>
+                <strong>{runtimeSupported ? 'Send the request here, then inspect Trace when needed.' : 'External internals are not traced yet.'}</strong>
                 <p>
                   {runtimeSupported
-                    ? 'Switch to Runtime Trace to open SSE and run the request through StackFlow.'
+                    ? 'The Request view keeps response checking separate from graph inspection.'
                     : 'External project internals require a future Spring Boot starter or agent before StackFlow can show actual node events.'}
                 </p>
               </div>
@@ -1293,27 +1484,50 @@ function App() {
               {externalRunnable ? (
                 <section className="inspector-section response-card external-response-card">
                   <div className="section-row">
-                    <span className="section-label">External response</span>
+                    <span className="section-label">External HTTP evidence</span>
                     <span className={`pill pill--inline pill--${(externalResponse?.resultStatus ?? 'idle').toLowerCase()}`}>
                       {externalResponse ? `HTTP ${externalResponse.httpStatus || '-'}` : 'WAITING'}
                     </span>
                   </div>
                   {externalResponse ? (
                     <>
-                      <div className="external-response-meta">
-                        <span>
-                          <strong>Target</strong>
-                          {externalResponse.targetUrl}
-                        </span>
-                        <span>
-                          <strong>Duration</strong>
-                          {externalResponse.durationMs}ms
-                        </span>
-                        <span>
-                          <strong>Content type</strong>
-                          {externalResponse.contentType || '-'}
-                        </span>
-                      </div>
+                      <article className="evidence-block evidence-block--request">
+                        <header>
+                          <span>Request sent</span>
+                          <strong>{externalRequestSnapshot?.method ?? selectedApi.method}</strong>
+                        </header>
+                        <p>{externalRequestSnapshot?.targetUrl ?? externalTargetPreview}</p>
+                        <div className="evidence-grid">
+                          <span>
+                            <strong>Query</strong>
+                            {countEnabledEntries(externalRequestSnapshot?.queryParams ?? [])}
+                          </span>
+                          <span>
+                            <strong>Headers</strong>
+                            {countEnabledEntries(externalRequestSnapshot?.headers ?? [])}
+                          </span>
+                          <span>
+                            <strong>Body</strong>
+                            {externalRequestSnapshot?.requestBody ? 'enabled' : 'none'}
+                          </span>
+                        </div>
+                      </article>
+                      <article className="evidence-block evidence-block--response">
+                        <header>
+                          <span>Response received</span>
+                          <strong>HTTP {externalResponse.httpStatus || '-'}</strong>
+                        </header>
+                        <div className="evidence-grid">
+                          <span>
+                            <strong>Duration</strong>
+                            {externalResponse.durationMs}ms
+                          </span>
+                          <span>
+                            <strong>Content type</strong>
+                            {externalResponse.contentType || '-'}
+                          </span>
+                        </div>
+                      </article>
                       {externalResponse.errorMessage ? (
                         <p className="external-error">{externalResponse.errorMessage}</p>
                       ) : null}
@@ -1325,6 +1539,43 @@ function App() {
                     </>
                   ) : (
                     <p className="empty-copy">Enter a target base URL, then run this endpoint to inspect the returned payload.</p>
+                  )}
+                </section>
+              ) : null}
+              {!externalRunnable ? (
+                <section className="inspector-section response-card external-response-card">
+                  <div className="section-row">
+                    <span className="section-label">Response</span>
+                    <span className={`pill pill--inline pill--${(traceDetail?.resultStatus ?? 'idle').toLowerCase()}`}>
+                      {traceDetail ? `HTTP ${traceDetail.httpStatus || '-'}` : 'WAITING'}
+                    </span>
+                  </div>
+                  {formattedResponseBody ? (
+                    <>
+                      <article className="evidence-block evidence-block--response">
+                        <header>
+                          <span>Response received</span>
+                          <strong>{traceDetail?.durationMs ?? 0}ms</strong>
+                        </header>
+                        <div className="evidence-grid">
+                          <span>
+                            <strong>Trace</strong>
+                            {traceDetail?.traceId.slice(0, 8) ?? '-'}
+                          </span>
+                          <span>
+                            <strong>Events</strong>
+                            {traceDetail?.events.length ?? 0}
+                          </span>
+                          <span>
+                            <strong>Result</strong>
+                            {traceDetail?.resultStatus ?? 'IDLE'}
+                          </span>
+                        </div>
+                      </article>
+                      <pre className="response-body response-body--external">{formattedResponseBody}</pre>
+                    </>
+                  ) : (
+                    <p className="empty-copy">Send the selected sample request to inspect the returned JSON.</p>
                   )}
                 </section>
               ) : null}
@@ -1683,6 +1934,58 @@ function buildExternalRequestMessage(response: ExternalRequestResponse) {
   }
 
   return `${response.resultStatus}: ${response.method} ${response.targetUrl} returned HTTP ${response.httpStatus} in ${response.durationMs}ms.`
+}
+
+function createRequestEntry(key: string, value: string, enabled: boolean): ExternalRequestEntry {
+  return {
+    id: crypto.randomUUID(),
+    key,
+    value,
+    enabled,
+  }
+}
+
+function updateRequestEntries(
+  entries: ExternalRequestEntry[],
+  id: string,
+  patch: Partial<ExternalRequestEntry>,
+) {
+  return entries.map((entry) => entry.id === id ? { ...entry, ...patch } : entry)
+}
+
+function removeRequestEntry(entries: ExternalRequestEntry[], id: string) {
+  if (entries.length <= 1) {
+    return entries.map((entry) => entry.id === id ? { ...entry, key: '', value: '', enabled: false } : entry)
+  }
+
+  return entries.filter((entry) => entry.id !== id)
+}
+
+function toEnabledEntries(entries: ExternalRequestEntry[]) {
+  return entries
+    .filter((entry) => entry.enabled && entry.key.trim())
+    .map((entry) => ({
+      key: entry.key.trim(),
+      value: entry.value,
+      enabled: true,
+    }))
+}
+
+function countEnabledEntries(entries: ExternalRequestEntry[]) {
+  return toEnabledEntries(entries).length
+}
+
+function buildExternalTargetPreview(targetBaseUrl: string, path: string, queryParams: ExternalRequestEntry[]) {
+  const normalizedBase = targetBaseUrl.trim().replace(/\/+$/u, '')
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`
+  const search = new URLSearchParams()
+
+  toEnabledEntries(queryParams).forEach((entry) => {
+    search.append(entry.key, entry.value)
+  })
+
+  const queryString = search.toString()
+  return `${normalizedBase || 'http://localhost:8081'}${normalizedPath}${queryString ? `?${queryString}` : ''}`
 }
 
 function formatResponseBody(responseBody: string) {
