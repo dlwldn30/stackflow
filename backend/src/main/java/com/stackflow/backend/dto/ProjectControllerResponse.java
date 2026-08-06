@@ -4,6 +4,7 @@ public record ProjectControllerResponse(
 	String name,
 	String packageName,
 	String basePath,
-	int endpointCount
+	int endpointCount,
+	String sourceFile
 ) {
 }

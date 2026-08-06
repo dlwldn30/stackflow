@@ -5,6 +5,7 @@ import java.util.List;
 public record ProjectLayerResponse(
 	String name,
 	String type,
-	List<String> classes
+	List<String> classes,
+	String evidence
 ) {
 }

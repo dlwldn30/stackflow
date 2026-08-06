@@ -438,6 +438,62 @@
   gap: 10px;
 }
 
+.domain-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin-top: 8px;
+  border: 1px solid rgba(128, 149, 190, 0.18);
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 0.68rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.domain-mode-badge--runtime {
+  border-color: rgba(55, 242, 208, 0.34);
+  background: rgba(55, 242, 208, 0.12);
+  color: #aefaf0;
+}
+
+.domain-mode-badge--integration {
+  border-color: rgba(255, 190, 92, 0.28);
+  background: rgba(255, 190, 92, 0.1);
+  color: #f5cf8c;
+}
+
+.analysis-guide-card {
+  border: 1px solid rgba(255, 190, 92, 0.2);
+  border-radius: 17px;
+  background:
+    radial-gradient(circle at 92% 0%, rgba(255, 190, 92, 0.14), transparent 34%),
+    rgba(10, 22, 39, 0.78);
+  color: #dce8f8;
+  padding: 13px;
+}
+
+.analysis-guide-card strong,
+.analysis-guide-card p,
+.analysis-guide-card small {
+  display: block;
+}
+
+.analysis-guide-card p {
+  margin: 8px 0 0;
+  color: #b8c6db;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.analysis-guide-card small {
+  margin-top: 8px;
+  color: #f0c97e;
+  font-size: 0.74rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
 .project-strip--map {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -469,10 +525,52 @@
   line-height: 1.45;
 }
 
+.map-detail-mode {
+  display: block;
+  margin-top: 8px;
+  color: #b9c9df;
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
 .map-node-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.map-endpoint-list {
+  display: grid;
+  gap: 10px;
+}
+
+.map-endpoint-card {
+  border: 1px solid rgba(128, 149, 190, 0.13);
+  border-radius: 17px;
+  background: rgba(10, 22, 39, 0.78);
+  color: #dce8f8;
+  padding: 13px;
+}
+
+.map-endpoint-card strong,
+.map-endpoint-card span,
+.map-endpoint-card small {
+  display: block;
+}
+
+.map-endpoint-card span {
+  margin-top: 7px;
+  color: #8fa1bb;
+  font-size: 0.74rem;
+  font-weight: 850;
+}
+
+.map-endpoint-card small {
+  margin-top: 8px;
+  color: #9dadc4;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .map-domain-card strong,
@@ -507,6 +605,13 @@
 
 .map-node-card--infra {
   border-color: rgba(255, 190, 92, 0.2);
+}
+
+.insight-list__next-step {
+  border-color: rgba(55, 242, 208, 0.22);
+  background:
+    radial-gradient(circle at 92% 0%, rgba(55, 242, 208, 0.12), transparent 34%),
+    rgba(10, 22, 39, 0.78);
 }
 
 .api-flow-summary {
@@ -1421,6 +1526,17 @@
 
 .analysis-message--loading {
 	color: #aefaf0;
+}
+
+.analysis-submessage {
+  margin: 8px 0 0;
+  color: #7f91ac;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.analysis-submessage--detail {
+  color: #70829d;
 }
 
 .trace-list {

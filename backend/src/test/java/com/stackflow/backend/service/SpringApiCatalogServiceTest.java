@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.stackflow.backend.dto.ApiCatalogItemResponse;
+import com.stackflow.backend.dto.ProjectAnalysisStatus;
 import com.stackflow.backend.dto.ProjectDomainResponse;
 import com.stackflow.backend.dto.ProjectStructureResponse;
 import java.io.IOException;
@@ -27,11 +28,13 @@ class SpringApiCatalogServiceTest {
 			.map(item -> item.method() + " " + item.path())
 			.collect(Collectors.toSet());
 
-		assertEquals(4, catalog.size());
+		assertEquals(6, catalog.size());
 		assertTrue(routes.contains("GET /api/products"));
 		assertTrue(routes.contains("GET /api/products/{productId}"));
 		assertTrue(routes.contains("GET /api/products/{productId}/stock"));
 		assertTrue(routes.contains("POST /api/products/{productId}/cache-refresh"));
+		assertTrue(routes.contains("GET /api/payments"));
+		assertTrue(routes.contains("POST /api/payments/quote"));
 	}
 
 	@Test
@@ -47,6 +50,8 @@ class SpringApiCatalogServiceTest {
 		assertEquals("QUERY_STOCK", stockApi.requestType());
 		assertTrue(stockApi.requiresPathVariable());
 		assertEquals(List.of("productId"), stockApi.pathVariables());
+		assertTrue(stockApi.sourceFile().endsWith("ProductController.java"));
+		assertTrue(stockApi.sourceLine() > 0);
 	}
 
 	@Test
@@ -68,14 +73,21 @@ class SpringApiCatalogServiceTest {
 
 		assertEquals("backend", structure.projectName());
 		assertEquals("Spring Boot + Gradle", structure.framework());
-		assertEquals(1, structure.domains().size());
+		assertEquals(ProjectAnalysisStatus.SUCCESS, structure.analysisStatus());
+		assertEquals("build.gradle", structure.frameworkEvidence());
+		assertEquals("src/main/java", structure.sourceRoot());
+		assertEquals(2, structure.domains().size());
 		assertTrue(structure.infrastructure().contains("Redis"));
 		assertTrue(structure.infrastructure().contains("MySQL"));
+		assertFalse(structure.infrastructureDetails().isEmpty());
 		assertEquals("Product", productDomain.name());
 		assertEquals(4, productDomain.endpoints().size());
 		assertTrue(productDomain.controllers().stream().anyMatch(controller -> controller.name().equals("ProductController")));
+		assertTrue(productDomain.controllers().stream().allMatch(controller -> !controller.sourceFile().startsWith("/")));
 		assertTrue(productDomain.layers().stream().anyMatch(layer -> layer.name().equals("Service")));
 		assertTrue(productDomain.layers().stream().anyMatch(layer -> layer.name().equals("Repository")));
+		assertTrue(productDomain.layers().stream().allMatch(layer -> !layer.evidence().isBlank()));
+		assertTrue(structure.domains().stream().anyMatch(domain -> domain.id().equals("payment")));
 	}
 
 	@Test
@@ -115,10 +127,94 @@ class SpringApiCatalogServiceTest {
 
 		assertEquals(projectRoot.getFileName().toString(), structure.projectName());
 		assertEquals("Spring Boot + Gradle", structure.framework());
+		assertEquals(ProjectAnalysisStatus.SUCCESS, structure.analysisStatus());
+		assertEquals("build.gradle", structure.frameworkEvidence());
+		assertEquals("src/main/java", structure.sourceRoot());
 		assertEquals("Order", orderDomain.name());
 		assertEquals(1, orderDomain.endpoints().size());
 		assertEquals("/api/orders/{orderId}", orderDomain.endpoints().getFirst().path());
 		assertEquals(List.of("orderId"), orderDomain.endpoints().getFirst().pathVariables());
+		assertEquals("com/example/order/OrderController.java", orderDomain.endpoints().getFirst().sourceFile());
 		assertTrue(orderDomain.layers().stream().anyMatch(layer -> layer.name().equals("Service")));
+	}
+
+	@Test
+	void returnsFailureStatusWhenSourceRootDoesNotExist(@TempDir Path projectRoot) {
+		ProjectStructureResponse structure = springApiCatalogService.getProjectStructure(projectRoot.toString());
+
+		assertEquals(ProjectAnalysisStatus.FAILED, structure.analysisStatus());
+		assertTrue(structure.domains().isEmpty());
+		assertTrue(structure.analysisMessage().contains("No Java source root"));
+	}
+
+	@Test
+	void returnsEmptyStatusWhenNoRestControllersExist(@TempDir Path projectRoot) throws IOException {
+		Files.writeString(projectRoot.resolve("build.gradle"), "plugins { id 'org.springframework.boot' version '4.1.0' }");
+		Path sourceRoot = projectRoot.resolve("src/main/java/com/example/plain");
+		Files.createDirectories(sourceRoot);
+		Files.writeString(sourceRoot.resolve("PlainService.java"), """
+			package com.example.plain;
+
+			public class PlainService {
+			}
+			""");
+
+		ProjectStructureResponse structure = springApiCatalogService.getProjectStructure(projectRoot.toString());
+
+		assertEquals(ProjectAnalysisStatus.EMPTY, structure.analysisStatus());
+		assertTrue(structure.domains().isEmpty());
+		assertTrue(structure.analysisMessage().contains("no REST API mappings"));
+	}
+
+	@Test
+	void groupsUseCaseAndGatewayClassesIntoTheSameDomain(@TempDir Path projectRoot) throws IOException {
+		Files.writeString(projectRoot.resolve("build.gradle"), "plugins { id 'org.springframework.boot' version '4.1.0' }");
+		Path sourceRoot = projectRoot.resolve("src/main/java/com/example/payment");
+		Files.createDirectories(sourceRoot);
+		Files.writeString(sourceRoot.resolve("PaymentController.java"), """
+			package com.example.payment;
+
+			import org.springframework.web.bind.annotation.GetMapping;
+			import org.springframework.web.bind.annotation.RequestMapping;
+			import org.springframework.web.bind.annotation.RestController;
+
+			@RestController
+			@RequestMapping("/api/payments")
+			public class PaymentController {
+				@GetMapping
+				public String listPayments() {
+					return "ok";
+				}
+			}
+			""");
+		Files.writeString(sourceRoot.resolve("PaymentUseCase.java"), """
+			package com.example.payment;
+
+			public class PaymentUseCase {
+			}
+			""");
+		Files.writeString(sourceRoot.resolve("PaymentGateway.java"), """
+			package com.example.payment;
+
+			public class PaymentGateway {
+			}
+			""");
+		Files.writeString(sourceRoot.resolve("PaymentClient.java"), """
+			package com.example.payment;
+
+			public class PaymentClient {
+			}
+			""");
+
+		ProjectStructureResponse structure = springApiCatalogService.getProjectStructure(projectRoot.toString());
+		ProjectDomainResponse paymentDomain = structure.domains().stream()
+			.filter(domain -> domain.id().equals("payment"))
+			.findFirst()
+			.orElseThrow();
+
+		assertEquals(ProjectAnalysisStatus.SUCCESS, structure.analysisStatus());
+		assertTrue(paymentDomain.layers().stream().anyMatch(layer -> layer.name().equals("UseCase")));
+		assertTrue(paymentDomain.layers().stream().anyMatch(layer -> layer.name().equals("Gateway")));
+		assertTrue(paymentDomain.layers().stream().anyMatch(layer -> layer.name().equals("Client")));
 	}
 }

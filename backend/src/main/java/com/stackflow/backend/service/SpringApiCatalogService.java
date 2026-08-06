@@ -1,8 +1,10 @@
 package com.stackflow.backend.service;
 
 import com.stackflow.backend.dto.ApiCatalogItemResponse;
+import com.stackflow.backend.dto.ProjectAnalysisStatus;
 import com.stackflow.backend.dto.ProjectControllerResponse;
 import com.stackflow.backend.dto.ProjectDomainResponse;
+import com.stackflow.backend.dto.ProjectEvidenceItemResponse;
 import com.stackflow.backend.dto.ProjectLayerResponse;
 import com.stackflow.backend.dto.ProjectStructureResponse;
 import java.io.IOException;
@@ -29,6 +31,17 @@ public class SpringApiCatalogService {
 	private static final Pattern MAPPING_PATH_PATTERN = Pattern.compile("(?:value|path)\\s*=\\s*\"([^\"]*)\"|\"([^\"]*)\"");
 	private static final Pattern REQUEST_METHOD_PATTERN = Pattern.compile("RequestMethod\\.(GET|POST|PUT|DELETE|PATCH)");
 	private static final Pattern PATH_VARIABLE_PATTERN = Pattern.compile("\\{([^}/]+)}");
+	private static final List<String> PROJECT_METADATA_FILES = List.of(
+		"build.gradle",
+		"build.gradle.kts",
+		"pom.xml",
+		"src/main/resources/application.properties",
+		"src/main/resources/application.yml",
+		"src/main/resources/application.yaml",
+		"backend/src/main/resources/application.properties",
+		"backend/src/main/resources/application.yml",
+		"backend/src/main/resources/application.yaml"
+	);
 
 	public List<ApiCatalogItemResponse> getApiCatalog() {
 		Path projectRoot = resolveProjectRoot(null);
@@ -40,7 +53,7 @@ public class SpringApiCatalogService {
 		try (Stream<Path> paths = Files.walk(sourceRoot)) {
 			return paths
 				.filter(path -> path.toString().endsWith(".java"))
-				.flatMap(path -> scanController(path).stream())
+				.flatMap(path -> scanController(sourceRoot, path).stream())
 				.flatMap(scan -> scan.endpoints().stream())
 				.sorted(Comparator.comparing(ApiCatalogItemResponse::path).thenComparing(ApiCatalogItemResponse::method))
 				.toList();
@@ -57,15 +70,35 @@ public class SpringApiCatalogService {
 		Path projectRoot = resolveProjectRoot(projectPath);
 		Path sourceRoot = resolveSourceRoot(projectRoot);
 		if (!Files.exists(sourceRoot)) {
-			return emptyProjectStructure(projectRoot, detectFramework(projectRoot));
+			return buildProjectStructure(
+				projectRoot,
+				sourceRoot,
+				detectFramework(projectRoot),
+				relativizeProjectPath(projectRoot, detectFrameworkEvidencePath(projectRoot)).orElse("No Gradle or Maven build file was detected."),
+				ProjectAnalysisStatus.FAILED,
+				"No Java source root was found under the provided project path."
+			);
 		}
 
 		try (Stream<Path> paths = Files.walk(sourceRoot)) {
 			List<Path> javaFiles = paths
 				.filter(path -> path.toString().endsWith(".java"))
 				.toList();
+			if (javaFiles.isEmpty()) {
+				return buildProjectStructure(
+					projectRoot,
+					sourceRoot,
+					detectFramework(projectRoot),
+					relativizeProjectPath(projectRoot, detectFrameworkEvidencePath(projectRoot)).orElse("No Gradle or Maven build file was detected."),
+					ProjectAnalysisStatus.EMPTY,
+					"No Java files were found in the detected source root."
+				);
+			}
+			String framework = detectFramework(projectRoot);
+			String frameworkEvidence = relativizeProjectPath(projectRoot, detectFrameworkEvidencePath(projectRoot))
+				.orElse("No Gradle or Maven build file was detected.");
 			List<ControllerScan> controllers = javaFiles.stream()
-				.map(this::scanController)
+				.map(javaFile -> scanController(sourceRoot, javaFile))
 				.flatMap(Optional::stream)
 				.sorted(Comparator.comparing(ControllerScan::controller))
 				.toList();
@@ -77,16 +110,33 @@ public class SpringApiCatalogService {
 				.flatMap(controller -> controller.endpoints().stream())
 				.sorted(Comparator.comparing(ApiCatalogItemResponse::path).thenComparing(ApiCatalogItemResponse::method))
 				.toList();
+			List<ProjectEvidenceItemResponse> infrastructureDetails = detectInfrastructureDetails(projectRoot, classes, endpoints);
+			ProjectAnalysisStatus analysisStatus = endpoints.isEmpty()
+				? ProjectAnalysisStatus.EMPTY
+				: ProjectAnalysisStatus.SUCCESS;
 
-			return new ProjectStructureResponse(
+			return buildProjectStructure(
+				projectRoot,
+				sourceRoot,
 				resolveProjectName(projectRoot),
-				detectFramework(projectRoot),
-				detectInfrastructure(classes, endpoints),
+				framework,
+				frameworkEvidence,
+				analysisStatus,
+				buildAnalysisMessage(projectRoot, analysisStatus, controllers.size(), endpoints.size(), sourceRoot),
+				detectInfrastructure(infrastructureDetails),
+				infrastructureDetails,
 				buildLayerSummary(classes),
-				buildDomains(controllers, classes, endpoints)
+				buildDomains(projectRoot, controllers, classes, endpoints)
 			);
 		} catch (IOException exception) {
-			return emptyProjectStructure(projectRoot, detectFramework(projectRoot));
+			return buildProjectStructure(
+				projectRoot,
+				sourceRoot,
+				detectFramework(projectRoot),
+				relativizeProjectPath(projectRoot, detectFrameworkEvidencePath(projectRoot)).orElse("No Gradle or Maven build file was detected."),
+				ProjectAnalysisStatus.FAILED,
+				"Project files could not be read for Spring analysis."
+			);
 		}
 	}
 
@@ -111,7 +161,7 @@ public class SpringApiCatalogService {
 		return projectRoot.resolve("backend/src/main/java");
 	}
 
-	private Optional<ControllerScan> scanController(Path javaFile) {
+	private Optional<ControllerScan> scanController(Path sourceRoot, Path javaFile) {
 		String source;
 		try {
 			source = Files.readString(javaFile);
@@ -132,6 +182,7 @@ public class SpringApiCatalogService {
 		String basePath = extractClassBasePath(source);
 		String packageName = extractPackageName(source).orElse("");
 		List<ApiCatalogItemResponse> catalog = new ArrayList<>();
+		String sourceFile = relativizeSourcePath(sourceRoot, javaFile);
 
 		for (int index = 0; index < lines.size(); index += 1) {
 			String line = lines.get(index).trim();
@@ -140,7 +191,7 @@ public class SpringApiCatalogService {
 				continue;
 			}
 
-			Optional<String> handler = findNextHandlerName(lines, index + 1);
+			Optional<HandlerMetadata> handler = findNextHandlerName(lines, index + 1);
 			if (handler.isEmpty()) {
 				continue;
 			}
@@ -148,18 +199,20 @@ public class SpringApiCatalogService {
 			String path = normalizePath(basePath, mapping.get().path());
 			List<String> pathVariables = extractPathVariables(path);
 			catalog.add(new ApiCatalogItemResponse(
-				buildId(mapping.get().method(), path, controller, handler.get()),
+				buildId(mapping.get().method(), path, controller, handler.get().name()),
 				mapping.get().method(),
 				path,
 				controller,
-				handler.get(),
-				classifyRequestType(mapping.get().method(), path, handler.get()),
+				handler.get().name(),
+				classifyRequestType(mapping.get().method(), path, handler.get().name()),
 				!pathVariables.isEmpty(),
-				pathVariables
+				pathVariables,
+				sourceFile,
+				handler.get().lineNumber()
 			));
 		}
 
-		return Optional.of(new ControllerScan(controller, packageName, basePath, List.copyOf(catalog)));
+		return Optional.of(new ControllerScan(controller, packageName, basePath, sourceFile, List.copyOf(catalog)));
 	}
 
 	private boolean isInternalController(String controller) {
@@ -243,12 +296,12 @@ public class SpringApiCatalogService {
 		return Optional.of(namedPath == null ? matcher.group(2) : namedPath);
 	}
 
-	private Optional<String> findNextHandlerName(List<String> lines, int startIndex) {
+	private Optional<HandlerMetadata> findNextHandlerName(List<String> lines, int startIndex) {
 		for (int index = startIndex; index < lines.size(); index += 1) {
 			String line = lines.get(index).trim();
 			Matcher matcher = METHOD_NAME_PATTERN.matcher(line);
 			if (matcher.find()) {
-				return Optional.of(matcher.group(1));
+				return Optional.of(new HandlerMetadata(matcher.group(1), index + 1));
 			}
 
 			if (line.startsWith("@")) {
@@ -339,6 +392,9 @@ public class SpringApiCatalogService {
 		if (className.endsWith("Controller")) {
 			return "Controller";
 		}
+		if (className.endsWith("UseCase")) {
+			return "UseCase";
+		}
 		if (className.endsWith("RepositoryService") || className.endsWith("Repository")) {
 			return "Repository";
 		}
@@ -347,6 +403,12 @@ public class SpringApiCatalogService {
 		}
 		if (className.endsWith("Store")) {
 			return "Store";
+		}
+		if (className.endsWith("Gateway")) {
+			return "Gateway";
+		}
+		if (className.endsWith("Client")) {
+			return "Client";
 		}
 		if (className.endsWith("Service")) {
 			return "Service";
@@ -363,16 +425,52 @@ public class SpringApiCatalogService {
 		return "Domain";
 	}
 
-	private List<String> detectInfrastructure(List<ClassMetadata> classes, List<ApiCatalogItemResponse> endpoints) {
-		List<String> infrastructure = new ArrayList<>();
-		if (classes.stream().anyMatch(item -> item.name().contains("Cache")) ||
-			endpoints.stream().anyMatch(item -> item.path().toLowerCase(Locale.ROOT).contains("cache"))) {
-			infrastructure.add("Redis");
+	private List<ProjectEvidenceItemResponse> detectInfrastructureDetails(
+		Path projectRoot,
+		List<ClassMetadata> classes,
+		List<ApiCatalogItemResponse> endpoints
+	) {
+		List<ProjectEvidenceItemResponse> infrastructure = new ArrayList<>();
+		boolean hasCache = classes.stream().anyMatch(item -> item.name().contains("Cache"))
+			|| endpoints.stream().anyMatch(item -> item.path().toLowerCase(Locale.ROOT).contains("cache"));
+		boolean hasPersistence = classes.stream().anyMatch(item -> item.name().contains("Repository") || item.name().contains("Store"));
+		boolean hasRedisEvidence = projectMetadataContains(projectRoot, "redis", "spring.data.redis", "lettuce", "jedis");
+		boolean hasMysqlEvidence = projectMetadataContains(projectRoot, "mysql", "mariadb", "jdbc:mysql");
+
+		if (hasCache) {
+			String evidence = classes.stream()
+				.filter(item -> item.name().contains("Cache"))
+				.map(item -> item.name() + " (" + item.packageName() + ")")
+				.findFirst()
+				.orElse("Endpoint paths include cache operations.");
+			infrastructure.add(new ProjectEvidenceItemResponse(
+				hasRedisEvidence ? "Redis" : "Cache",
+				hasRedisEvidence ? "project-config-and-class-name" : "class-name-and-path",
+				evidence
+			));
 		}
-		if (classes.stream().anyMatch(item -> item.name().contains("Repository") || item.name().contains("Store"))) {
-			infrastructure.add("MySQL");
+		if (hasPersistence) {
+			String evidence = classes.stream()
+				.filter(item -> item.name().contains("Repository") || item.name().contains("Store"))
+				.map(item -> item.name() + " (" + item.packageName() + ")")
+				.findFirst()
+				.orElse("Repository or store classes were detected.");
+			infrastructure.add(new ProjectEvidenceItemResponse(
+				hasMysqlEvidence ? "MySQL" : "Persistence",
+				hasMysqlEvidence ? "project-config-and-class-name" : "class-name",
+				evidence
+			));
 		}
-		return infrastructure.isEmpty() ? List.of("In-memory") : List.copyOf(infrastructure);
+		if (infrastructure.isEmpty()) {
+			return List.of(new ProjectEvidenceItemResponse("In-memory", "fallback", "No cache or repository-style infrastructure classes were detected."));
+		}
+		return List.copyOf(infrastructure);
+	}
+
+	private List<String> detectInfrastructure(List<ProjectEvidenceItemResponse> infrastructureDetails) {
+		return infrastructureDetails.stream()
+			.map(ProjectEvidenceItemResponse::name)
+			.toList();
 	}
 
 	private List<ProjectLayerResponse> buildLayerSummary(List<ClassMetadata> classes) {
@@ -382,11 +480,17 @@ public class SpringApiCatalogService {
 			.entrySet()
 			.stream()
 			.sorted(Map.Entry.comparingByKey())
-			.map(entry -> new ProjectLayerResponse(entry.getKey(), entry.getKey().toUpperCase(Locale.ROOT), entry.getValue().stream().sorted().toList()))
+			.map(entry -> new ProjectLayerResponse(
+				entry.getKey(),
+				entry.getKey().toUpperCase(Locale.ROOT),
+				entry.getValue().stream().sorted().toList(),
+				buildLayerEvidence(entry.getKey(), classes)
+			))
 			.toList();
 	}
 
 	private List<ProjectDomainResponse> buildDomains(
+		Path projectRoot,
 		List<ControllerScan> controllers,
 		List<ClassMetadata> classes,
 		List<ApiCatalogItemResponse> endpoints
@@ -399,12 +503,13 @@ public class SpringApiCatalogService {
 		}
 
 		return controllersByDomain.entrySet().stream()
-			.map(entry -> buildDomain(entry.getKey(), entry.getValue(), classes, endpoints))
+			.map(entry -> buildDomain(projectRoot, entry.getKey(), entry.getValue(), classes, endpoints))
 			.sorted(Comparator.comparing(ProjectDomainResponse::name))
 			.toList();
 	}
 
 	private ProjectDomainResponse buildDomain(
+		Path projectRoot,
 		String domainKey,
 		List<ControllerScan> controllers,
 		List<ClassMetadata> classes,
@@ -415,26 +520,30 @@ public class SpringApiCatalogService {
 		List<ApiCatalogItemResponse> domainEndpoints = endpoints.stream()
 			.filter(endpoint -> controllers.stream().anyMatch(controller -> controller.controller().equals(endpoint.controller())))
 			.toList();
-		List<ClassMetadata> domainClasses = classes.stream()
-			.filter(item -> toDomainKey(item.name()).equals(domainKey))
-			.toList();
+			List<ClassMetadata> domainClasses = classes.stream()
+				.filter(item -> toDomainKey(item.name()).equals(domainKey))
+				.toList();
+		List<ProjectEvidenceItemResponse> domainInfrastructureDetails = detectInfrastructureDetails(projectRoot, domainClasses, domainEndpoints);
 
 		return new ProjectDomainResponse(
 			domainId,
 			domainName,
 			domainName + " domain request paths and runtime dependencies.",
 			buildResponsibilities(domainEndpoints),
-			detectInfrastructure(domainClasses, domainEndpoints),
+			detectInfrastructure(domainInfrastructureDetails),
+			domainInfrastructureDetails,
 			controllers.stream()
 				.map(controller -> new ProjectControllerResponse(
 					controller.controller(),
 					controller.packageName(),
 					controller.basePath(),
-					controller.endpoints().size()
+					controller.endpoints().size(),
+					controller.sourceFile()
 				))
 				.toList(),
 			buildLayerSummary(domainClasses),
-			domainEndpoints
+			domainEndpoints,
+			controllers.stream().map(ControllerScan::packageName).distinct().sorted().toList()
 		);
 	}
 
@@ -448,7 +557,7 @@ public class SpringApiCatalogService {
 
 	private String toDomainKey(String className) {
 		return className
-			.replaceAll("(Controller|RepositoryService|Repository|CacheService|CatalogStore|Service|Store|Response)$", "");
+			.replaceAll("(Controller|UseCase|RepositoryService|Repository|CacheService|CatalogStore|Service|Store|Gateway|Client|Response)$", "");
 	}
 
 	private String humanizeDomain(String domainKey) {
@@ -479,14 +588,140 @@ public class SpringApiCatalogService {
 		return "Spring Boot";
 	}
 
-	private ProjectStructureResponse emptyProjectStructure(Path projectRoot, String framework) {
-		return new ProjectStructureResponse(
+	private Optional<Path> detectFrameworkEvidencePath(Path projectRoot) {
+		for (String candidate : List.of(
+			"build.gradle",
+			"build.gradle.kts",
+			"pom.xml",
+			"backend/build.gradle",
+			"backend/build.gradle.kts",
+			"backend/pom.xml"
+		)) {
+			Path path = projectRoot.resolve(candidate);
+			if (Files.exists(path)) {
+				return Optional.of(path);
+			}
+		}
+		return Optional.empty();
+	}
+
+	private String buildAnalysisMessage(
+		Path projectRoot,
+		ProjectAnalysisStatus analysisStatus,
+		int controllerCount,
+		int endpointCount,
+		Path sourceRoot
+	) {
+		String displaySourceRoot = relativizeSourceRoot(projectRoot, sourceRoot);
+		if (analysisStatus == ProjectAnalysisStatus.EMPTY) {
+			return "Project files were read, but no REST API mappings were detected under " + displaySourceRoot + ".";
+		}
+		return "Detected " + controllerCount + " controller classes and " + endpointCount + " API mappings under " + displaySourceRoot + ".";
+	}
+
+	private String buildLayerEvidence(String layerName, List<ClassMetadata> classes) {
+		return classes.stream()
+			.filter(item -> item.layerType().equals(layerName))
+			.map(item -> item.name() + " (" + item.packageName() + ")")
+			.findFirst()
+			.orElse("No supporting class evidence was found.");
+	}
+
+	private ProjectStructureResponse buildProjectStructure(
+		Path projectRoot,
+		Path sourceRoot,
+		String framework,
+		String frameworkEvidence,
+		ProjectAnalysisStatus analysisStatus,
+		String message
+	) {
+		return buildProjectStructure(
+			projectRoot,
+			sourceRoot,
 			resolveProjectName(projectRoot),
 			framework,
+			frameworkEvidence,
+			analysisStatus,
+			message,
+			List.of(),
 			List.of(),
 			List.of(),
 			List.of()
 		);
+	}
+
+	private ProjectStructureResponse buildProjectStructure(
+		Path projectRoot,
+		Path sourceRoot,
+		String projectName,
+		String framework,
+		String frameworkEvidence,
+		ProjectAnalysisStatus analysisStatus,
+		String message,
+		List<String> infrastructure,
+		List<ProjectEvidenceItemResponse> infrastructureDetails,
+		List<ProjectLayerResponse> layers,
+		List<ProjectDomainResponse> domains
+	) {
+		return new ProjectStructureResponse(
+			projectName,
+			framework,
+			frameworkEvidence,
+			analysisStatus,
+			relativizeSourceRoot(projectRoot, sourceRoot),
+			message,
+			infrastructure,
+			infrastructureDetails,
+			layers,
+			domains
+		);
+	}
+
+	private String relativizeSourcePath(Path sourceRoot, Path filePath) {
+		try {
+			return sourceRoot.toAbsolutePath().normalize().relativize(filePath.toAbsolutePath().normalize()).toString();
+		} catch (IllegalArgumentException exception) {
+			return filePath.getFileName().toString();
+		}
+	}
+
+	private String relativizeSourceRoot(Path projectRoot, Path sourceRoot) {
+		if (projectRoot.equals(sourceRoot)) {
+			return "src/main/java";
+		}
+		return relativizeProjectPath(projectRoot, sourceRoot).orElse(sourceRoot.getFileName().toString());
+	}
+
+	private Optional<String> relativizeProjectPath(Path projectRoot, Optional<Path> targetPath) {
+		return targetPath.flatMap(path -> relativizeProjectPath(projectRoot, path));
+	}
+
+	private Optional<String> relativizeProjectPath(Path projectRoot, Path targetPath) {
+		try {
+			return Optional.of(projectRoot.toAbsolutePath().normalize().relativize(targetPath.toAbsolutePath().normalize()).toString());
+		} catch (IllegalArgumentException exception) {
+			return Optional.empty();
+		}
+	}
+
+	private boolean projectMetadataContains(Path projectRoot, String... tokens) {
+		for (String metadataFile : PROJECT_METADATA_FILES) {
+			Path filePath = projectRoot.resolve(metadataFile);
+			if (!Files.exists(filePath)) {
+				continue;
+			}
+			try {
+				String content = Files.readString(filePath).toLowerCase(Locale.ROOT);
+				for (String token : tokens) {
+					if (content.contains(token.toLowerCase(Locale.ROOT))) {
+						return true;
+					}
+				}
+			} catch (IOException exception) {
+				// Ignore unreadable metadata files and continue with the remaining evidence sources.
+			}
+		}
+		return false;
 	}
 
 	private record MappingAnnotation(String method, String path) {
@@ -496,10 +731,14 @@ public class SpringApiCatalogService {
 		String controller,
 		String packageName,
 		String basePath,
+		String sourceFile,
 		List<ApiCatalogItemResponse> endpoints
 	) {
 	}
 
 	private record ClassMetadata(String name, String packageName, String layerType) {
+	}
+
+	private record HandlerMetadata(String name, int lineNumber) {
 	}
 }
