@@ -10,6 +10,7 @@ import type {
   ExternalRequestEntry,
   ExternalRequestResponse,
   HttpMethod,
+  ProjectAnalysisStatus,
   ProductPayload,
   ProjectDomain,
   ProjectStructure,
@@ -66,6 +67,73 @@ type SelectedFolderInfo = {
   name: string
   fileCount: number
   sampleFiles: string[]
+}
+
+type ProjectStatusContent = {
+  headerSummary: string
+  nextStepTitle: string
+  nextStepDetail: string
+  emptyDomainMessage: string
+  emptyEndpointMessage: string
+}
+
+type DomainDisplayMode = {
+  label: string
+  detail: string
+  tone: 'runtime' | 'integration'
+} | null
+
+const EMPTY_DOMAIN: ProjectDomain = {
+  id: 'empty',
+  name: 'No domain detected',
+  description: 'Static analysis completed without a usable API domain.',
+  responsibilities: [],
+  infrastructure: [],
+  infrastructureDetails: [],
+  controllers: [],
+  layers: [],
+  endpoints: [],
+  packageRoots: [],
+}
+
+const EMPTY_API_DEFINITION: ApiDefinition = {
+  id: 'empty-api',
+  method: 'GET',
+  label: 'No API detected',
+  pathTemplate: '/',
+  description: 'Analyze a Spring Boot project with REST controllers to populate this view.',
+  requestType: 'NONE',
+  requiresProductId: false,
+  controller: 'Unavailable',
+  handler: 'unavailable',
+  domainId: EMPTY_DOMAIN.id,
+  domainName: EMPTY_DOMAIN.name,
+  source: 'analyzed',
+  buildPath: () => '/',
+}
+
+const PROJECT_STATUS_CONTENT: Record<ProjectAnalysisStatus, ProjectStatusContent> = {
+  SUCCESS: {
+    headerSummary: 'Analysis completed. Review the detected map here, then move to Request to inspect one API.',
+    nextStepTitle: 'Review detected APIs, then move to Request.',
+    nextStepDetail: 'Pick a detected domain or endpoint, confirm the estimated flow, and continue in Request when you are ready to execute one API.',
+    emptyDomainMessage: 'Analysis completed, but no grouped domain is available to show in this panel.',
+    emptyEndpointMessage: 'Analysis completed, but no endpoint evidence is available for the selected domain.',
+  },
+  EMPTY: {
+    headerSummary: 'Project files were read successfully, but no REST API mappings were detected.',
+    nextStepTitle: 'Check controller annotations, package layout, and naming conventions.',
+    nextStepDetail: 'Verify that the project exposes `@RestController` endpoints and uses explicit Spring role names such as Controller, Service or UseCase, and Repository or Store.',
+    emptyDomainMessage: 'The project was read successfully, but StackFlow did not find any REST API domain to map.',
+    emptyEndpointMessage: 'The project was read successfully, but StackFlow did not find any REST endpoint evidence to list here.',
+  },
+  FAILED: {
+    headerSummary: 'Analysis could not read the requested Spring source path.',
+    nextStepTitle: 'Verify the project root and that `src/main/java` or `backend/src/main/java` exists.',
+    nextStepDetail: 'Fix the project path first, then run analysis again so StackFlow can inspect controllers, mappings, and supporting layers.',
+    emptyDomainMessage: 'Analysis failed before StackFlow could build any project domain evidence.',
+    emptyEndpointMessage: 'Analysis failed before StackFlow could collect any endpoint evidence.',
+  },
 }
 
 const VIEW_MODES: Array<{
@@ -155,17 +223,58 @@ const FALLBACK_API_CATALOG: ApiDefinition[] = [
     source: 'fallback',
     buildPath: (productId) => `/api/products/${productId}/cache-refresh`,
   },
+  {
+    id: 'payment-list',
+    method: 'GET',
+    label: 'Payment list',
+    pathTemplate: '/api/payments',
+    description: 'UseCase -> Gateway -> Client 경계를 따라 외부 결제 조회 흐름을 보여주는 샘플 API입니다.',
+    requestType: 'QUERY_LIST',
+    requiresProductId: false,
+    controller: 'PaymentController',
+    handler: 'listPayments',
+    domainId: 'payment',
+    domainName: 'Payment',
+    source: 'fallback',
+    buildPath: () => '/api/payments',
+  },
+  {
+    id: 'payment-quote',
+    method: 'POST',
+    label: 'Create payment quote',
+    pathTemplate: '/api/payments/quote',
+    description: '외부 결제 연동 경계가 Gateway와 Client로 어떻게 보이는지 보여주는 샘플 API입니다.',
+    requestType: 'WRITE',
+    requiresProductId: false,
+    controller: 'PaymentController',
+    handler: 'createPaymentQuote',
+    domainId: 'payment',
+    domainName: 'Payment',
+    source: 'fallback',
+    buildPath: () => '/api/payments/quote',
+  },
 ]
 
 const FALLBACK_PROJECT_STRUCTURE: ProjectStructure = {
   projectName: 'StackFlow sample project',
   framework: 'Spring Boot',
+  frameworkEvidence: 'Bundled StackFlow sample project metadata.',
+  analysisStatus: 'SUCCESS',
+  sourceRoot: 'backend/src/main/java',
+  analysisMessage: 'Showing the bundled StackFlow sample project for exploration.',
   infrastructure: ['Redis', 'MySQL'],
+  infrastructureDetails: [
+    { name: 'Redis', detectedBy: 'sample', evidence: 'ProductCacheService and cache-refresh endpoints are part of the sample app.' },
+    { name: 'MySQL', detectedBy: 'sample', evidence: 'ProductRepositoryService simulates the persistence layer in the sample app.' },
+  ],
   layers: [
-    { name: 'Controller', type: 'CONTROLLER', classes: ['ProductController'] },
-    { name: 'Service', type: 'SERVICE', classes: ['ProductService'] },
-    { name: 'Cache', type: 'CACHE', classes: ['ProductCacheService'] },
-    { name: 'Repository', type: 'REPOSITORY', classes: ['ProductRepositoryService'] },
+    { name: 'Controller', type: 'CONTROLLER', classes: ['ProductController'], evidence: 'Detected sample controller class ProductController.' },
+    { name: 'Service', type: 'SERVICE', classes: ['ProductService'], evidence: 'Detected sample service class ProductService.' },
+    { name: 'Cache', type: 'CACHE', classes: ['ProductCacheService'], evidence: 'Detected sample cache class ProductCacheService.' },
+    { name: 'Repository', type: 'REPOSITORY', classes: ['ProductRepositoryService'], evidence: 'Detected sample repository class ProductRepositoryService.' },
+    { name: 'UseCase', type: 'USECASE', classes: ['PaymentUseCase'], evidence: 'Detected sample use-case class PaymentUseCase.' },
+    { name: 'Gateway', type: 'GATEWAY', classes: ['PaymentGateway'], evidence: 'Detected sample gateway class PaymentGateway.' },
+    { name: 'Client', type: 'CLIENT', classes: ['PaymentClient'], evidence: 'Detected sample client class PaymentClient.' },
   ],
   domains: [
     {
@@ -174,12 +283,16 @@ const FALLBACK_PROJECT_STRUCTURE: ProjectStructure = {
       description: '상품 조회 요청이 cache, repository, database를 어떻게 통과하는지 확인합니다.',
       responsibilities: ['QUERY_DETAIL', 'QUERY_LIST', 'QUERY_STOCK', 'CACHE_WRITE'],
       infrastructure: ['Redis', 'MySQL'],
-      controllers: [{ name: 'ProductController', packageName: 'com.stackflow.backend.controller', basePath: '/api', endpointCount: 4 }],
+      infrastructureDetails: [
+        { name: 'Redis', detectedBy: 'sample', evidence: 'Cache read and cache refresh flows are part of the sample product domain.' },
+        { name: 'MySQL', detectedBy: 'sample', evidence: 'Repository and stock lookup flows represent the sample data path.' },
+      ],
+      controllers: [{ name: 'ProductController', packageName: 'com.stackflow.backend.controller', basePath: '/api', endpointCount: 4, sourceFile: 'com/stackflow/backend/controller/ProductController.java' }],
       layers: [
-        { name: 'Controller', type: 'CONTROLLER', classes: ['ProductController'] },
-        { name: 'Service', type: 'SERVICE', classes: ['ProductService'] },
-        { name: 'Cache', type: 'CACHE', classes: ['ProductCacheService'] },
-        { name: 'Repository', type: 'REPOSITORY', classes: ['ProductRepositoryService'] },
+        { name: 'Controller', type: 'CONTROLLER', classes: ['ProductController'], evidence: 'Detected sample controller class ProductController.' },
+        { name: 'Service', type: 'SERVICE', classes: ['ProductService'], evidence: 'Detected sample service class ProductService.' },
+        { name: 'Cache', type: 'CACHE', classes: ['ProductCacheService'], evidence: 'Detected sample cache class ProductCacheService.' },
+        { name: 'Repository', type: 'REPOSITORY', classes: ['ProductRepositoryService'], evidence: 'Detected sample repository class ProductRepositoryService.' },
       ],
       endpoints: FALLBACK_API_CATALOG.map((api) => ({
         id: api.id,
@@ -190,7 +303,42 @@ const FALLBACK_PROJECT_STRUCTURE: ProjectStructure = {
         requestType: api.requestType,
         requiresPathVariable: api.requiresProductId,
         pathVariables: api.requiresProductId ? ['productId'] : [],
+        sourceFile: 'com/stackflow/backend/controller/ProductController.java',
+        sourceLine: 0,
       })),
+      packageRoots: ['com.stackflow.backend.controller', 'com.stackflow.backend.service'],
+    },
+    {
+      id: 'payment',
+      name: 'Payment',
+      description: '결제 조회와 quote 생성이 use case, gateway, client 경계를 어떻게 통과하는지 확인합니다.',
+      responsibilities: ['QUERY_LIST', 'WRITE'],
+      infrastructure: ['In-memory'],
+      infrastructureDetails: [
+        { name: 'In-memory', detectedBy: 'sample', evidence: 'Payment sample responses are returned from the in-app client without database persistence.' },
+      ],
+      controllers: [{ name: 'PaymentController', packageName: 'com.stackflow.backend.controller', basePath: '/api/payments', endpointCount: 2, sourceFile: 'com/stackflow/backend/controller/PaymentController.java' }],
+      layers: [
+        { name: 'Controller', type: 'CONTROLLER', classes: ['PaymentController'], evidence: 'Detected sample controller class PaymentController.' },
+        { name: 'UseCase', type: 'USECASE', classes: ['PaymentUseCase'], evidence: 'Detected sample use-case class PaymentUseCase.' },
+        { name: 'Gateway', type: 'GATEWAY', classes: ['PaymentGateway'], evidence: 'Detected sample gateway class PaymentGateway.' },
+        { name: 'Client', type: 'CLIENT', classes: ['PaymentClient'], evidence: 'Detected sample client class PaymentClient.' },
+      ],
+      endpoints: FALLBACK_API_CATALOG
+        .filter((api) => api.domainId === 'payment')
+        .map((api) => ({
+          id: api.id,
+          method: api.method,
+          path: api.pathTemplate,
+          controller: api.controller,
+          handler: api.handler,
+          requestType: api.requestType,
+          requiresPathVariable: api.requiresProductId,
+          pathVariables: [],
+          sourceFile: 'com/stackflow/backend/controller/PaymentController.java',
+          sourceLine: 0,
+        })),
+      packageRoots: ['com.stackflow.backend.controller', 'com.stackflow.backend.service'],
     },
   ],
 }
@@ -236,15 +384,21 @@ function App() {
   const selectedNode = getNodeDetail(graph.states, selectedNodeId ?? graph.states.find((state) => state.active)?.id ?? null)
   const activeNodeCount = graph.states.filter((state) => state.active).length
   const latestEvent = traceDetail?.events.at(-1) ?? null
-  const selectedDomain = projectStructure.domains.find((domain) => domain.id === selectedDomainId) ?? projectStructure.domains[0]
+  const selectedDomain = projectStructure.domains.find((domain) => domain.id === selectedDomainId) ?? projectStructure.domains[0] ?? EMPTY_DOMAIN
+  const hasDetectedDomains = projectStructure.domains.length > 0
+  const hasDetectedApis = apiCatalog.length > 0
   const domainApis = apiCatalog.filter((api) => api.domainId === selectedDomain.id)
   const visibleApis = domainApis.length > 0 ? domainApis : apiCatalog
-  const selectedApi = visibleApis.find((api) => api.id === selectedApiId) ?? visibleApis[0] ?? FALLBACK_API_CATALOG[0]
+  const selectedApi = visibleApis.find((api) => api.id === selectedApiId) ?? visibleApis[0] ?? EMPTY_API_DEFINITION
   const projectFacts = buildProjectFacts(projectStructure)
   const activeRoute = graph.states.filter((state) => state.active)
-  const estimatedFlow = buildEstimatedFlow(selectedApi, selectedDomain)
-  const runtimeSupported = analysisTarget === 'sample' && isStackFlowRuntimeApi(selectedApi)
-  const externalRunnable = analysisTarget === 'external'
+  const estimatedFlow = hasDetectedApis ? buildEstimatedFlow(selectedApi, selectedDomain) : []
+  const runtimeSupported = hasDetectedApis && analysisTarget === 'sample' && isStackFlowRuntimeApi(selectedApi)
+  const externalRunnable = hasDetectedApis && analysisTarget === 'external'
+  const analyzeOnly = hasDetectedApis && !runtimeSupported && !externalRunnable
+  const projectStatusContent = PROJECT_STATUS_CONTENT[projectStructure.analysisStatus]
+  const hasIntegrationBoundary = selectedDomain.layers.some((layer) => layer.name === 'Gateway' || layer.name === 'Client')
+  const selectedDomainDisplayMode = getDomainDisplayMode(selectedDomain)
   const runtimeModeLabel = runtimeSupported ? 'Run trace' : externalRunnable ? 'Run target' : 'Analyze only'
   const currentResultStatus = externalResponse?.resultStatus ?? traceDetail?.resultStatus ?? 'IDLE'
   const externalPath = selectedApi.buildPath(productId)
@@ -329,11 +483,7 @@ function App() {
 
       const structure = (await response.json()) as ProjectStructure
       const analyzedCatalog = flattenProjectApis(structure)
-      if (analyzedCatalog.length === 0) {
-        throw new Error('No API mapping detected.')
-      }
-
-      applyProjectStructure(structure, analyzedCatalog, 'Loaded the default StackFlow backend project.', 'sample')
+      applyProjectStructure(structure, analyzedCatalog, structure.analysisMessage, 'sample')
     } catch {
       startTransition(() => {
         setProjectStructure(FALLBACK_PROJECT_STRUCTURE)
@@ -368,17 +518,8 @@ function App() {
 
       const structure = (await response.json()) as ProjectStructure
       const analyzedCatalog = flattenProjectApis(structure)
-      if (analyzedCatalog.length === 0) {
-        throw new Error('No Spring API endpoints were detected at that path.')
-      }
-
-      applyProjectStructure(
-        structure,
-        analyzedCatalog,
-        `Loaded ${structure.projectName}: ${structure.domains.length} domain, ${analyzedCatalog.length} APIs.`,
-        nextAnalysisTarget,
-      )
-      setAnalysisState('idle')
+      applyProjectStructure(structure, analyzedCatalog, structure.analysisMessage, nextAnalysisTarget)
+      setAnalysisState(structure.analysisStatus === 'FAILED' ? 'error' : 'idle')
       setActiveView('project')
     } catch (error) {
       setAnalysisState('error')
@@ -402,8 +543,8 @@ function App() {
       setCatalogSource('analyzed')
       setAnalysisTarget(target)
       setAnalysisMessage(message)
-      setSelectedDomainId((current) => structure.domains.some((domain) => domain.id === current) ? current : structure.domains[0].id)
-      setSelectedApiId((current) => analyzedCatalog.some((api) => api.id === current) ? current : analyzedCatalog[0].id)
+      setSelectedDomainId((current) => structure.domains.some((domain) => domain.id === current) ? current : (structure.domains[0]?.id ?? EMPTY_DOMAIN.id))
+      setSelectedApiId((current) => analyzedCatalog.some((api) => api.id === current) ? current : (analyzedCatalog[0]?.id ?? EMPTY_API_DEFINITION.id))
       if (target === 'external') {
         setTraceDetail(null)
         setSelectedNodeId(null)
@@ -422,6 +563,9 @@ function App() {
   }
 
   function selectDomain(domain: ProjectDomain) {
+    if (domain.id === EMPTY_DOMAIN.id) {
+      return
+    }
     setSelectedDomainId(domain.id)
     setActiveView('project')
     const nextApi = apiCatalog.find((api) => api.domainId === domain.id)
@@ -476,6 +620,22 @@ function App() {
   }
 
   async function runRequest() {
+    if (!hasDetectedApis) {
+      setActiveView('project')
+      setRequestState('error')
+      setStreamStatus('idle')
+      setRequestMessage('No detected REST API is available to run from the current analysis result.')
+      return
+    }
+
+    if (analyzeOnly) {
+      setActiveView('api')
+      setRequestState('error')
+      setStreamStatus('idle')
+      setRequestMessage('This sample API is analysis-only. Switch to Product endpoints for runtime trace, or use an external target to execute requests.')
+      return
+    }
+
     if (!runtimeSupported) {
       await runExternalRequest()
       return
@@ -872,8 +1032,8 @@ function App() {
           <button
             key={mode.id}
             type="button"
-            className={`view-switcher__item${activeView === mode.id ? ' is-active' : ''}${analysisTarget === 'external' && mode.id === 'runtime' ? ' is-disabled' : ''}`}
-            disabled={analysisTarget === 'external' && mode.id === 'runtime'}
+            className={`view-switcher__item${activeView === mode.id ? ' is-active' : ''}${((analysisTarget === 'external' && mode.id === 'runtime') || (!hasDetectedApis && mode.id !== 'project')) ? ' is-disabled' : ''}`}
+            disabled={(analysisTarget === 'external' && mode.id === 'runtime') || (!hasDetectedApis && mode.id !== 'project')}
             onClick={() => setActiveView(mode.id)}
           >
             <span>{mode.label}</span>
@@ -881,6 +1041,8 @@ function App() {
             <small>
               {analysisTarget === 'external' && mode.id === 'runtime'
                 ? 'Instrumentation is required before external internals can be traced.'
+                : !hasDetectedApis && mode.id !== 'project'
+                  ? 'Analyze a project with detected REST APIs before this view becomes available.'
                 : mode.description}
             </small>
           </button>
@@ -958,6 +1120,8 @@ function App() {
                   {analysisState === 'loading' ? 'Analyzing project...' : 'Analyze project'}
                 </button>
                 <p className={`analysis-message analysis-message--${analysisState}`}>{analysisMessage}</p>
+                <p className="analysis-submessage">{projectStatusContent.headerSummary}</p>
+                <p className="analysis-submessage analysis-submessage--detail">{projectStructure.analysisMessage}</p>
               </div>
 
               <div className="project-strip" aria-label="Detected project summary">
@@ -971,21 +1135,34 @@ function App() {
 
               <div className="domain-compact">
                 <div className="domain-list domain-list--compact">
-                  {projectStructure.domains.map((domain) => (
-                    <button
-                      key={domain.id}
-                      type="button"
-                      className={`domain-item${selectedDomainId === domain.id ? ' is-selected' : ''}`}
-                      onClick={() => selectDomain(domain)}
-                    >
-                      <div className="domain-item__title">
-                        <strong>{domain.name}</strong>
-                        <small>{domain.endpoints.length} APIs</small>
-                      </div>
-                      <span>{domain.description}</span>
-                      <em>{domain.controllers.map((controller) => controller.name).join(', ')}</em>
-                    </button>
-                  ))}
+                  {hasDetectedDomains ? (
+                    projectStructure.domains.map((domain) => {
+                      const displayMode = getDomainDisplayMode(domain)
+
+                      return (
+                        <button
+                          key={domain.id}
+                          type="button"
+                          className={`domain-item${selectedDomainId === domain.id ? ' is-selected' : ''}`}
+                          onClick={() => selectDomain(domain)}
+                        >
+                          <div className="domain-item__title">
+                            <strong>{domain.name}</strong>
+                            <small>{domain.endpoints.length} APIs</small>
+                          </div>
+                          {displayMode ? (
+                            <span className={`domain-mode-badge domain-mode-badge--${displayMode.tone}`}>
+                              {displayMode.label}
+                            </span>
+                          ) : null}
+                          <span>{domain.description}</span>
+                          <em>{domain.controllers.map((controller) => controller.name).join(', ')}</em>
+                        </button>
+                      )
+                    })
+                  ) : (
+                    <p className="empty-copy">No API domain was detected in this analysis result.</p>
+                  )}
                 </div>
                 <div className="layer-stack">
                   {selectedDomain.layers.map((layer) => (
@@ -1016,26 +1193,30 @@ function App() {
                 <span>{visibleApis.length} / {apiCatalog.length} endpoints</span>
               </div>
               <div className="api-list api-list--catalog">
-                {visibleApis.map((api) => (
-                  <button
-                    key={api.id}
-                    type="button"
-                    className={`api-item${selectedApi.id === api.id ? ' is-selected' : ''}`}
-                    onClick={() => {
-                      setSelectedApiId(api.id)
-                      setExternalResponse(null)
-                      setActiveView('api')
-                    }}
-                  >
-                    <span className={`method-badge method-badge--${api.method.toLowerCase()}`}>{api.method}</span>
-                    <div>
-                      <strong>{api.label}</strong>
-                      <span>{api.pathTemplate}</span>
-                      <p>{api.requestType} · {api.description}</p>
-                      <span className="api-item__handler">{api.controller}.{api.handler}</span>
-                    </div>
-                  </button>
-                ))}
+                {hasDetectedApis ? (
+                  visibleApis.map((api) => (
+                    <button
+                      key={api.id}
+                      type="button"
+                      className={`api-item${selectedApi.id === api.id ? ' is-selected' : ''}`}
+                      onClick={() => {
+                        setSelectedApiId(api.id)
+                        setExternalResponse(null)
+                        setActiveView('api')
+                      }}
+                    >
+                      <span className={`method-badge method-badge--${api.method.toLowerCase()}`}>{api.method}</span>
+                      <div>
+                        <strong>{api.label}</strong>
+                        <span>{api.pathTemplate}</span>
+                        <p>{api.requestType} · {api.description}</p>
+                        <span className="api-item__handler">{api.controller}.{api.handler}</span>
+                      </div>
+                    </button>
+                  ))
+                ) : (
+                  <p className="empty-copy">No detected REST API is available for request or trace views.</p>
+                )}
               </div>
             </section>
 
@@ -1204,8 +1385,14 @@ function App() {
                     </select>
                   </label>
                 ) : null}
-                <button className="run-button" type="button" onClick={() => void runRequest()} disabled={requestState === 'loading'}>
-                  {requestState === 'loading' ? (runtimeSupported ? 'Streaming events...' : 'Calling target...') : runtimeSupported ? 'Run runtime trace' : 'Run external request'}
+                <button className="run-button" type="button" onClick={() => void runRequest()} disabled={requestState === 'loading' || !hasDetectedApis || analyzeOnly}>
+                  {requestState === 'loading'
+                    ? (runtimeSupported ? 'Streaming events...' : 'Calling target...')
+                    : runtimeSupported
+                      ? 'Run runtime trace'
+                      : externalRunnable
+                        ? 'Run external request'
+                        : 'Analyze only'}
                 </button>
                 <p className="request-message">{requestMessage}</p>
               </div>
@@ -1252,7 +1439,9 @@ function App() {
                   <h2>{projectStructure.projectName}</h2>
                   <p>Start here. Keep this screen for structure only, then switch to Request when you want to run an API.</p>
                 </div>
-                <span className="pill pill--inline pill--loading">STATIC ANALYSIS</span>
+                <span className={`pill pill--inline ${projectStructure.analysisStatus === 'SUCCESS' ? 'pill--success' : 'pill--warning'}`}>
+                  {projectStructure.analysisStatus}
+                </span>
               </div>
 
               <div className="map-board" aria-label="Detected project map">
@@ -1266,19 +1455,39 @@ function App() {
                       </span>
                     ))}
                   </div>
+                  {projectStructure.analysisStatus !== 'FAILED' ? (
+                    <article className="analysis-guide-card">
+                      <strong>Best read with explicit Spring roles</strong>
+                      <p>Use names like Controller, Service or UseCase, Cache, Repository or Store, Gateway, and Client so the static map stays explainable.</p>
+                      <small>Reference: docs/stackflow-analysis-convention.md</small>
+                    </article>
+                  ) : null}
                   <div className="map-domain-list">
-                    {projectStructure.domains.map((domain) => (
-                      <button
-                        key={domain.id}
-                        type="button"
-                        className={`map-domain-card${selectedDomain.id === domain.id ? ' is-selected' : ''}`}
-                        onClick={() => selectDomain(domain)}
-                      >
-                        <strong>{domain.name}</strong>
-                        <span>{domain.endpoints.length} APIs</span>
-                        <small>{domain.description}</small>
-                      </button>
-                    ))}
+                    {hasDetectedDomains ? (
+                      projectStructure.domains.map((domain) => {
+                        const displayMode = getDomainDisplayMode(domain)
+
+                        return (
+                          <button
+                            key={domain.id}
+                            type="button"
+                            className={`map-domain-card${selectedDomain.id === domain.id ? ' is-selected' : ''}`}
+                            onClick={() => selectDomain(domain)}
+                          >
+                            <strong>{domain.name}</strong>
+                            {displayMode ? (
+                              <span className={`domain-mode-badge domain-mode-badge--${displayMode.tone}`}>
+                                {displayMode.label}
+                              </span>
+                            ) : null}
+                            <span>{domain.endpoints.length} APIs</span>
+                            <small>{domain.description}</small>
+                          </button>
+                        )
+                      })
+                    ) : (
+                      <p className="empty-copy">{projectStatusContent.emptyDomainMessage}</p>
+                    )}
                   </div>
                 </section>
 
@@ -1286,32 +1495,50 @@ function App() {
                   <div className="map-detail-head">
                     <div>
                       <span className="section-label">Selected domain</span>
-                      <strong>{selectedDomain.name}</strong>
-                      <p>{selectedDomain.description}</p>
+                      <strong>{hasDetectedDomains ? selectedDomain.name : 'No detected domain'}</strong>
+                      <p>{hasDetectedDomains ? selectedDomain.description : projectStatusContent.headerSummary}</p>
+                      {hasDetectedDomains && selectedDomainDisplayMode ? (
+                        <small className="map-detail-mode">{selectedDomainDisplayMode.detail}</small>
+                      ) : null}
                     </div>
-                    <span className="pill pill--inline pill--success">{selectedDomain.endpoints.length} APIs</span>
+                    <span className={`pill pill--inline ${projectStructure.analysisStatus === 'SUCCESS' ? 'pill--success' : 'pill--warning'}`}>{selectedDomain.endpoints.length} APIs</span>
                   </div>
                   <div className="map-node-grid">
                     <article className="map-node-card">
                       <strong>Controllers</strong>
                       <span>{selectedDomain.controllers.map((controller) => controller.name).join(', ') || 'Not detected'}</span>
                       <small>{selectedDomain.controllers.map((controller) => `${controller.basePath || '/'} · ${controller.endpointCount} endpoints`).join(' / ')}</small>
+                      <small>{selectedDomain.controllers.map((controller) => controller.sourceFile).join(' / ')}</small>
                     </article>
                     <article className="map-node-card">
                       <strong>Layers</strong>
                       <span>{selectedDomain.layers.map((layer) => layer.name).join(' -> ') || 'Not detected'}</span>
                       <small>{selectedDomain.layers.flatMap((layer) => layer.classes).join(', ')}</small>
+                      <small>{selectedDomain.layers.map((layer) => layer.evidence).join(' / ')}</small>
                     </article>
                     <article className="map-node-card map-node-card--infra">
                       <strong>Infrastructure</strong>
                       <span>{selectedDomain.infrastructure.join(' / ') || 'Not detected'}</span>
-                      <small>Inferred from class names, mappings, and dependencies.</small>
+                      <small>{selectedDomain.infrastructureDetails.map((item) => `${item.name}: ${item.evidence}`).join(' / ') || 'No infrastructure evidence recorded.'}</small>
                     </article>
                     <article className="map-node-card">
                       <strong>Responsibilities</strong>
                       <span>{selectedDomain.responsibilities.join(' / ') || 'Not detected'}</span>
-                      <small>Use Request view to inspect one selected endpoint.</small>
+                      <small>{selectedDomain.packageRoots.join(' / ') || 'Use Request view to inspect one selected endpoint.'}</small>
                     </article>
+                  </div>
+                  <div className="map-endpoint-list">
+                    {selectedDomain.endpoints.length > 0 ? (
+                      selectedDomain.endpoints.map((endpoint) => (
+                        <article key={endpoint.id} className="map-endpoint-card">
+                          <strong>{endpoint.method} {endpoint.path}</strong>
+                          <span>{endpoint.controller}.{endpoint.handler}</span>
+                          <small>{endpoint.sourceFile}:{endpoint.sourceLine || '?'}</small>
+                        </article>
+                      ))
+                    ) : (
+                      <p className="empty-copy">{projectStatusContent.emptyEndpointMessage}</p>
+                    )}
                   </div>
                 </section>
               </div>
@@ -1346,32 +1573,44 @@ function App() {
                 </span>
                 <span>
                   <strong>Evidence level</strong>
-                  Estimated from code shape
+                  {hasIntegrationBoundary ? 'Estimated with integration boundary' : 'Estimated from code shape'}
                 </span>
               </div>
 
               <div className="estimated-flow" aria-label="Estimated API flow">
-                {estimatedFlow.map((step, index) => (
-                  <article key={step.id} className="estimated-step">
-                    <span>{String(index + 1).padStart(2, '0')}</span>
-                    <div>
-                      <em>{step.layer}</em>
-                      <strong>{step.label}</strong>
-                    </div>
-                    <small>
-                      {step.detail}
-                      <b>{step.source}</b>
-                    </small>
-                  </article>
-                ))}
+                {estimatedFlow.length > 0 ? (
+                  estimatedFlow.map((step, index) => (
+                    <article key={step.id} className="estimated-step">
+                      <span>{String(index + 1).padStart(2, '0')}</span>
+                      <div>
+                        <em>{step.layer}</em>
+                        <strong>{step.label}</strong>
+                      </div>
+                      <small>
+                        {step.detail}
+                        <b>{step.source}</b>
+                      </small>
+                    </article>
+                  ))
+                ) : (
+                  <p className="empty-copy">No estimated request path is available because the analysis did not detect any REST API.</p>
+                )}
               </div>
 
               <div className="analysis-boundary">
-                <strong>{runtimeSupported ? 'Send the request here, then inspect Trace when needed.' : 'External internals are not traced yet.'}</strong>
+                <strong>
+                  {runtimeSupported
+                    ? 'Send the request here, then inspect Trace when needed.'
+                    : hasIntegrationBoundary
+                      ? 'This flow highlights static integration boundaries, not live provider calls.'
+                      : 'External internals are not traced yet.'}
+                </strong>
                 <p>
                   {runtimeSupported
                     ? 'The Request view keeps response checking separate from graph inspection.'
-                    : 'External project internals require a future Spring Boot starter or agent before StackFlow can show actual node events.'}
+                    : hasIntegrationBoundary
+                      ? 'Gateway and Client layers show where StackFlow expects an outbound payment or provider boundary, based on naming and package shape.'
+                      : 'External project internals require a future Spring Boot starter or agent before StackFlow can show actual node events.'}
                 </p>
               </div>
             </div>
@@ -1484,16 +1723,17 @@ function App() {
               <div className="panel-header">
                 <div>
                   <span className="section-label">Project evidence</span>
-                  <h2>{selectedDomain.name}</h2>
-                  <p>Static structure only. No request has been executed from this panel.</p>
+                  <h2>{hasDetectedDomains ? selectedDomain.name : projectStructure.projectName}</h2>
+                  <p>{projectStatusContent.headerSummary}</p>
                 </div>
-                <span className="pill pill--inline pill--loading">ESTIMATED</span>
+                <span className={`pill pill--inline ${projectStructure.analysisStatus === 'SUCCESS' ? 'pill--success' : 'pill--warning'}`}>{projectStructure.analysisStatus}</span>
               </div>
               <div className="insight-list">
                 <article>
                   <span>Project</span>
                   <strong>{projectStructure.projectName}</strong>
                   <p>{projectStructure.framework}</p>
+                  <p>{projectStructure.frameworkEvidence}</p>
                 </article>
                 <article>
                   <span>Domain APIs</span>
@@ -1503,7 +1743,17 @@ function App() {
                 <article>
                   <span>Detected infra</span>
                   <strong>{selectedDomain.infrastructure.join(' / ') || 'None'}</strong>
-                  <p>Based on class names and endpoint paths.</p>
+                  <p>{selectedDomain.infrastructureDetails.map((item) => `${item.detectedBy}: ${item.evidence}`).join(' / ') || 'Based on class names and endpoint paths.'}</p>
+                </article>
+                <article>
+                  <span>Analysis source</span>
+                  <strong>{projectStructure.analysisStatus}</strong>
+                  <p>{projectStructure.sourceRoot}</p>
+                </article>
+                <article className="insight-list__next-step">
+                  <span>Next step</span>
+                  <strong>{projectStatusContent.nextStepTitle}</strong>
+                  <p>{projectStatusContent.nextStepDetail}</p>
                 </article>
               </div>
             </div>
@@ -1530,12 +1780,12 @@ function App() {
                 <article>
                   <span>Estimated path</span>
                   <strong>{estimatedFlow.map((step) => step.label).join(' -> ')}</strong>
-                  <p>Class names come from detected domain layers where available.</p>
+                  <p>{hasIntegrationBoundary ? 'UseCase, Gateway, and Client are shown separately so outbound integration boundaries stay visible in the estimated path.' : 'Class names come from detected domain layers where available.'}</p>
                 </article>
                 <article>
                   <span>Runtime boundary</span>
-                  <strong>{runtimeSupported ? 'Actual trace available' : 'Instrumentation required'}</strong>
-                  <p>{runtimeSupported ? 'Switch to Runtime Trace and run the sample API.' : 'External app internals cannot be traced yet.'}</p>
+                  <strong>{runtimeSupported ? 'Actual trace available' : hasIntegrationBoundary ? 'Static integration view only' : 'Instrumentation required'}</strong>
+                  <p>{runtimeSupported ? 'Switch to Runtime Trace and run the sample API.' : hasIntegrationBoundary ? 'This sample endpoint is intended to explain integration layering, not to emit live trace events.' : 'External app internals cannot be traced yet.'}</p>
                 </article>
               </div>
               {externalRunnable ? (
@@ -1812,16 +2062,57 @@ function buildProjectFacts(structure: ProjectStructure) {
   const endpointCount = structure.domains.reduce((sum, domain) => sum + domain.endpoints.length, 0)
   const layerNames = structure.layers
     .map((layer) => layer.name)
-    .filter((name) => ['Controller', 'Service', 'Repository', 'Cache', 'Store'].includes(name))
-    .slice(0, 4)
+    .filter((name) => ['Controller', 'Service', 'UseCase', 'Repository', 'Store', 'Cache', 'Gateway', 'Client'].includes(name))
+    .slice(0, 5)
 
   return [
+    { label: 'Status', value: structure.analysisStatus.toLowerCase() },
     { label: 'Backend', value: structure.framework },
     { label: 'Domains', value: `${structure.domains.length} domains / ${endpointCount} APIs` },
     { label: 'Controllers', value: `${controllerCount} detected` },
+    { label: 'Source root', value: structure.sourceRoot || 'not detected' },
     { label: 'Infra path', value: structure.infrastructure.join(' / ') || 'not detected' },
     { label: 'Layers', value: layerNames.join(' / ') || 'not detected' },
   ]
+}
+
+function getDomainDisplayMode(domain: ProjectDomain): DomainDisplayMode {
+  const hasIntegrationBoundary = domain.layers.some((layer) => layer.name === 'Gateway' || layer.name === 'Client')
+  if (hasIntegrationBoundary) {
+    return {
+      label: 'Integration-focused',
+      detail: 'This map is highlighting outbound integration boundaries from static analysis.',
+      tone: 'integration',
+    }
+  }
+
+  const runtimeReadySample = domain.endpoints.some((endpoint) =>
+    isStackFlowRuntimeApi({
+      id: endpoint.id,
+      method: endpoint.method,
+      label: endpoint.handler,
+      pathTemplate: endpoint.path,
+      description: '',
+      requestType: endpoint.requestType,
+      requiresProductId: endpoint.requiresPathVariable,
+      controller: endpoint.controller,
+      handler: endpoint.handler,
+      domainId: domain.id,
+      domainName: domain.name,
+      source: 'analyzed',
+      buildPath: (productId) => buildPathFromTemplate(endpoint.path, productId),
+    }),
+  )
+
+  if (runtimeReadySample) {
+    return {
+      label: 'Runtime-ready sample',
+      detail: 'This sample domain can produce a live runtime trace in the Trace view.',
+      tone: 'runtime',
+    }
+  }
+
+  return null
 }
 
 function buildEstimatedFlow(api: ApiDefinition, domain: ProjectDomain): EstimatedFlowStep[] {
@@ -1843,13 +2134,21 @@ function buildEstimatedFlow(api: ApiDefinition, domain: ProjectDomain): Estimate
     },
   ]
 
-  if (layerNames.has('Service')) {
-    const serviceClass = pickLayerClass(domain, 'Service', api)
+  const serviceLikeLayer = layerNames.has('Service')
+    ? 'Service'
+    : layerNames.has('UseCase')
+      ? 'UseCase'
+      : null
+
+  if (serviceLikeLayer) {
+    const serviceClass = pickLayerClass(domain, serviceLikeLayer, api)
     flow.push({
-      id: 'service',
-      layer: 'Service',
-      label: serviceClass ?? 'Service',
-      detail: 'Business rules are likely coordinated here.',
+      id: serviceLikeLayer.toLowerCase(),
+      layer: serviceLikeLayer,
+      label: serviceClass ?? serviceLikeLayer,
+      detail: serviceLikeLayer === 'UseCase'
+        ? 'Request-level business flow is likely coordinated here.'
+        : 'Business rules are likely coordinated here.',
       source: serviceClass ? 'detected class' : 'estimated layer',
     })
   }
@@ -1874,6 +2173,18 @@ function buildEstimatedFlow(api: ApiDefinition, domain: ProjectDomain): Estimate
       label: dataClass ?? layer,
       detail: 'Data access boundary inferred from layer naming.',
       source: dataClass ? 'detected class' : 'estimated layer',
+    })
+  }
+
+  if (layerNames.has('Gateway') || layerNames.has('Client')) {
+    const layer = layerNames.has('Gateway') ? 'Gateway' : 'Client'
+    const integrationClass = pickLayerClass(domain, layer, api)
+    flow.push({
+      id: layer.toLowerCase(),
+      layer,
+      label: integrationClass ?? layer,
+      detail: 'External integration boundary inferred from class naming.',
+      source: integrationClass ? 'detected class' : 'estimated layer',
     })
   }
 

@@ -8,8 +8,10 @@ public record ProjectDomainResponse(
 	String description,
 	List<String> responsibilities,
 	List<String> infrastructure,
+	List<ProjectEvidenceItemResponse> infrastructureDetails,
 	List<ProjectControllerResponse> controllers,
 	List<ProjectLayerResponse> layers,
-	List<ApiCatalogItemResponse> endpoints
+	List<ApiCatalogItemResponse> endpoints,
+	List<String> packageRoots
 ) {
 }

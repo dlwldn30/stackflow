@@ -10,6 +10,8 @@ public record ApiCatalogItemResponse(
 	String handler,
 	String requestType,
 	boolean requiresPathVariable,
-	List<String> pathVariables
+	List<String> pathVariables,
+	String sourceFile,
+	int sourceLine
 ) {
 }

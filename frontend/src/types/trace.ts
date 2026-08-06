@@ -113,6 +113,16 @@ export interface ApiCatalogItem {
   requestType: string
   requiresPathVariable: boolean
   pathVariables: string[]
+  sourceFile: string
+  sourceLine: number
+}
+
+export type ProjectAnalysisStatus = 'SUCCESS' | 'EMPTY' | 'FAILED'
+
+export interface ProjectEvidenceItem {
+  name: string
+  detectedBy: string
+  evidence: string
 }
 
 export interface ProjectController {
@@ -120,12 +130,14 @@ export interface ProjectController {
   packageName: string
   basePath: string
   endpointCount: number
+  sourceFile: string
 }
 
 export interface ProjectLayer {
   name: string
   type: string
   classes: string[]
+  evidence: string
 }
 
 export interface ProjectDomain {
@@ -134,15 +146,22 @@ export interface ProjectDomain {
   description: string
   responsibilities: string[]
   infrastructure: string[]
+  infrastructureDetails: ProjectEvidenceItem[]
   controllers: ProjectController[]
   layers: ProjectLayer[]
   endpoints: ApiCatalogItem[]
+  packageRoots: string[]
 }
 
 export interface ProjectStructure {
   projectName: string
   framework: string
+  frameworkEvidence: string
+  analysisStatus: ProjectAnalysisStatus
+  sourceRoot: string
+  analysisMessage: string
   infrastructure: string[]
+  infrastructureDetails: ProjectEvidenceItem[]
   layers: ProjectLayer[]
   domains: ProjectDomain[]
 }

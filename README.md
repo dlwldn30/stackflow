@@ -48,7 +48,7 @@ frontend/
   Vite React app, Project/Request/Trace UI, React Flow graph
 
 docs/
-  Product direction, implementation plan, and development convention
+  Product direction, implementation plan, development convention, and analysis convention
 ```
 
 ## Run Locally
@@ -202,3 +202,4 @@ Commit: feat: ✨ 외부 API request editor 지원
 
 - [Product direction and implementation plan](docs/product-direction-and-implementation-plan.md)
 - [Development convention](docs/development-convention.md)
+- [StackFlow analysis convention](docs/stackflow-analysis-convention.md)
