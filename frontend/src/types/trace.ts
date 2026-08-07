@@ -1,6 +1,7 @@
 export type EventStatus = 'SUCCESS' | 'WARNING' | 'ERROR' | 'TIMEOUT' | 'SKIPPED'
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH'
+export type ApiMethod = HttpMethod | 'UNSPECIFIED'
 
 export type ComponentType =
   | 'CLIENT'
@@ -106,7 +107,8 @@ export interface ProductPayload {
 
 export interface ApiCatalogItem {
   id: string
-  method: HttpMethod
+  method: ApiMethod
+  methodSpecified: boolean
   path: string
   controller: string
   handler: string

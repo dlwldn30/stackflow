@@ -183,15 +183,24 @@ public class SpringApiCatalogService {
 		String packageName = extractPackageName(source).orElse("");
 		List<ApiCatalogItemResponse> catalog = new ArrayList<>();
 		String sourceFile = relativizeSourcePath(sourceRoot, javaFile);
+		int classDeclarationIndex = findClassDeclarationIndex(lines);
 
 		for (int index = 0; index < lines.size(); index += 1) {
 			String line = lines.get(index).trim();
-			Optional<MappingAnnotation> mapping = parseMappingAnnotation(line);
+			if (index < classDeclarationIndex) {
+				continue;
+			}
+			if (!startsMappingAnnotation(line)) {
+				continue;
+			}
+
+			AnnotationBlock annotationBlock = collectAnnotationBlock(lines, index);
+			Optional<MappingAnnotation> mapping = parseMappingAnnotation(annotationBlock.content());
 			if (mapping.isEmpty()) {
 				continue;
 			}
 
-			Optional<HandlerMetadata> handler = findNextHandlerName(lines, index + 1);
+			Optional<HandlerMetadata> handler = findNextHandlerName(lines, annotationBlock.endIndex() + 1);
 			if (handler.isEmpty()) {
 				continue;
 			}
@@ -201,6 +210,7 @@ public class SpringApiCatalogService {
 			catalog.add(new ApiCatalogItemResponse(
 				buildId(mapping.get().method(), path, controller, handler.get().name()),
 				mapping.get().method(),
+				mapping.get().methodSpecified(),
 				path,
 				controller,
 				handler.get().name(),
@@ -210,6 +220,7 @@ public class SpringApiCatalogService {
 				sourceFile,
 				handler.get().lineNumber()
 			));
+			index = annotationBlock.endIndex();
 		}
 
 		return Optional.of(new ControllerScan(controller, packageName, basePath, sourceFile, List.copyOf(catalog)));
@@ -236,43 +247,70 @@ public class SpringApiCatalogService {
 	}
 
 	private String extractClassBasePath(String source) {
-		int classIndex = source.indexOf("class ");
-		String classHeader = classIndex < 0 ? source : source.substring(0, classIndex);
-		return findLastAnnotationPath(classHeader, "@RequestMapping").orElse("");
+		List<String> lines = source.lines().toList();
+		int classDeclarationIndex = findClassDeclarationIndex(lines);
+		for (int index = classDeclarationIndex - 1; index >= 0; index -= 1) {
+			if (!lines.get(index).trim().startsWith("@RequestMapping")) {
+				continue;
+			}
+			return extractAnnotationPath(collectAnnotationBlock(lines, index).content()).orElse("");
+		}
+		return "";
 	}
 
-	private Optional<MappingAnnotation> parseMappingAnnotation(String line) {
-		if (!line.startsWith("@")) {
-			return Optional.empty();
+	private int findClassDeclarationIndex(List<String> lines) {
+		for (int index = 0; index < lines.size(); index += 1) {
+			if (lines.get(index).contains(" class ")) {
+				return index;
+			}
 		}
-
-		return parseShortcutMapping(line, "@GetMapping", "GET")
-			.or(() -> parseShortcutMapping(line, "@PostMapping", "POST"))
-			.or(() -> parseShortcutMapping(line, "@PutMapping", "PUT"))
-			.or(() -> parseShortcutMapping(line, "@DeleteMapping", "DELETE"))
-			.or(() -> parseShortcutMapping(line, "@PatchMapping", "PATCH"))
-			.or(() -> parseRequestMapping(line));
+		return 0;
 	}
 
-	private Optional<MappingAnnotation> parseShortcutMapping(String line, String annotation, String method) {
-		if (!line.contains(annotation)) {
-			return Optional.empty();
-		}
-
-		return Optional.of(new MappingAnnotation(method, extractAnnotationPath(line).orElse("")));
+	private boolean startsMappingAnnotation(String line) {
+		return line.startsWith("@GetMapping")
+			|| line.startsWith("@PostMapping")
+			|| line.startsWith("@PutMapping")
+			|| line.startsWith("@DeleteMapping")
+			|| line.startsWith("@PatchMapping")
+			|| line.startsWith("@RequestMapping");
 	}
 
-	private Optional<MappingAnnotation> parseRequestMapping(String line) {
-		if (!line.contains("@RequestMapping") || !line.contains("RequestMethod.")) {
+	private Optional<MappingAnnotation> parseMappingAnnotation(String annotationBlock) {
+		if (!annotationBlock.startsWith("@")) {
 			return Optional.empty();
 		}
 
-		Matcher methodMatcher = REQUEST_METHOD_PATTERN.matcher(line);
-		if (!methodMatcher.find()) {
+		return parseShortcutMapping(annotationBlock, "@GetMapping", "GET")
+			.or(() -> parseShortcutMapping(annotationBlock, "@PostMapping", "POST"))
+			.or(() -> parseShortcutMapping(annotationBlock, "@PutMapping", "PUT"))
+			.or(() -> parseShortcutMapping(annotationBlock, "@DeleteMapping", "DELETE"))
+			.or(() -> parseShortcutMapping(annotationBlock, "@PatchMapping", "PATCH"))
+			.or(() -> parseRequestMapping(annotationBlock));
+	}
+
+	private Optional<MappingAnnotation> parseShortcutMapping(String annotationBlock, String annotation, String method) {
+		if (!annotationBlock.contains(annotation)) {
 			return Optional.empty();
 		}
 
-		return Optional.of(new MappingAnnotation(methodMatcher.group(1), extractAnnotationPath(line).orElse("")));
+		return Optional.of(new MappingAnnotation(method, true, extractAnnotationPath(annotationBlock).orElse("")));
+	}
+
+	private Optional<MappingAnnotation> parseRequestMapping(String annotationBlock) {
+		if (!annotationBlock.contains("@RequestMapping")) {
+			return Optional.empty();
+		}
+
+		Matcher methodMatcher = REQUEST_METHOD_PATTERN.matcher(annotationBlock);
+		String method = "UNSPECIFIED";
+		boolean methodSpecified = false;
+		if (methodMatcher.find()) {
+			method = methodMatcher.group(1);
+			methodSpecified = true;
+		}
+
+		return Optional.of(new MappingAnnotation(method, methodSpecified, extractAnnotationPath(annotationBlock).orElse("")));
 	}
 
 	private Optional<String> findLastAnnotationPath(String source, String annotation) {
@@ -294,6 +332,67 @@ public class SpringApiCatalogService {
 
 		String namedPath = matcher.group(1);
 		return Optional.of(namedPath == null ? matcher.group(2) : namedPath);
+	}
+
+	private AnnotationBlock collectAnnotationBlock(List<String> lines, int startIndex) {
+		StringBuilder builder = new StringBuilder();
+		int depth = 0;
+		int endIndex = startIndex;
+		boolean started = false;
+
+		for (int index = startIndex; index < lines.size(); index += 1) {
+			String line = lines.get(index).trim();
+			if (!started && !line.startsWith("@")) {
+				break;
+			}
+			if (started && depth <= 0 && !line.startsWith("@") && !line.isBlank()) {
+				break;
+			}
+			if (!builder.isEmpty()) {
+				builder.append('\n');
+			}
+			builder.append(line);
+			depth += countChar(line, '(') - countChar(line, ')');
+			endIndex = index;
+			started = true;
+			if (depth <= 0 && !line.endsWith(",")) {
+				break;
+			}
+		}
+
+		return new AnnotationBlock(builder.toString(), endIndex);
+	}
+
+	private String collectAnnotationBlock(String source, int startIndex) {
+		StringBuilder builder = new StringBuilder();
+		int depth = 0;
+		boolean started = false;
+
+		for (int index = startIndex; index < source.length(); index += 1) {
+			char current = source.charAt(index);
+			builder.append(current);
+			if (current == '(') {
+				depth += 1;
+				started = true;
+			} else if (current == ')') {
+				depth -= 1;
+			}
+			if (current == '\n' && (!started || depth <= 0)) {
+				break;
+			}
+		}
+
+		return builder.toString();
+	}
+
+	private int countChar(String value, char target) {
+		int count = 0;
+		for (int index = 0; index < value.length(); index += 1) {
+			if (value.charAt(index) == target) {
+				count += 1;
+			}
+		}
+		return count;
 	}
 
 	private Optional<HandlerMetadata> findNextHandlerName(List<String> lines, int startIndex) {
@@ -724,7 +823,7 @@ public class SpringApiCatalogService {
 		return false;
 	}
 
-	private record MappingAnnotation(String method, String path) {
+	private record MappingAnnotation(String method, boolean methodSpecified, String path) {
 	}
 
 	private record ControllerScan(
@@ -740,5 +839,8 @@ public class SpringApiCatalogService {
 	}
 
 	private record HandlerMetadata(String name, int lineNumber) {
+	}
+
+	private record AnnotationBlock(String content, int endIndex) {
 	}
 }

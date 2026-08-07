@@ -5,6 +5,7 @@ import java.util.List;
 public record ApiCatalogItemResponse(
 	String id,
 	String method,
+	boolean methodSpecified,
 	String path,
 	String controller,
 	String handler,

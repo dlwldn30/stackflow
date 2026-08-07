@@ -1135,6 +1135,11 @@
   color: #ffe0a5;
 }
 
+.method-badge--unspecified {
+  background: rgba(155, 173, 198, 0.14);
+  color: #d7e1f2;
+}
+
 .domain-item strong,
 .domain-item span,
 .domain-item em {

@@ -6,6 +6,7 @@ import './App.css'
 import { buildGraph, getNodeDetail } from './lib/graph'
 import type {
   ApiCatalogItem,
+  ApiMethod,
   EventStatus,
   ExternalRequestEntry,
   ExternalRequestResponse,
@@ -31,7 +32,8 @@ const SCENARIOS = [
 
 type ApiDefinition = {
   id: string
-  method: HttpMethod
+  method: ApiMethod
+  methodSpecified: boolean
   label: string
   pathTemplate: string
   description: string
@@ -83,6 +85,11 @@ type DomainDisplayMode = {
   tone: 'runtime' | 'integration'
 } | null
 
+type ApiMethodLike = {
+  method: ApiMethod
+  methodSpecified: boolean
+}
+
 const EMPTY_DOMAIN: ProjectDomain = {
   id: 'empty',
   name: 'No domain detected',
@@ -99,6 +106,7 @@ const EMPTY_DOMAIN: ProjectDomain = {
 const EMPTY_API_DEFINITION: ApiDefinition = {
   id: 'empty-api',
   method: 'GET',
+  methodSpecified: true,
   label: 'No API detected',
   pathTemplate: '/',
   description: 'Analyze a Spring Boot project with REST controllers to populate this view.',
@@ -166,6 +174,7 @@ const FALLBACK_API_CATALOG: ApiDefinition[] = [
   {
     id: 'product-detail',
     method: 'GET',
+    methodSpecified: true,
     label: 'Product detail',
     pathTemplate: '/api/products/{productId}',
     description: 'Redis cache hit/miss와 DB fallback을 확인하는 기본 상품 조회 API입니다.',
@@ -181,6 +190,7 @@ const FALLBACK_API_CATALOG: ApiDefinition[] = [
   {
     id: 'product-list',
     method: 'GET',
+    methodSpecified: true,
     label: 'Product list',
     pathTemplate: '/api/products',
     description: '상품 목록을 조회하며 Redis 없이 Service -> Repository -> MySQL 경로를 확인합니다.',
@@ -196,6 +206,7 @@ const FALLBACK_API_CATALOG: ApiDefinition[] = [
   {
     id: 'product-stock',
     method: 'GET',
+    methodSpecified: true,
     label: 'Product stock',
     pathTemplate: '/api/products/{productId}/stock',
     description: '상품 재고 조회 API로 DB timeout과 Service 예외 위치를 확인합니다.',
@@ -211,6 +222,7 @@ const FALLBACK_API_CATALOG: ApiDefinition[] = [
   {
     id: 'cache-refresh',
     method: 'POST',
+    methodSpecified: true,
     label: 'Refresh cache',
     pathTemplate: '/api/products/{productId}/cache-refresh',
     description: 'DB에서 상품을 다시 읽고 Redis에 저장하는 쓰기성 요청 흐름을 확인합니다.',
@@ -226,6 +238,7 @@ const FALLBACK_API_CATALOG: ApiDefinition[] = [
   {
     id: 'payment-list',
     method: 'GET',
+    methodSpecified: true,
     label: 'Payment list',
     pathTemplate: '/api/payments',
     description: 'UseCase -> Gateway -> Client 경계를 따라 외부 결제 조회 흐름을 보여주는 샘플 API입니다.',
@@ -241,6 +254,7 @@ const FALLBACK_API_CATALOG: ApiDefinition[] = [
   {
     id: 'payment-quote',
     method: 'POST',
+    methodSpecified: true,
     label: 'Create payment quote',
     pathTemplate: '/api/payments/quote',
     description: '외부 결제 연동 경계가 Gateway와 Client로 어떻게 보이는지 보여주는 샘플 API입니다.',
@@ -297,6 +311,7 @@ const FALLBACK_PROJECT_STRUCTURE: ProjectStructure = {
       endpoints: FALLBACK_API_CATALOG.map((api) => ({
         id: api.id,
         method: api.method,
+        methodSpecified: api.methodSpecified,
         path: api.pathTemplate,
         controller: api.controller,
         handler: api.handler,
@@ -329,6 +344,7 @@ const FALLBACK_PROJECT_STRUCTURE: ProjectStructure = {
         .map((api) => ({
           id: api.id,
           method: api.method,
+          methodSpecified: api.methodSpecified,
           path: api.pathTemplate,
           controller: api.controller,
           handler: api.handler,
@@ -393,8 +409,9 @@ function App() {
   const projectFacts = buildProjectFacts(projectStructure)
   const activeRoute = graph.states.filter((state) => state.active)
   const estimatedFlow = hasDetectedApis ? buildEstimatedFlow(selectedApi, selectedDomain) : []
-  const runtimeSupported = hasDetectedApis && analysisTarget === 'sample' && isStackFlowRuntimeApi(selectedApi)
-  const externalRunnable = hasDetectedApis && analysisTarget === 'external'
+  const hasConcreteMethod = hasDetectedApis && isConcreteMethodApi(selectedApi)
+  const runtimeSupported = hasDetectedApis && hasConcreteMethod && analysisTarget === 'sample' && isStackFlowRuntimeApi(selectedApi)
+  const externalRunnable = hasDetectedApis && hasConcreteMethod && analysisTarget === 'external'
   const analyzeOnly = hasDetectedApis && !runtimeSupported && !externalRunnable
   const projectStatusContent = PROJECT_STATUS_CONTENT[projectStructure.analysisStatus]
   const hasIntegrationBoundary = selectedDomain.layers.some((layer) => layer.name === 'Gateway' || layer.name === 'Client')
@@ -403,7 +420,9 @@ function App() {
   const currentResultStatus = externalResponse?.resultStatus ?? traceDetail?.resultStatus ?? 'IDLE'
   const externalPath = selectedApi.buildPath(productId)
   const externalTargetPreview = buildExternalTargetPreview(targetBaseUrl, externalPath, queryParams)
-  const bodyAllowed = ['POST', 'PUT', 'PATCH'].includes(selectedApi.method)
+  const bodyAllowed = hasConcreteMethod && ['POST', 'PUT', 'PATCH'].includes(selectedApi.method)
+  const selectedApiMethodLabel = getApiMethodLabel(selectedApi)
+  const selectedApiMethodClassName = getApiMethodBadgeClassName(selectedApi)
   const graphFitKey = `${traceDetail?.traceId ?? 'empty'}-${traceDetail?.events.length ?? 0}`
   const workflowSteps = [
     {
@@ -415,7 +434,7 @@ function App() {
     {
       number: '02',
       title: 'Choose endpoint',
-      detail: `${selectedApi.method} ${selectedApi.pathTemplate}`,
+      detail: `${selectedApiMethodLabel} ${selectedApi.pathTemplate}`,
       state: activeView === 'api' ? 'active' : 'done',
     },
     {
@@ -632,7 +651,11 @@ function App() {
       setActiveView('api')
       setRequestState('error')
       setStreamStatus('idle')
-      setRequestMessage('This sample API is analysis-only. Switch to Product endpoints for runtime trace, or use an external target to execute requests.')
+      setRequestMessage(
+        selectedApi.methodSpecified
+          ? 'This sample API is analysis-only. Switch to Product endpoints for runtime trace, or use an external target to execute requests.'
+          : 'This endpoint was detected from static analysis, but the HTTP method was not explicit. Review the code first, then run it outside StackFlow.',
+      )
       return
     }
 
@@ -642,6 +665,7 @@ function App() {
     }
 
     const runId = activeRunIdRef.current + 1
+    const requestMethod = selectedApi.method as HttpMethod
     activeRunIdRef.current = runId
     closeActiveStream()
     setRequestState('loading')
@@ -662,7 +686,7 @@ function App() {
       const endpoint = selectedApi.buildPath(productId)
 
       startTransition(() => {
-        setTraceDetail(createPlaceholderTrace(traceId, selectedApi.method, endpoint, scenario))
+        setTraceDetail(createPlaceholderTrace(traceId, selectedApiMethodLabel, endpoint, scenario))
         setSelectedNodeId(null)
       })
 
@@ -688,7 +712,7 @@ function App() {
         search.set('scenario', scenario)
       }
 
-      const response = await fetch(`${endpoint}?${search.toString()}`, { method: selectedApi.method })
+      const response = await fetch(`${endpoint}?${search.toString()}`, { method: requestMethod })
       const payload = (await response.json()) as ProductPayload
 
       if (activeRunIdRef.current !== runId) {
@@ -741,11 +765,16 @@ function App() {
       setActiveView('api')
       setRequestState('error')
       setStreamStatus('idle')
-      setRequestMessage('This API is analysis-only. Configure runtime instrumentation before tracing external project internals.')
+      setRequestMessage(
+        selectedApi.methodSpecified
+          ? 'This API is analysis-only. Configure runtime instrumentation before tracing external project internals.'
+          : 'This endpoint was detected from static analysis, but the HTTP method was not explicit. Confirm the verb in source before sending a request.',
+      )
       return
     }
 
     const normalizedTargetBaseUrl = targetBaseUrl.trim()
+    const requestMethod = selectedApi.method as HttpMethod
     if (!normalizedTargetBaseUrl) {
       setActiveView('api')
       setRequestState('error')
@@ -778,14 +807,14 @@ function App() {
     }
 
     const requestSnapshot: ExternalRequestSnapshot = {
-      method: selectedApi.method,
+      method: requestMethod,
       targetUrl: externalTargetPreview,
       queryParams,
       headers: requestHeaders,
       requestBody: nextRequestBody,
     }
 
-    setRequestMessage(`Calling ${selectedApi.method} ${externalTargetPreview}...`)
+    setRequestMessage(`Calling ${selectedApiMethodLabel} ${externalTargetPreview}...`)
 
     try {
       const response = await fetch('/api/external/request', {
@@ -793,7 +822,7 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           targetBaseUrl: normalizedTargetBaseUrl,
-          method: selectedApi.method,
+          method: requestMethod,
           path: externalPath,
           queryParams: toEnabledEntries(queryParams),
           headers: toEnabledEntries(requestHeaders),
@@ -1205,12 +1234,15 @@ function App() {
                         setActiveView('api')
                       }}
                     >
-                      <span className={`method-badge method-badge--${api.method.toLowerCase()}`}>{api.method}</span>
+                      <span className={getApiMethodBadgeClassName(api)}>{getApiMethodLabel(api)}</span>
                       <div>
                         <strong>{api.label}</strong>
                         <span>{api.pathTemplate}</span>
                         <p>{api.requestType} · {api.description}</p>
                         <span className="api-item__handler">{api.controller}.{api.handler}</span>
+                        {!api.methodSpecified ? (
+                          <span className="api-item__handler">Static analysis only · HTTP method not explicit</span>
+                        ) : null}
                       </div>
                     </button>
                   ))
@@ -1234,10 +1266,11 @@ function App() {
               </div>
 
               <div className="selected-request">
-                <span className={`method-badge method-badge--${selectedApi.method.toLowerCase()}`}>{selectedApi.method}</span>
+                <span className={selectedApiMethodClassName}>{selectedApiMethodLabel}</span>
                 <div>
                   <strong>{selectedApi.label}</strong>
                   <small>{selectedApi.pathTemplate}</small>
+                  {!selectedApi.methodSpecified ? <small>Detected from static analysis only. HTTP method was not explicit.</small> : null}
                 </div>
                 <span className={`pill pill--inline ${runtimeSupported ? 'pill--success' : 'pill--warning'}`}>
                   {runtimeModeLabel}
@@ -1360,7 +1393,7 @@ function App() {
                     <div className="request-preview request-preview--send">
                       <span>Request to be sent</span>
                       <div>
-                        <span className={`method-badge method-badge--${selectedApi.method.toLowerCase()}`}>{selectedApi.method}</span>
+                        <span className={selectedApiMethodClassName}>{selectedApiMethodLabel}</span>
                         <strong>{externalTargetPreview}</strong>
                       </div>
                     </div>
@@ -1531,8 +1564,9 @@ function App() {
                     {selectedDomain.endpoints.length > 0 ? (
                       selectedDomain.endpoints.map((endpoint) => (
                         <article key={endpoint.id} className="map-endpoint-card">
-                          <strong>{endpoint.method} {endpoint.path}</strong>
+                          <strong>{getApiMethodLabel(endpoint)} {endpoint.path}</strong>
                           <span>{endpoint.controller}.{endpoint.handler}</span>
+                          {!endpoint.methodSpecified ? <small>Static analysis only · HTTP method not explicit</small> : null}
                           <small>{endpoint.sourceFile}:{endpoint.sourceLine || '?'}</small>
                         </article>
                       ))
@@ -1550,7 +1584,7 @@ function App() {
               <div className="graph-head">
                 <div>
                   <span className="section-label">Request path · estimated</span>
-                  <h2>{selectedApi.method} {selectedApi.pathTemplate}</h2>
+                  <h2>{selectedApiMethodLabel} {selectedApi.pathTemplate}</h2>
                   <p>Use this as a preview. Actual node timing lives in the Trace view.</p>
                 </div>
                 <span className={`pill pill--inline ${runtimeSupported ? 'pill--success' : 'pill--warning'}`}>
@@ -1601,14 +1635,18 @@ function App() {
                 <strong>
                   {runtimeSupported
                     ? 'Send the request here, then inspect Trace when needed.'
-                    : hasIntegrationBoundary
+                    : !selectedApi.methodSpecified
+                      ? 'This flow is static only because the handler mapping did not declare an explicit HTTP method.'
+                      : hasIntegrationBoundary
                       ? 'This flow highlights static integration boundaries, not live provider calls.'
                       : 'External internals are not traced yet.'}
                 </strong>
                 <p>
                   {runtimeSupported
                     ? 'The Request view keeps response checking separate from graph inspection.'
-                    : hasIntegrationBoundary
+                    : !selectedApi.methodSpecified
+                      ? 'StackFlow can show the endpoint boundary from source analysis, but it will not guess a runnable verb for request or trace execution.'
+                      : hasIntegrationBoundary
                       ? 'Gateway and Client layers show where StackFlow expects an outbound payment or provider boundary, based on naming and package shape.'
                       : 'External project internals require a future Spring Boot starter or agent before StackFlow can show actual node events.'}
                 </p>
@@ -1626,8 +1664,10 @@ function App() {
                     {traceDetail
                       ? `${traceDetail.method} ${traceDetail.endpoint} · HTTP ${traceDetail.httpStatus || '-'}`
                       : runtimeSupported
-                        ? `Run ${selectedApi.method} ${selectedApi.pathTemplate} to activate the live graph.`
-                        : 'This selected API is analysis-only. Runtime instrumentation is not connected.'}
+                        ? `Run ${selectedApiMethodLabel} ${selectedApi.pathTemplate} to activate the live graph.`
+                        : !selectedApi.methodSpecified
+                          ? 'This selected API is analysis-only because the handler mapping did not declare an explicit HTTP method.'
+                          : 'This selected API is analysis-only. Runtime instrumentation is not connected.'}
                   </p>
                 </div>
                 <span className={`pill pill--inline pill--${streamStatus === 'completed' ? 'success' : streamStatus === 'streaming' ? 'loading' : streamStatus}`}>
@@ -1646,7 +1686,7 @@ function App() {
                 </span>
                 <span>
                   <strong>Endpoint</strong>
-                  {selectedApi.method} {selectedApi.pathTemplate}
+                  {selectedApiMethodLabel} {selectedApi.pathTemplate}
                 </span>
                 <span>
                   <strong>Trace goal</strong>
@@ -1775,7 +1815,7 @@ function App() {
                 <article>
                   <span>Selected handler</span>
                   <strong>{selectedApi.controller}.{selectedApi.handler}</strong>
-                  <p>{selectedApi.method} {selectedApi.pathTemplate}</p>
+                  <p>{selectedApiMethodLabel} {selectedApi.pathTemplate}</p>
                 </article>
                 <article>
                   <span>Estimated path</span>
@@ -1784,8 +1824,8 @@ function App() {
                 </article>
                 <article>
                   <span>Runtime boundary</span>
-                  <strong>{runtimeSupported ? 'Actual trace available' : hasIntegrationBoundary ? 'Static integration view only' : 'Instrumentation required'}</strong>
-                  <p>{runtimeSupported ? 'Switch to Runtime Trace and run the sample API.' : hasIntegrationBoundary ? 'This sample endpoint is intended to explain integration layering, not to emit live trace events.' : 'External app internals cannot be traced yet.'}</p>
+                  <strong>{runtimeSupported ? 'Actual trace available' : !selectedApi.methodSpecified ? 'Static analysis only' : hasIntegrationBoundary ? 'Static integration view only' : 'Instrumentation required'}</strong>
+                  <p>{runtimeSupported ? 'Switch to Runtime Trace and run the sample API.' : !selectedApi.methodSpecified ? 'The endpoint exists, but the controller method did not declare an explicit HTTP verb.' : hasIntegrationBoundary ? 'This sample endpoint is intended to explain integration layering, not to emit live trace events.' : 'External app internals cannot be traced yet.'}</p>
                 </article>
               </div>
               {externalRunnable ? (
@@ -1801,7 +1841,7 @@ function App() {
                       <article className="evidence-block evidence-block--request">
                         <header>
                           <span>Request sent</span>
-                          <strong>{externalRequestSnapshot?.method ?? selectedApi.method}</strong>
+                          <strong>{externalRequestSnapshot?.method ?? (selectedApi.methodSpecified ? selectedApi.method : selectedApiMethodLabel)}</strong>
                         </header>
                         <p>{externalRequestSnapshot?.targetUrl ?? externalTargetPreview}</p>
                         <div className="evidence-grid">
@@ -2043,6 +2083,7 @@ function toApiDefinition(item: ApiCatalogItem, domainId: string, domainName: str
   return {
     id: item.id,
     method: item.method,
+    methodSpecified: item.methodSpecified,
     label: humanizeHandler(item.handler),
     pathTemplate: item.path,
     description: `Detected from ${item.controller}.${item.handler}.`,
@@ -2090,6 +2131,7 @@ function getDomainDisplayMode(domain: ProjectDomain): DomainDisplayMode {
     isStackFlowRuntimeApi({
       id: endpoint.id,
       method: endpoint.method,
+      methodSpecified: endpoint.methodSpecified,
       label: endpoint.handler,
       pathTemplate: endpoint.path,
       description: '',
@@ -2129,7 +2171,7 @@ function buildEstimatedFlow(api: ApiDefinition, domain: ProjectDomain): Estimate
       id: 'controller',
       layer: 'Controller',
       label: api.controller,
-      detail: `${api.handler} receives ${api.method} ${api.pathTemplate}.`,
+      detail: `${api.handler} receives ${getApiMethodLabel(api)} ${api.pathTemplate}.`,
       source: 'detected handler',
     },
   ]
@@ -2233,6 +2275,22 @@ function pickLayerClass(domain: ProjectDomain, layerName: string, api: ApiDefini
   }
 
   return layer.classes.find((className) => handlerKey.includes(stripLayerSuffix(className).toLowerCase())) ?? layer.classes[0]
+}
+
+function isConcreteMethodApi(api: ApiDefinition): api is ApiDefinition & { method: HttpMethod; methodSpecified: true } {
+  return api.methodSpecified && api.method !== 'UNSPECIFIED'
+}
+
+function getApiMethodLabel(api: ApiMethodLike) {
+  return api.methodSpecified ? api.method : 'N/A'
+}
+
+function getApiMethodBadgeClassName(api: ApiMethodLike) {
+  if (!api.methodSpecified) {
+    return 'method-badge method-badge--unspecified'
+  }
+
+  return `method-badge method-badge--${api.method.toLowerCase()}`
 }
 
 function stripLayerSuffix(className: string) {
