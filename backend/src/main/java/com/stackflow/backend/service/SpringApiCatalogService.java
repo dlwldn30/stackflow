@@ -247,9 +247,15 @@ public class SpringApiCatalogService {
 	}
 
 	private String extractClassBasePath(String source) {
-		int classIndex = source.indexOf("class ");
-		String classHeader = classIndex < 0 ? source : source.substring(0, classIndex);
-		return findLastAnnotationPath(classHeader, "@RequestMapping").orElse("");
+		List<String> lines = source.lines().toList();
+		int classDeclarationIndex = findClassDeclarationIndex(lines);
+		for (int index = classDeclarationIndex - 1; index >= 0; index -= 1) {
+			if (!lines.get(index).trim().startsWith("@RequestMapping")) {
+				continue;
+			}
+			return extractAnnotationPath(collectAnnotationBlock(lines, index).content()).orElse("");
+		}
+		return "";
 	}
 
 	private int findClassDeclarationIndex(List<String> lines) {
@@ -326,6 +332,67 @@ public class SpringApiCatalogService {
 
 		String namedPath = matcher.group(1);
 		return Optional.of(namedPath == null ? matcher.group(2) : namedPath);
+	}
+
+	private AnnotationBlock collectAnnotationBlock(List<String> lines, int startIndex) {
+		StringBuilder builder = new StringBuilder();
+		int depth = 0;
+		int endIndex = startIndex;
+		boolean started = false;
+
+		for (int index = startIndex; index < lines.size(); index += 1) {
+			String line = lines.get(index).trim();
+			if (!started && !line.startsWith("@")) {
+				break;
+			}
+			if (started && depth <= 0 && !line.startsWith("@") && !line.isBlank()) {
+				break;
+			}
+			if (!builder.isEmpty()) {
+				builder.append('\n');
+			}
+			builder.append(line);
+			depth += countChar(line, '(') - countChar(line, ')');
+			endIndex = index;
+			started = true;
+			if (depth <= 0 && !line.endsWith(",")) {
+				break;
+			}
+		}
+
+		return new AnnotationBlock(builder.toString(), endIndex);
+	}
+
+	private String collectAnnotationBlock(String source, int startIndex) {
+		StringBuilder builder = new StringBuilder();
+		int depth = 0;
+		boolean started = false;
+
+		for (int index = startIndex; index < source.length(); index += 1) {
+			char current = source.charAt(index);
+			builder.append(current);
+			if (current == '(') {
+				depth += 1;
+				started = true;
+			} else if (current == ')') {
+				depth -= 1;
+			}
+			if (current == '\n' && (!started || depth <= 0)) {
+				break;
+			}
+		}
+
+		return builder.toString();
+	}
+
+	private int countChar(String value, char target) {
+		int count = 0;
+		for (int index = 0; index < value.length(); index += 1) {
+			if (value.charAt(index) == target) {
+				count += 1;
+			}
+		}
+		return count;
 	}
 
 	private Optional<HandlerMetadata> findNextHandlerName(List<String> lines, int startIndex) {
@@ -772,5 +839,8 @@ public class SpringApiCatalogService {
 	}
 
 	private record HandlerMetadata(String name, int lineNumber) {
+	}
+
+	private record AnnotationBlock(String content, int endIndex) {
 	}
 }
