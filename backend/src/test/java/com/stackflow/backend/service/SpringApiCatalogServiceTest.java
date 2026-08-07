@@ -45,6 +45,7 @@ class SpringApiCatalogServiceTest {
 			.orElseThrow();
 
 		assertEquals("GET", stockApi.method());
+		assertTrue(stockApi.methodSpecified());
 		assertEquals("ProductController", stockApi.controller());
 		assertEquals("getProductStock", stockApi.handler());
 		assertEquals("QUERY_STOCK", stockApi.requestType());
@@ -216,5 +217,147 @@ class SpringApiCatalogServiceTest {
 		assertTrue(paymentDomain.layers().stream().anyMatch(layer -> layer.name().equals("UseCase")));
 		assertTrue(paymentDomain.layers().stream().anyMatch(layer -> layer.name().equals("Gateway")));
 		assertTrue(paymentDomain.layers().stream().anyMatch(layer -> layer.name().equals("Client")));
+	}
+	@Test
+	void detectsMultiLineRequestMappings(@TempDir Path projectRoot) throws IOException {
+		Files.writeString(projectRoot.resolve("build.gradle"), "plugins { id 'org.springframework.boot' version '4.1.0' }");
+		Path sourceRoot = projectRoot.resolve("src/main/java/com/example/order");
+		Files.createDirectories(sourceRoot);
+		Files.writeString(sourceRoot.resolve("OrderController.java"), """
+			package com.example.order;
+
+			import org.springframework.web.bind.annotation.GetMapping;
+			import org.springframework.web.bind.annotation.RequestMapping;
+			import org.springframework.web.bind.annotation.RequestMethod;
+			import org.springframework.web.bind.annotation.RestController;
+
+			@RestController
+			@RequestMapping(
+				value = "/api/orders"
+			)
+			public class OrderController {
+				@RequestMapping(
+					value = "/{orderId}",
+					method = RequestMethod.GET
+				)
+				public String getOrder() {
+					return "ok";
+				}
+
+				@GetMapping(
+					path = "/summary"
+				)
+				public String getSummary() {
+					return "ok";
+				}
+			}
+			""");
+
+		ProjectStructureResponse structure = springApiCatalogService.getProjectStructure(projectRoot.toString());
+		Set<String> routes = structure.domains().stream()
+			.flatMap(domain -> domain.endpoints().stream())
+			.map(item -> item.method() + " " + item.path())
+			.collect(Collectors.toSet());
+
+		assertEquals(ProjectAnalysisStatus.SUCCESS, structure.analysisStatus());
+		assertTrue(routes.contains("GET /api/orders/{orderId}"));
+		assertTrue(routes.contains("GET /api/orders/summary"));
+	}
+
+	@Test
+	void detectsMethodLevelRequestMappingWithoutExplicitMethod(@TempDir Path projectRoot) throws IOException {
+		Files.writeString(projectRoot.resolve("build.gradle"), "plugins { id 'org.springframework.boot' version '4.1.0' }");
+		Path sourceRoot = projectRoot.resolve("src/main/java/com/example/order");
+		Files.createDirectories(sourceRoot);
+		Files.writeString(sourceRoot.resolve("OrderController.java"), """
+			package com.example.order;
+
+			import org.springframework.web.bind.annotation.RequestMapping;
+			import org.springframework.web.bind.annotation.RequestMethod;
+			import org.springframework.web.bind.annotation.RestController;
+
+			@RestController
+			@RequestMapping("/api/orders")
+			public class OrderController {
+				@RequestMapping(path = "/summary")
+				public String getSummary() {
+					return "ok";
+				}
+
+				@RequestMapping(
+					path = "/detail",
+					method = RequestMethod.GET
+				)
+				public String getDetail() {
+					return "ok";
+				}
+			}
+			""");
+
+		ProjectStructureResponse structure = springApiCatalogService.getProjectStructure(projectRoot.toString());
+		ProjectDomainResponse orderDomain = structure.domains().stream()
+			.filter(domain -> domain.id().equals("order"))
+			.findFirst()
+			.orElseThrow();
+		ApiCatalogItemResponse summaryApi = orderDomain.endpoints().stream()
+			.filter(item -> item.path().equals("/api/orders/summary"))
+			.findFirst()
+			.orElseThrow();
+		ApiCatalogItemResponse detailApi = orderDomain.endpoints().stream()
+			.filter(item -> item.path().equals("/api/orders/detail"))
+			.findFirst()
+			.orElseThrow();
+
+		assertEquals(ProjectAnalysisStatus.SUCCESS, structure.analysisStatus());
+		assertEquals(2, orderDomain.endpoints().size());
+		assertEquals("UNSPECIFIED", summaryApi.method());
+		assertFalse(summaryApi.methodSpecified());
+		assertEquals("GET", detailApi.method());
+		assertTrue(detailApi.methodSpecified());
+		assertFalse(orderDomain.endpoints().stream().anyMatch(item -> item.path().equals("/api/orders")));
+	}
+
+	@Test
+	void detectsMethodLevelRequestMappingThatUsesOnlyClassLevelBasePath(@TempDir Path projectRoot) throws IOException {
+		Files.writeString(projectRoot.resolve("build.gradle"), "plugins { id 'org.springframework.boot' version '4.1.0' }");
+		Path sourceRoot = projectRoot.resolve("src/main/java/com/example/order");
+		Files.createDirectories(sourceRoot);
+		Files.writeString(sourceRoot.resolve("OrderController.java"), """
+			package com.example.order;
+
+			import org.springframework.web.bind.annotation.RequestMapping;
+			import org.springframework.web.bind.annotation.RequestMethod;
+			import org.springframework.web.bind.annotation.RestController;
+
+			@RestController
+			@RequestMapping("/api/orders")
+			public class OrderController {
+				@RequestMapping(method = RequestMethod.GET)
+				public String listOrders() {
+					return "ok";
+				}
+
+				@RequestMapping
+				public String fallbackRoute() {
+					return "ok";
+				}
+			}
+			""");
+
+		ProjectStructureResponse structure = springApiCatalogService.getProjectStructure(projectRoot.toString());
+		ProjectDomainResponse orderDomain = structure.domains().stream()
+			.filter(domain -> domain.id().equals("order"))
+			.findFirst()
+			.orElseThrow();
+		List<ApiCatalogItemResponse> rootApis = orderDomain.endpoints().stream()
+			.filter(item -> item.path().equals("/api/orders"))
+			.toList();
+
+		assertEquals(ProjectAnalysisStatus.SUCCESS, structure.analysisStatus());
+		assertEquals(2, rootApis.size());
+		assertTrue(rootApis.stream().anyMatch(ApiCatalogItemResponse::methodSpecified));
+		assertTrue(rootApis.stream().anyMatch(item -> item.method().equals("GET")));
+		assertTrue(rootApis.stream().anyMatch(item -> !item.methodSpecified()));
+		assertTrue(rootApis.stream().anyMatch(item -> item.method().equals("UNSPECIFIED")));
 	}
 }
