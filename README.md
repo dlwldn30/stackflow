@@ -12,6 +12,12 @@ StackFlow is not a production APM replacement yet. The current MVP focuses on lo
 - `Request`: select an API, configure a target request, send it, and inspect the HTTP response.
 - `Trace`: run the bundled StackFlow sample APIs with SSE and inspect actual runtime events in a graph.
 
+Current request modes:
+
+- `Runtime Trace`: available for the bundled runtime-ready sample APIs.
+- `Run target`: available for external targets only when the analyzed endpoint has an explicit HTTP method.
+- `Analyze only`: used for integration-focused sample flows or analyzed endpoints detected without an explicit HTTP method.
+
 ## Implemented Features
 
 - Spring Boot backend with Gradle.
@@ -35,8 +41,11 @@ For external Spring Boot projects, StackFlow currently shows:
 - Detected structure.
 - Estimated API flow.
 - HTTP request and response evidence.
+- Endpoints detected from method-level `@RequestMapping` even when `RequestMethod` is omitted.
 
 It does not yet show actual external `Controller -> Service -> Repository` runtime events. That requires a future Spring Boot starter, agent, or instrumentation layer inside the target app.
+
+If a detected endpoint does not declare an explicit HTTP method, StackFlow keeps it visible in the catalog but marks it as `Analyze only`. That endpoint cannot be executed or traced until the controller mapping becomes explicit.
 
 ## Project Structure
 
@@ -123,6 +132,7 @@ Future desktop packaging with Tauri or Electron can replace this limitation with
 Use this view to select and run one API.
 
 - Select an API from the detected catalog.
+- If the endpoint is marked `Analyze only`, use it for structure review only.
 - For external projects, enter the target base URL.
 - Add query parameters, headers, or JSON body when needed.
 - Check `Request sent` and `Response received` after execution.
@@ -138,6 +148,7 @@ http://localhost:8091
 Use this view to inspect actual runtime events.
 
 - Runtime trace is currently supported for the bundled StackFlow sample APIs.
+- Integration-focused sample domains stay analysis-only by design.
 - External projects are disabled in Trace view until instrumentation exists.
 - The graph highlights success, warning, error, timeout, and idle nodes.
 

@@ -23,6 +23,42 @@ Main signals:
 
 Because of this, projects are easier to analyze when roles are explicit in code and package names.
 
+## Current Mapping Support
+
+StackFlow currently detects these handler shapes from static Spring annotations:
+
+- `@GetMapping`, `@PostMapping`, `@PutMapping`, `@DeleteMapping`, `@PatchMapping`
+- Method-level `@RequestMapping(..., method = RequestMethod.X)`
+- Multiline mapping annotations for both shortcut mappings and `@RequestMapping`
+- Method-level `@RequestMapping` without an explicit `RequestMethod`
+
+Important rules:
+
+- Class-level `@RequestMapping` is treated as a base path only.
+- Class-level `@RequestMapping` does not become its own endpoint.
+- If a method-level `@RequestMapping` omits the HTTP method, StackFlow still records the endpoint as detected, but not runnable.
+
+Example:
+
+```java
+@RestController
+@RequestMapping("/api/orders")
+public class OrderController {
+
+    @RequestMapping("/summary")
+    public OrderSummaryResponse summary() {
+        return orderService.summary();
+    }
+}
+```
+
+Result:
+
+- Endpoint path is detected as `/api/orders/summary`
+- The endpoint is visible in Project and Request
+- The endpoint is treated as `Analyze only`
+- Runtime trace and external request execution stay blocked because the HTTP method is not explicit
+
 ## Recommended Layer Shape
 
 Preferred request path:
@@ -56,6 +92,8 @@ Recommended:
 - `ProductStore`
 - `ProductCacheService`
 - `ProductClient`
+- `PaymentUseCase`
+- `PaymentGateway`
 
 Avoid overly generic names when the class is part of a visible request flow.
 
@@ -70,6 +108,8 @@ Reason:
 
 - `Manager`, `Helper`, and similar names do not expose the boundary clearly.
 - StackFlow can detect generic classes, but it cannot explain their role as reliably.
+
+`UseCase`, `Gateway`, and `Client` are also useful signals now, especially for integration-focused domains.
 
 ## Controller Rules
 
@@ -99,6 +139,8 @@ Why:
 
 - StackFlow can detect the API path, HTTP method, handler, and source location cleanly.
 - The next hop in the estimated flow is easy to infer.
+
+If the controller uses method-level `@RequestMapping` without `RequestMethod`, StackFlow can still show the handler and path, but it cannot safely assume a concrete runnable verb.
 
 ## Service Rules
 
@@ -212,7 +254,9 @@ GET /api/products/{productId}
 Even with these conventions, StackFlow still has limits.
 
 - It does not prove the real runtime path for external projects.
-- It does not fully understand custom architectures with names like `UseCase`, `Gateway`, or `Manager` unless extra rules are added.
+- It only treats `GET`, `POST`, `PUT`, `DELETE`, and `PATCH` as concrete runnable HTTP methods.
+- Method-level `@RequestMapping` without `RequestMethod` is shown as a detected endpoint, but remains `Analyze only`.
+- Runtime trace is still limited to the bundled sample runtime-ready APIs.
 - It does not fully analyze reflection-heavy, event-driven, or dynamic proxy-heavy code paths.
 
 Because of this, static analysis results must continue to be treated as `estimated` unless runtime instrumentation is connected.
