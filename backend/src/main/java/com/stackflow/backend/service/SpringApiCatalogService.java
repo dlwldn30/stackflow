@@ -20,6 +20,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.springframework.stereotype.Service;
 
@@ -490,9 +491,16 @@ public class SpringApiCatalogService {
 		List<ApiCatalogItemResponse> domainEndpoints = endpoints.stream()
 			.filter(endpoint -> controllers.stream().anyMatch(controller -> controller.controller().equals(endpoint.controller())))
 			.toList();
-			List<ClassMetadata> domainClasses = classes.stream()
-				.filter(item -> toDomainKey(item.name()).equals(domainKey))
-				.toList();
+		Set<String> domainControllerNames = controllers.stream()
+			.map(ControllerScan::controller)
+			.collect(Collectors.toSet());
+		List<String> controllerPackageRoots = controllers.stream()
+			.map(controller -> toDomainPackageRoot(controller.packageName()))
+			.distinct()
+			.toList();
+		List<ClassMetadata> domainClasses = classes.stream()
+			.filter(item -> belongsToDomain(domainKey, domainControllerNames, controllerPackageRoots, item))
+			.toList();
 		List<ProjectEvidenceItemResponse> domainInfrastructureDetails = detectInfrastructureDetails(projectRoot, domainClasses, domainEndpoints);
 
 		return new ProjectDomainResponse(
@@ -528,6 +536,32 @@ public class SpringApiCatalogService {
 	private String toDomainKey(String className) {
 		return className
 			.replaceAll("(Controller|UseCase|RepositoryService|Repository|CacheService|CatalogStore|Service|Store|Gateway|Client|Response)$", "");
+	}
+
+	private boolean belongsToDomain(
+		String domainKey,
+		Set<String> domainControllerNames,
+		List<String> packageRoots,
+		ClassMetadata item
+	) {
+		if (toDomainKey(item.name()).equals(domainKey)) {
+			return true;
+		}
+		if (!belongsToAnyPackageRoot(item.packageName(), packageRoots)) {
+			return false;
+		}
+		return !item.layerType().equals("Controller") || domainControllerNames.contains(item.name());
+	}
+
+	private String toDomainPackageRoot(String packageName) {
+		if (packageName.endsWith(".controller")) {
+			return packageName.substring(0, packageName.length() - ".controller".length());
+		}
+		return packageName;
+	}
+
+	private boolean belongsToAnyPackageRoot(String packageName, List<String> packageRoots) {
+		return packageRoots.stream().anyMatch(root -> packageName.equals(root) || packageName.startsWith(root + "."));
 	}
 
 	private String humanizeDomain(String domainKey) {
