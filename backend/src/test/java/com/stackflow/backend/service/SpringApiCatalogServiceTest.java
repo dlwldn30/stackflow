@@ -218,6 +218,43 @@ class SpringApiCatalogServiceTest {
 		assertTrue(paymentDomain.layers().stream().anyMatch(layer -> layer.name().equals("Gateway")));
 		assertTrue(paymentDomain.layers().stream().anyMatch(layer -> layer.name().equals("Client")));
 	}
+
+	@Test
+	void detectsRepositoryInterfacesAsPersistenceEvidence(@TempDir Path projectRoot) throws IOException {
+		Files.writeString(projectRoot.resolve("build.gradle"), "plugins { id 'org.springframework.boot' version '4.1.0' }");
+		Path sourceRoot = projectRoot.resolve("src/main/java/com/example/order");
+		Files.createDirectories(sourceRoot);
+		Files.writeString(sourceRoot.resolve("OrderController.java"), """
+			package com.example.order;
+
+			import org.springframework.web.bind.annotation.GetMapping;
+			import org.springframework.web.bind.annotation.RestController;
+
+			@RestController
+			public class OrderController {
+				@GetMapping("/orders")
+				public String listOrders() {
+					return "ok";
+				}
+			}
+			""");
+		Files.writeString(sourceRoot.resolve("OrderRepository.java"), """
+			package com.example.order;
+
+			public interface OrderRepository {
+			}
+			""");
+
+		ProjectStructureResponse structure = springApiCatalogService.getProjectStructure(projectRoot.toString());
+
+		assertEquals(ProjectAnalysisStatus.SUCCESS, structure.analysisStatus());
+		assertTrue(structure.layers().stream()
+			.anyMatch(layer -> layer.name().equals("Repository") && layer.classes().contains("OrderRepository")));
+		assertTrue(structure.infrastructure().contains("Persistence"));
+		assertTrue(structure.infrastructureDetails().stream()
+			.anyMatch(item -> item.name().equals("Persistence") && item.evidence().contains("OrderRepository")));
+	}
+
 	@Test
 	void detectsMultiLineRequestMappings(@TempDir Path projectRoot) throws IOException {
 		Files.writeString(projectRoot.resolve("build.gradle"), "plugins { id 'org.springframework.boot' version '4.1.0' }");
