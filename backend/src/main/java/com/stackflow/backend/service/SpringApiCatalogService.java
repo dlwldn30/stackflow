@@ -28,8 +28,6 @@ public class SpringApiCatalogService {
 
 	private static final Pattern CLASS_NAME_PATTERN = Pattern.compile("\\bclass\\s+(\\w+)");
 	private static final Pattern METHOD_NAME_PATTERN = Pattern.compile("\\b(?:public|private|protected)\\s+[\\w<?>.,\\s]+\\s+(\\w+)\\s*\\(");
-	private static final Pattern MAPPING_PATH_PATTERN = Pattern.compile("(?:value|path)\\s*=\\s*\"([^\"]*)\"|\"([^\"]*)\"");
-	private static final Pattern REQUEST_METHOD_PATTERN = Pattern.compile("RequestMethod\\.(GET|POST|PUT|DELETE|PATCH)");
 	private static final Pattern PATH_VARIABLE_PATTERN = Pattern.compile("\\{([^}/]+)}");
 	private static final List<String> PROJECT_METADATA_FILES = List.of(
 		"build.gradle",
@@ -42,6 +40,7 @@ public class SpringApiCatalogService {
 		"backend/src/main/resources/application.yml",
 		"backend/src/main/resources/application.yaml"
 	);
+	private final SpringMappingParser mappingParser = new SpringMappingParser();
 
 	public List<ApiCatalogItemResponse> getApiCatalog() {
 		Path projectRoot = resolveProjectRoot(null);
@@ -190,12 +189,12 @@ public class SpringApiCatalogService {
 			if (index < classDeclarationIndex) {
 				continue;
 			}
-			if (!startsMappingAnnotation(line)) {
+			if (!mappingParser.startsMappingAnnotation(line)) {
 				continue;
 			}
 
-			AnnotationBlock annotationBlock = collectAnnotationBlock(lines, index);
-			Optional<MappingAnnotation> mapping = parseMappingAnnotation(annotationBlock.content());
+			SpringMappingParser.AnnotationBlock annotationBlock = mappingParser.collectAnnotationBlock(lines, index);
+			Optional<SpringMappingParser.MappingAnnotation> mapping = mappingParser.parse(annotationBlock.content());
 			if (mapping.isEmpty()) {
 				continue;
 			}
@@ -253,7 +252,7 @@ public class SpringApiCatalogService {
 			if (!lines.get(index).trim().startsWith("@RequestMapping")) {
 				continue;
 			}
-			return extractAnnotationPath(collectAnnotationBlock(lines, index).content()).orElse("");
+			return mappingParser.extractPath(mappingParser.collectAnnotationBlock(lines, index).content()).orElse("");
 		}
 		return "";
 	}
@@ -265,134 +264,6 @@ public class SpringApiCatalogService {
 			}
 		}
 		return 0;
-	}
-
-	private boolean startsMappingAnnotation(String line) {
-		return line.startsWith("@GetMapping")
-			|| line.startsWith("@PostMapping")
-			|| line.startsWith("@PutMapping")
-			|| line.startsWith("@DeleteMapping")
-			|| line.startsWith("@PatchMapping")
-			|| line.startsWith("@RequestMapping");
-	}
-
-	private Optional<MappingAnnotation> parseMappingAnnotation(String annotationBlock) {
-		if (!annotationBlock.startsWith("@")) {
-			return Optional.empty();
-		}
-
-		return parseShortcutMapping(annotationBlock, "@GetMapping", "GET")
-			.or(() -> parseShortcutMapping(annotationBlock, "@PostMapping", "POST"))
-			.or(() -> parseShortcutMapping(annotationBlock, "@PutMapping", "PUT"))
-			.or(() -> parseShortcutMapping(annotationBlock, "@DeleteMapping", "DELETE"))
-			.or(() -> parseShortcutMapping(annotationBlock, "@PatchMapping", "PATCH"))
-			.or(() -> parseRequestMapping(annotationBlock));
-	}
-
-	private Optional<MappingAnnotation> parseShortcutMapping(String annotationBlock, String annotation, String method) {
-		if (!annotationBlock.contains(annotation)) {
-			return Optional.empty();
-		}
-
-		return Optional.of(new MappingAnnotation(method, true, extractAnnotationPath(annotationBlock).orElse("")));
-	}
-
-	private Optional<MappingAnnotation> parseRequestMapping(String annotationBlock) {
-		if (!annotationBlock.contains("@RequestMapping")) {
-			return Optional.empty();
-		}
-
-		Matcher methodMatcher = REQUEST_METHOD_PATTERN.matcher(annotationBlock);
-		String method = "UNSPECIFIED";
-		boolean methodSpecified = false;
-		if (methodMatcher.find()) {
-			method = methodMatcher.group(1);
-			methodSpecified = true;
-		}
-
-		return Optional.of(new MappingAnnotation(method, methodSpecified, extractAnnotationPath(annotationBlock).orElse("")));
-	}
-
-	private Optional<String> findLastAnnotationPath(String source, String annotation) {
-		int index = source.lastIndexOf(annotation);
-		if (index < 0) {
-			return Optional.empty();
-		}
-
-		int endIndex = source.indexOf("\n", index);
-		String annotationLine = endIndex < 0 ? source.substring(index) : source.substring(index, endIndex);
-		return extractAnnotationPath(annotationLine);
-	}
-
-	private Optional<String> extractAnnotationPath(String annotationLine) {
-		Matcher matcher = MAPPING_PATH_PATTERN.matcher(annotationLine);
-		if (!matcher.find()) {
-			return Optional.empty();
-		}
-
-		String namedPath = matcher.group(1);
-		return Optional.of(namedPath == null ? matcher.group(2) : namedPath);
-	}
-
-	private AnnotationBlock collectAnnotationBlock(List<String> lines, int startIndex) {
-		StringBuilder builder = new StringBuilder();
-		int depth = 0;
-		int endIndex = startIndex;
-		boolean started = false;
-
-		for (int index = startIndex; index < lines.size(); index += 1) {
-			String line = lines.get(index).trim();
-			if (!started && !line.startsWith("@")) {
-				break;
-			}
-			if (started && depth <= 0 && !line.startsWith("@") && !line.isBlank()) {
-				break;
-			}
-			if (!builder.isEmpty()) {
-				builder.append('\n');
-			}
-			builder.append(line);
-			depth += countChar(line, '(') - countChar(line, ')');
-			endIndex = index;
-			started = true;
-			if (depth <= 0 && !line.endsWith(",")) {
-				break;
-			}
-		}
-
-		return new AnnotationBlock(builder.toString(), endIndex);
-	}
-
-	private String collectAnnotationBlock(String source, int startIndex) {
-		StringBuilder builder = new StringBuilder();
-		int depth = 0;
-		boolean started = false;
-
-		for (int index = startIndex; index < source.length(); index += 1) {
-			char current = source.charAt(index);
-			builder.append(current);
-			if (current == '(') {
-				depth += 1;
-				started = true;
-			} else if (current == ')') {
-				depth -= 1;
-			}
-			if (current == '\n' && (!started || depth <= 0)) {
-				break;
-			}
-		}
-
-		return builder.toString();
-	}
-
-	private int countChar(String value, char target) {
-		int count = 0;
-		for (int index = 0; index < value.length(); index += 1) {
-			if (value.charAt(index) == target) {
-				count += 1;
-			}
-		}
-		return count;
 	}
 
 	private Optional<HandlerMetadata> findNextHandlerName(List<String> lines, int startIndex) {
@@ -823,9 +694,6 @@ public class SpringApiCatalogService {
 		return false;
 	}
 
-	private record MappingAnnotation(String method, boolean methodSpecified, String path) {
-	}
-
 	private record ControllerScan(
 		String controller,
 		String packageName,
@@ -841,6 +709,4 @@ public class SpringApiCatalogService {
 	private record HandlerMetadata(String name, int lineNumber) {
 	}
 
-	private record AnnotationBlock(String content, int endIndex) {
-	}
 }
