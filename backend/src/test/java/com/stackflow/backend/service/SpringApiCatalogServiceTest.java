@@ -256,6 +256,72 @@ class SpringApiCatalogServiceTest {
 	}
 
 	@Test
+	void groupsPackageSiblingClassesIntoControllerDomain(@TempDir Path projectRoot) throws IOException {
+		Files.writeString(projectRoot.resolve("build.gradle"), "plugins { id 'org.springframework.boot' version '4.1.0' }");
+		Path reportControllerRoot = projectRoot.resolve("src/main/java/com/example/board/controller");
+		Path boardRepositoryRoot = projectRoot.resolve("src/main/java/com/example/board/repository");
+		Path userRepositoryRoot = projectRoot.resolve("src/main/java/com/example/user/repository");
+		Files.createDirectories(reportControllerRoot);
+		Files.createDirectories(boardRepositoryRoot);
+		Files.createDirectories(userRepositoryRoot);
+		Files.writeString(reportControllerRoot.resolve("ReportController.java"), """
+			package com.example.board.controller;
+
+			import org.springframework.web.bind.annotation.GetMapping;
+			import org.springframework.web.bind.annotation.RestController;
+
+			@RestController
+			public class ReportController {
+				@GetMapping("/board/reports")
+				public String listReports() {
+					return "ok";
+				}
+			}
+			""");
+		Files.writeString(reportControllerRoot.resolve("AuditController.java"), """
+			package com.example.board.controller;
+
+			import org.springframework.web.bind.annotation.GetMapping;
+			import org.springframework.web.bind.annotation.RestController;
+
+			@RestController
+			public class AuditController {
+				@GetMapping("/board/audits")
+				public String listAudits() {
+					return "ok";
+				}
+			}
+			""");
+		Files.writeString(boardRepositoryRoot.resolve("PostRepository.java"), """
+			package com.example.board.repository;
+
+			public interface PostRepository {
+			}
+			""");
+		Files.writeString(userRepositoryRoot.resolve("UserRepository.java"), """
+			package com.example.user.repository;
+
+			public interface UserRepository {
+			}
+			""");
+
+		ProjectStructureResponse structure = springApiCatalogService.getProjectStructure(projectRoot.toString());
+		ProjectDomainResponse reportDomain = structure.domains().stream()
+			.filter(domain -> domain.id().equals("report"))
+			.findFirst()
+			.orElseThrow();
+
+		assertEquals(ProjectAnalysisStatus.SUCCESS, structure.analysisStatus());
+		assertTrue(reportDomain.layers().stream()
+			.anyMatch(layer -> layer.name().equals("Repository") && layer.classes().contains("PostRepository")));
+		assertFalse(reportDomain.layers().stream()
+			.anyMatch(layer -> layer.name().equals("Controller") && layer.classes().contains("AuditController")));
+		assertFalse(reportDomain.layers().stream()
+			.anyMatch(layer -> layer.name().equals("Repository") && layer.classes().contains("UserRepository")));
+		assertTrue(reportDomain.infrastructure().contains("Persistence"));
+	}
+
+	@Test
 	void detectsMultiLineRequestMappings(@TempDir Path projectRoot) throws IOException {
 		Files.writeString(projectRoot.resolve("build.gradle"), "plugins { id 'org.springframework.boot' version '4.1.0' }");
 		Path sourceRoot = projectRoot.resolve("src/main/java/com/example/order");
