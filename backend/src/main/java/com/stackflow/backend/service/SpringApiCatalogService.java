@@ -26,7 +26,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class SpringApiCatalogService {
 
-	private static final Pattern CLASS_NAME_PATTERN = Pattern.compile("\\bclass\\s+(\\w+)");
+	private static final Pattern TYPE_NAME_PATTERN = Pattern.compile("\\b(?:class|interface|record|enum)\\s+(\\w+)");
 	private static final Pattern METHOD_NAME_PATTERN = Pattern.compile("\\b(?:public|private|protected)\\s+[\\w<?>.,\\s]+\\s+(\\w+)\\s*\\(");
 	private static final Pattern PATH_VARIABLE_PATTERN = Pattern.compile("\\{([^}/]+)}");
 	private static final List<String> PROJECT_METADATA_FILES = List.of(
@@ -173,7 +173,7 @@ public class SpringApiCatalogService {
 			return Optional.empty();
 		}
 
-		String controller = extractClassName(source).orElse(javaFile.getFileName().toString().replace(".java", ""));
+		String controller = extractTypeName(source).orElse(javaFile.getFileName().toString().replace(".java", ""));
 		if (isInternalController(controller)) {
 			return Optional.empty();
 		}
@@ -235,8 +235,8 @@ public class SpringApiCatalogService {
 		return line.equals("@RestController") || line.startsWith("@RestController(");
 	}
 
-	private Optional<String> extractClassName(String source) {
-		Matcher matcher = CLASS_NAME_PATTERN.matcher(source);
+	private Optional<String> extractTypeName(String source) {
+		Matcher matcher = TYPE_NAME_PATTERN.matcher(source);
 		return matcher.find() ? Optional.of(matcher.group(1)) : Optional.empty();
 	}
 
@@ -346,15 +346,15 @@ public class SpringApiCatalogService {
 			return Optional.empty();
 		}
 
-		Optional<String> className = extractClassName(source);
-		if (className.isEmpty()) {
+		Optional<String> typeName = extractTypeName(source);
+		if (typeName.isEmpty()) {
 			return Optional.empty();
 		}
 
 		return Optional.of(new ClassMetadata(
-			className.get(),
+			typeName.get(),
 			extractPackageName(source).orElse(""),
-			classifyLayerType(className.get())
+			classifyLayerType(typeName.get())
 		));
 	}
 
