@@ -368,6 +368,40 @@ class SpringApiCatalogServiceTest {
 	}
 
 	@Test
+	void keepsPackagePrivateControllerClassRequestMappingAsBasePathOnly(@TempDir Path projectRoot) throws IOException {
+		Files.writeString(projectRoot.resolve("build.gradle"), "plugins { id 'org.springframework.boot' version '4.1.0' }");
+		Path sourceRoot = projectRoot.resolve("src/main/java/com/example/order");
+		Files.createDirectories(sourceRoot);
+		Files.writeString(sourceRoot.resolve("OrderController.java"), """
+			package com.example.order;
+
+			import org.springframework.web.bind.annotation.GetMapping;
+			import org.springframework.web.bind.annotation.RequestMapping;
+			import org.springframework.web.bind.annotation.RestController;
+
+			@RestController
+			@RequestMapping("/api/orders")
+			class OrderController {
+				@GetMapping("/{orderId}")
+				String getOrder() {
+					return "ok";
+				}
+			}
+			""");
+
+		ProjectStructureResponse structure = springApiCatalogService.getProjectStructure(projectRoot.toString());
+		ProjectDomainResponse orderDomain = structure.domains().stream()
+			.filter(domain -> domain.id().equals("order"))
+			.findFirst()
+			.orElseThrow();
+
+		assertEquals(ProjectAnalysisStatus.SUCCESS, structure.analysisStatus());
+		assertEquals(1, orderDomain.endpoints().size());
+		assertEquals("/api/orders/{orderId}", orderDomain.endpoints().getFirst().path());
+		assertFalse(orderDomain.endpoints().stream().anyMatch(item -> item.path().equals("/api/orders")));
+	}
+
+	@Test
 	void detectsMethodLevelRequestMappingWithoutExplicitMethod(@TempDir Path projectRoot) throws IOException {
 		Files.writeString(projectRoot.resolve("build.gradle"), "plugins { id 'org.springframework.boot' version '4.1.0' }");
 		Path sourceRoot = projectRoot.resolve("src/main/java/com/example/order");
