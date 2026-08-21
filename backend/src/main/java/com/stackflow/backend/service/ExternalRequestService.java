@@ -3,8 +3,10 @@ package com.stackflow.backend.service;
 import com.stackflow.backend.dto.ExternalRequestPayload;
 import com.stackflow.backend.dto.ExternalRequestResponse;
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.URI;
 import java.net.URLEncoder;
+import java.net.UnknownHostException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -21,6 +23,8 @@ public class ExternalRequestService {
 
 	private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(3);
 	private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(8);
+	private static final String ALLOW_PRIVATE_TARGETS_PROPERTY = "stackflow.external.allow-private-targets";
+	private static final String ALLOW_PRIVATE_TARGETS_ENV = "STACKFLOW_ALLOW_PRIVATE_TARGETS";
 	private static final Set<String> BLOCKED_HEADERS = Set.of(
 		"connection",
 		"content-length",
@@ -31,15 +35,22 @@ public class ExternalRequestService {
 	);
 
 	private final HttpClient httpClient;
+	private final boolean allowPrivateTargets;
 
 	public ExternalRequestService() {
 		this(HttpClient.newBuilder()
-			.connectTimeout(CONNECT_TIMEOUT)
-			.build());
+				.connectTimeout(CONNECT_TIMEOUT)
+				.build(),
+			resolveAllowPrivateTargets());
 	}
 
 	ExternalRequestService(HttpClient httpClient) {
+		this(httpClient, resolveAllowPrivateTargets());
+	}
+
+	ExternalRequestService(HttpClient httpClient, boolean allowPrivateTargets) {
 		this.httpClient = httpClient;
+		this.allowPrivateTargets = allowPrivateTargets;
 	}
 
 	public ExternalRequestResponse execute(ExternalRequestPayload payload) {
@@ -99,7 +110,9 @@ public class ExternalRequestService {
 			normalizedPath = "/" + normalizedPath;
 		}
 		String queryString = buildQueryString(queryParams);
-		return URI.create(normalizedBase + normalizedPath + queryString);
+		URI targetUri = URI.create(normalizedBase + normalizedPath + queryString);
+		validateTargetHost(targetUri);
+		return targetUri;
 	}
 
 	private HttpRequest buildRequest(
@@ -165,6 +178,43 @@ public class ExternalRequestService {
 		return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
 	}
 
+	private void validateTargetHost(URI targetUri) {
+		String host = targetUri.getHost();
+		if (host == null || host.isBlank()) {
+			throw new IllegalArgumentException("Target URL host is required.");
+		}
+		if (allowPrivateTargets) {
+			return;
+		}
+		if (host.equalsIgnoreCase("localhost")) {
+			throw new IllegalArgumentException("Private target URLs are blocked by default.");
+		}
+
+		try {
+			for (InetAddress address : InetAddress.getAllByName(host)) {
+				if (isPrivateTargetAddress(address)) {
+					throw new IllegalArgumentException("Private target URLs are blocked by default.");
+				}
+			}
+		} catch (UnknownHostException exception) {
+			throw new IllegalArgumentException("Target URL host could not be resolved.");
+		}
+	}
+
+	private boolean isPrivateTargetAddress(InetAddress address) {
+		return address.isAnyLocalAddress()
+			|| address.isLoopbackAddress()
+			|| address.isLinkLocalAddress()
+			|| address.isSiteLocalAddress()
+			|| address.isMulticastAddress()
+			|| isUniqueLocalIpv6Address(address);
+	}
+
+	private boolean isUniqueLocalIpv6Address(InetAddress address) {
+		byte[] bytes = address.getAddress();
+		return bytes.length == 16 && (bytes[0] & 0xfe) == 0xfc;
+	}
+
 	private boolean shouldUseBody(String method, String requestBody) {
 		return requestBody != null
 			&& !requestBody.isBlank()
@@ -194,5 +244,13 @@ public class ExternalRequestService {
 		catch (IllegalArgumentException ex) {
 			return "";
 		}
+	}
+
+	private static boolean resolveAllowPrivateTargets() {
+		String propertyValue = System.getProperty(ALLOW_PRIVATE_TARGETS_PROPERTY);
+		if (propertyValue != null) {
+			return Boolean.parseBoolean(propertyValue);
+		}
+		return Boolean.parseBoolean(System.getenv(ALLOW_PRIVATE_TARGETS_ENV));
 	}
 }

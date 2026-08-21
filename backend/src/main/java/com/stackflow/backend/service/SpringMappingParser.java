@@ -8,7 +8,8 @@ import java.util.regex.Pattern;
 
 final class SpringMappingParser {
 
-	private static final Pattern MAPPING_PATH_PATTERN = Pattern.compile("(?:value|path)\\s*=\\s*\"([^\"]*)\"|\"([^\"]*)\"");
+	private static final Pattern NAMED_MAPPING_PATH_PATTERN = Pattern.compile("(?:value|path)\\s*=\\s*\"([^\"]*)\"");
+	private static final Pattern POSITIONAL_MAPPING_PATH_PATTERN = Pattern.compile("^\\s*\"([^\"]*)\"");
 	private static final Pattern REQUEST_METHOD_PATTERN = Pattern.compile("RequestMethod\\.(GET|POST|PUT|DELETE|PATCH)");
 
 	boolean startsMappingAnnotation(String line) {
@@ -64,13 +65,27 @@ final class SpringMappingParser {
 	}
 
 	Optional<String> extractPath(String annotationBlock) {
-		Matcher matcher = MAPPING_PATH_PATTERN.matcher(annotationBlock);
-		if (!matcher.find()) {
-			return Optional.empty();
+		Matcher namedPathMatcher = NAMED_MAPPING_PATH_PATTERN.matcher(annotationBlock);
+		if (namedPathMatcher.find()) {
+			return Optional.of(namedPathMatcher.group(1));
 		}
 
-		String namedPath = matcher.group(1);
-		return Optional.of(namedPath == null ? matcher.group(2) : namedPath);
+		return extractAnnotationArguments(annotationBlock)
+			.flatMap(arguments -> {
+				Matcher positionalPathMatcher = POSITIONAL_MAPPING_PATH_PATTERN.matcher(arguments);
+				return positionalPathMatcher.find()
+					? Optional.of(positionalPathMatcher.group(1))
+					: Optional.empty();
+			});
+	}
+
+	private Optional<String> extractAnnotationArguments(String annotationBlock) {
+		int openIndex = annotationBlock.indexOf('(');
+		int closeIndex = annotationBlock.lastIndexOf(')');
+		if (openIndex < 0 || closeIndex <= openIndex) {
+			return Optional.empty();
+		}
+		return Optional.of(annotationBlock.substring(openIndex + 1, closeIndex));
 	}
 
 	private List<MappingAnnotation> parseShortcutMapping(String annotationBlock, String annotation, String method) {

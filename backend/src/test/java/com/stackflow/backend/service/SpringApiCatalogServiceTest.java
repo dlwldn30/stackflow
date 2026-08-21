@@ -538,4 +538,53 @@ class SpringApiCatalogServiceTest {
 		assertTrue(rootApis.stream().anyMatch(item -> !item.methodSpecified()));
 		assertTrue(rootApis.stream().anyMatch(item -> item.method().equals("UNSPECIFIED")));
 	}
+
+	@Test
+	void doesNotUseRequestMappingOptionsAsEndpointPath(@TempDir Path projectRoot) throws IOException {
+		Files.writeString(projectRoot.resolve("build.gradle"), "plugins { id 'org.springframework.boot' version '4.1.0' }");
+		Path sourceRoot = projectRoot.resolve("src/main/java/com/example/order");
+		Files.createDirectories(sourceRoot);
+		Files.writeString(sourceRoot.resolve("OrderController.java"), """
+			package com.example.order;
+
+			import org.springframework.web.bind.annotation.RequestMapping;
+			import org.springframework.web.bind.annotation.RequestMethod;
+			import org.springframework.web.bind.annotation.RestController;
+
+			@RestController
+			@RequestMapping("/api/orders")
+			public class OrderController {
+				@RequestMapping(
+					method = RequestMethod.GET,
+					produces = "application/json"
+				)
+				public String listOrders() {
+					return "ok";
+				}
+
+				@RequestMapping(
+					params = "summary=true"
+				)
+				public String summarizeOrders() {
+					return "ok";
+				}
+			}
+			""");
+
+		ProjectStructureResponse structure = springApiCatalogService.getProjectStructure(projectRoot.toString());
+		ProjectDomainResponse orderDomain = structure.domains().stream()
+			.filter(domain -> domain.id().equals("order"))
+			.findFirst()
+			.orElseThrow();
+		Set<String> routes = orderDomain.endpoints().stream()
+			.map(item -> item.method() + " " + item.path())
+			.collect(Collectors.toSet());
+
+		assertEquals(ProjectAnalysisStatus.SUCCESS, structure.analysisStatus());
+		assertEquals(2, orderDomain.endpoints().size());
+		assertTrue(routes.contains("GET /api/orders"));
+		assertTrue(routes.contains("UNSPECIFIED /api/orders"));
+		assertFalse(orderDomain.endpoints().stream().anyMatch(item -> item.path().contains("application/json")));
+		assertFalse(orderDomain.endpoints().stream().anyMatch(item -> item.path().contains("summary=true")));
+	}
 }

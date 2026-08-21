@@ -1,6 +1,7 @@
 package com.stackflow.backend.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.stackflow.backend.dto.ExternalRequestEntry;
 import com.stackflow.backend.dto.ExternalRequestPayload;
@@ -11,7 +12,8 @@ import org.junit.jupiter.api.Test;
 
 class ExternalRequestServiceTest {
 
-	private final ExternalRequestService externalRequestService = new ExternalRequestService(HttpClient.newHttpClient());
+	private final ExternalRequestService externalRequestService = new ExternalRequestService(HttpClient.newHttpClient(), true);
+	private final ExternalRequestService restrictedExternalRequestService = new ExternalRequestService(HttpClient.newHttpClient(), false);
 
 	@Test
 	void buildsTargetUriFromBaseUrlAndPath() {
@@ -57,5 +59,44 @@ class ExternalRequestServiceTest {
 		assertEquals("ERROR", response.resultStatus());
 		assertEquals(0, response.httpStatus());
 		assertEquals("Unsupported method: TRACE", response.errorMessage());
+	}
+
+	@Test
+	void rejectsPrivateTargetUrlsByDefault() {
+		IllegalArgumentException exception = assertThrows(
+			IllegalArgumentException.class,
+			() -> restrictedExternalRequestService.buildTargetUri("http://127.0.0.1:8081", "/api/products")
+		);
+
+		assertEquals("Private target URLs are blocked by default.", exception.getMessage());
+	}
+
+	@Test
+	void rejectsLocalhostTargetUrlsByDefault() {
+		ExternalRequestResponse response = restrictedExternalRequestService.execute(
+			new ExternalRequestPayload("http://localhost:8081", "GET", "/api/products", List.of(), List.of(), null)
+		);
+
+		assertEquals("ERROR", response.resultStatus());
+		assertEquals(0, response.httpStatus());
+		assertEquals("Private target URLs are blocked by default.", response.errorMessage());
+	}
+
+	@Test
+	void rejectsCloudMetadataTargetUrlsByDefault() {
+		IllegalArgumentException exception = assertThrows(
+			IllegalArgumentException.class,
+			() -> restrictedExternalRequestService.buildTargetUri("http://169.254.169.254", "/latest/meta-data")
+		);
+
+		assertEquals("Private target URLs are blocked by default.", exception.getMessage());
+	}
+
+	@Test
+	void allowsPublicTargetUrlsByDefault() {
+		assertEquals(
+			"http://93.184.216.34/api/products",
+			restrictedExternalRequestService.buildTargetUri("http://93.184.216.34", "/api/products").toString()
+		);
 	}
 }

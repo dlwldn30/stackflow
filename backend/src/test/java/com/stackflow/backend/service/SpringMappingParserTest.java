@@ -86,6 +86,20 @@ class SpringMappingParserTest {
 	}
 
 	@Test
+	void doesNotTreatMappingOptionsAsPositionalPath() {
+		SpringMappingParser.MappingAnnotation mapping = parser.parse("""
+			@RequestMapping(
+				method = RequestMethod.GET,
+				produces = "application/json"
+			)
+			""").getFirst();
+
+		assertEquals("GET", mapping.method());
+		assertTrue(mapping.methodSpecified());
+		assertEquals("", mapping.path());
+	}
+
+	@Test
 	void ignoresNonMappingAnnotationBlocks() {
 		assertTrue(parser.parse("@Autowired").isEmpty());
 		assertFalse(parser.startsMappingAnnotation("@Autowired"));
