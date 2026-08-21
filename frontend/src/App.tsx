@@ -365,7 +365,7 @@ function App() {
   const [productId, setProductId] = useState('1001')
   const [projectPath, setProjectPath] = useState('')
   const [selectedFolderInfo, setSelectedFolderInfo] = useState<SelectedFolderInfo | null>(null)
-  const [targetBaseUrl, setTargetBaseUrl] = useState('http://localhost:8081')
+  const [targetBaseUrl, setTargetBaseUrl] = useState('')
   const [queryParams, setQueryParams] = useState<ExternalRequestEntry[]>([
     createRequestEntry('page', '1', false),
   ])
@@ -1285,14 +1285,14 @@ function App() {
                     <div className="request-block request-block--basic">
                       <div className="request-block__head">
                         <span>Basic request</span>
-                        <small>Choose the target app and required path value.</small>
+                        <small>Use a public target URL, or enable private targets on the backend for local apps.</small>
                       </div>
                       <label className="field">
                         <span>Target base URL</span>
                         <input
                           value={targetBaseUrl}
                           onChange={(event) => setTargetBaseUrl(event.target.value)}
-                          placeholder="http://localhost:8081"
+                          placeholder="https://api.example.com"
                         />
                       </label>
                       {selectedApi.requiresProductId ? (
@@ -2413,7 +2413,7 @@ function buildExternalTargetPreview(targetBaseUrl: string, path: string, queryPa
   })
 
   const queryString = search.toString()
-  return `${normalizedBase || 'http://localhost:8081'}${normalizedPath}${queryString ? `?${queryString}` : ''}`
+  return `${normalizedBase || 'https://api.example.com'}${normalizedPath}${queryString ? `?${queryString}` : ''}`
 }
 
 function formatResponseBody(responseBody: string) {
