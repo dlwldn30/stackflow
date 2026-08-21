@@ -455,6 +455,47 @@ class SpringApiCatalogServiceTest {
 	}
 
 	@Test
+	void detectsEachMethodFromRequestMappingMethodArray(@TempDir Path projectRoot) throws IOException {
+		Files.writeString(projectRoot.resolve("build.gradle"), "plugins { id 'org.springframework.boot' version '4.1.0' }");
+		Path sourceRoot = projectRoot.resolve("src/main/java/com/example/order");
+		Files.createDirectories(sourceRoot);
+		Files.writeString(sourceRoot.resolve("OrderController.java"), """
+			package com.example.order;
+
+			import org.springframework.web.bind.annotation.RequestMapping;
+			import org.springframework.web.bind.annotation.RequestMethod;
+			import org.springframework.web.bind.annotation.RestController;
+
+			@RestController
+			@RequestMapping("/api/orders")
+			public class OrderController {
+				@RequestMapping(
+					path = "/{orderId}",
+					method = {RequestMethod.GET, RequestMethod.POST}
+				)
+				public String handleOrder() {
+					return "ok";
+				}
+			}
+			""");
+
+		ProjectStructureResponse structure = springApiCatalogService.getProjectStructure(projectRoot.toString());
+		ProjectDomainResponse orderDomain = structure.domains().stream()
+			.filter(domain -> domain.id().equals("order"))
+			.findFirst()
+			.orElseThrow();
+		Set<String> routes = orderDomain.endpoints().stream()
+			.map(item -> item.method() + " " + item.path())
+			.collect(Collectors.toSet());
+
+		assertEquals(ProjectAnalysisStatus.SUCCESS, structure.analysisStatus());
+		assertEquals(2, orderDomain.endpoints().size());
+		assertTrue(routes.contains("GET /api/orders/{orderId}"));
+		assertTrue(routes.contains("POST /api/orders/{orderId}"));
+		assertTrue(orderDomain.endpoints().stream().allMatch(ApiCatalogItemResponse::methodSpecified));
+	}
+
+	@Test
 	void detectsMethodLevelRequestMappingThatUsesOnlyClassLevelBasePath(@TempDir Path projectRoot) throws IOException {
 		Files.writeString(projectRoot.resolve("build.gradle"), "plugins { id 'org.springframework.boot' version '4.1.0' }");
 		Path sourceRoot = projectRoot.resolve("src/main/java/com/example/order");

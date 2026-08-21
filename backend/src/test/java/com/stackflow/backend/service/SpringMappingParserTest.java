@@ -17,7 +17,7 @@ class SpringMappingParserTest {
 			@GetMapping(
 				path = "/products/{productId}"
 			)
-			""").orElseThrow();
+			""").getFirst();
 
 		assertEquals("GET", mapping.method());
 		assertTrue(mapping.methodSpecified());
@@ -51,7 +51,7 @@ class SpringMappingParserTest {
 				value = "/orders/{orderId}",
 				method = RequestMethod.PATCH
 			)
-			""").orElseThrow();
+			""").getFirst();
 
 		assertEquals("PATCH", mapping.method());
 		assertTrue(mapping.methodSpecified());
@@ -59,10 +59,26 @@ class SpringMappingParserTest {
 	}
 
 	@Test
+	void parsesRequestMappingWithMultipleExplicitMethods() {
+		List<SpringMappingParser.MappingAnnotation> mappings = parser.parse("""
+			@RequestMapping(
+				value = "/orders/{orderId}",
+				method = {RequestMethod.GET, RequestMethod.POST}
+			)
+			""");
+
+		assertEquals(2, mappings.size());
+		assertEquals("GET", mappings.get(0).method());
+		assertEquals("POST", mappings.get(1).method());
+		assertTrue(mappings.stream().allMatch(SpringMappingParser.MappingAnnotation::methodSpecified));
+		assertTrue(mappings.stream().allMatch(mapping -> mapping.path().equals("/orders/{orderId}")));
+	}
+
+	@Test
 	void parsesRequestMappingWithoutExplicitMethodAsAnalysisOnly() {
 		SpringMappingParser.MappingAnnotation mapping = parser.parse("""
 			@RequestMapping(path = "/orders/summary")
-			""").orElseThrow();
+			""").getFirst();
 
 		assertEquals("UNSPECIFIED", mapping.method());
 		assertFalse(mapping.methodSpecified());
