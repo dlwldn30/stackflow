@@ -196,8 +196,8 @@ public class SpringApiCatalogService {
 			}
 
 			SpringMappingParser.AnnotationBlock annotationBlock = mappingParser.collectAnnotationBlock(lines, index);
-			Optional<SpringMappingParser.MappingAnnotation> mapping = mappingParser.parse(annotationBlock.content());
-			if (mapping.isEmpty()) {
+			List<SpringMappingParser.MappingAnnotation> mappings = mappingParser.parse(annotationBlock.content());
+			if (mappings.isEmpty()) {
 				continue;
 			}
 
@@ -206,21 +206,23 @@ public class SpringApiCatalogService {
 				continue;
 			}
 
-			String path = normalizePath(basePath, mapping.get().path());
-			List<String> pathVariables = extractPathVariables(path);
-			catalog.add(new ApiCatalogItemResponse(
-				buildId(mapping.get().method(), path, controller, handler.get().name()),
-				mapping.get().method(),
-				mapping.get().methodSpecified(),
-				path,
-				controller,
-				handler.get().name(),
-				classifyRequestType(mapping.get().method(), path, handler.get().name()),
-				!pathVariables.isEmpty(),
-				pathVariables,
-				sourceFile,
-				handler.get().lineNumber()
-			));
+			for (SpringMappingParser.MappingAnnotation mapping : mappings) {
+				String path = normalizePath(basePath, mapping.path());
+				List<String> pathVariables = extractPathVariables(path);
+				catalog.add(new ApiCatalogItemResponse(
+					buildId(mapping.method(), path, controller, handler.get().name()),
+					mapping.method(),
+					mapping.methodSpecified(),
+					path,
+					controller,
+					handler.get().name(),
+					classifyRequestType(mapping.method(), path, handler.get().name()),
+					!pathVariables.isEmpty(),
+					pathVariables,
+					sourceFile,
+					handler.get().lineNumber()
+				));
+			}
 			index = annotationBlock.endIndex();
 		}
 

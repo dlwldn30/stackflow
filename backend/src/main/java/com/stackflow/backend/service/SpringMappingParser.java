@@ -1,5 +1,6 @@
 package com.stackflow.backend.service;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.regex.Matcher;
@@ -48,17 +49,18 @@ final class SpringMappingParser {
 		return new AnnotationBlock(builder.toString(), endIndex);
 	}
 
-	Optional<MappingAnnotation> parse(String annotationBlock) {
+	List<MappingAnnotation> parse(String annotationBlock) {
 		if (!annotationBlock.startsWith("@")) {
-			return Optional.empty();
+			return List.of();
 		}
 
-		return parseShortcutMapping(annotationBlock, "@GetMapping", "GET")
-			.or(() -> parseShortcutMapping(annotationBlock, "@PostMapping", "POST"))
-			.or(() -> parseShortcutMapping(annotationBlock, "@PutMapping", "PUT"))
-			.or(() -> parseShortcutMapping(annotationBlock, "@DeleteMapping", "DELETE"))
-			.or(() -> parseShortcutMapping(annotationBlock, "@PatchMapping", "PATCH"))
-			.or(() -> parseRequestMapping(annotationBlock));
+		for (MappingShortcut shortcut : MappingShortcut.values()) {
+			List<MappingAnnotation> mappings = parseShortcutMapping(annotationBlock, shortcut.annotation(), shortcut.method());
+			if (!mappings.isEmpty()) {
+				return mappings;
+			}
+		}
+		return parseRequestMapping(annotationBlock);
 	}
 
 	Optional<String> extractPath(String annotationBlock) {
@@ -71,28 +73,30 @@ final class SpringMappingParser {
 		return Optional.of(namedPath == null ? matcher.group(2) : namedPath);
 	}
 
-	private Optional<MappingAnnotation> parseShortcutMapping(String annotationBlock, String annotation, String method) {
+	private List<MappingAnnotation> parseShortcutMapping(String annotationBlock, String annotation, String method) {
 		if (!annotationBlock.contains(annotation)) {
-			return Optional.empty();
+			return List.of();
 		}
 
-		return Optional.of(new MappingAnnotation(method, true, extractPath(annotationBlock).orElse("")));
+		return List.of(new MappingAnnotation(method, true, extractPath(annotationBlock).orElse("")));
 	}
 
-	private Optional<MappingAnnotation> parseRequestMapping(String annotationBlock) {
+	private List<MappingAnnotation> parseRequestMapping(String annotationBlock) {
 		if (!annotationBlock.contains("@RequestMapping")) {
-			return Optional.empty();
+			return List.of();
 		}
 
 		Matcher methodMatcher = REQUEST_METHOD_PATTERN.matcher(annotationBlock);
-		String method = "UNSPECIFIED";
-		boolean methodSpecified = false;
-		if (methodMatcher.find()) {
-			method = methodMatcher.group(1);
-			methodSpecified = true;
+		List<MappingAnnotation> mappings = new ArrayList<>();
+		String path = extractPath(annotationBlock).orElse("");
+		while (methodMatcher.find()) {
+			mappings.add(new MappingAnnotation(methodMatcher.group(1), true, path));
 		}
 
-		return Optional.of(new MappingAnnotation(method, methodSpecified, extractPath(annotationBlock).orElse("")));
+		if (mappings.isEmpty()) {
+			return List.of(new MappingAnnotation("UNSPECIFIED", false, path));
+		}
+		return List.copyOf(mappings);
 	}
 
 	private int countChar(String value, char target) {
@@ -109,5 +113,29 @@ final class SpringMappingParser {
 	}
 
 	record AnnotationBlock(String content, int endIndex) {
+	}
+
+	private enum MappingShortcut {
+		GET("@GetMapping", "GET"),
+		POST("@PostMapping", "POST"),
+		PUT("@PutMapping", "PUT"),
+		DELETE("@DeleteMapping", "DELETE"),
+		PATCH("@PatchMapping", "PATCH");
+
+		private final String annotation;
+		private final String method;
+
+		MappingShortcut(String annotation, String method) {
+			this.annotation = annotation;
+			this.method = method;
+		}
+
+		String annotation() {
+			return annotation;
+		}
+
+		String method() {
+			return method;
+		}
 	}
 }
