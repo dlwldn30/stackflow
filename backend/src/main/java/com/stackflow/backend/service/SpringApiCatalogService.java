@@ -28,7 +28,8 @@ import org.springframework.stereotype.Service;
 public class SpringApiCatalogService {
 
 	private static final Pattern TYPE_NAME_PATTERN = Pattern.compile("\\b(?:class|interface|record|enum)\\s+(\\w+)");
-	private static final Pattern METHOD_NAME_PATTERN = Pattern.compile("\\b(?:public|private|protected)\\s+[\\w<?>.,\\s]+\\s+(\\w+)\\s*\\(");
+	private static final Pattern TYPE_DECLARATION_PATTERN = Pattern.compile("\\b(?:class|interface|record|enum)\\s+\\w+");
+	private static final Pattern METHOD_NAME_PATTERN = Pattern.compile("\\b(?:(?:public|private|protected)\\s+)?[\\w<?>.,\\s]+\\s+(\\w+)\\s*\\(");
 	private static final Pattern PATH_VARIABLE_PATTERN = Pattern.compile("\\{([^}/]+)}");
 	private static final List<String> PROJECT_METADATA_FILES = List.of(
 		"build.gradle",
@@ -260,7 +261,7 @@ public class SpringApiCatalogService {
 
 	private int findClassDeclarationIndex(List<String> lines) {
 		for (int index = 0; index < lines.size(); index += 1) {
-			if (lines.get(index).contains(" class ")) {
+			if (TYPE_DECLARATION_PATTERN.matcher(lines.get(index)).find()) {
 				return index;
 			}
 		}
