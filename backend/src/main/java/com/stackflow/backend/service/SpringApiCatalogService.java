@@ -1,6 +1,7 @@
 package com.stackflow.backend.service;
 
 import com.stackflow.backend.dto.ApiCatalogItemResponse;
+import com.stackflow.backend.dto.AnalysisCoverageResponse;
 import com.stackflow.backend.dto.ProjectAnalysisStatus;
 import com.stackflow.backend.dto.ProjectControllerResponse;
 import com.stackflow.backend.dto.ProjectDomainResponse;
@@ -9,7 +10,10 @@ import com.stackflow.backend.dto.ProjectLayerResponse;
 import com.stackflow.backend.dto.ProjectStructureResponse;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -32,6 +36,13 @@ public class SpringApiCatalogService {
 	private static final Pattern TYPE_DECLARATION_PATTERN = Pattern.compile("\\b(?:class|interface|record|enum)\\s+\\w+");
 	private static final Pattern METHOD_NAME_PATTERN = Pattern.compile("\\b(?:(?:public|private|protected)\\s+)?[\\w<?>.,\\s]+\\s+(\\w+)\\s*\\(");
 	private static final Pattern PATH_VARIABLE_PATTERN = Pattern.compile("\\{([^}/]+)}");
+	private static final Pattern UNSUPPORTED_MAPPING_PATTERN = Pattern.compile("@(\\w*Mapping)\\b");
+	private static final int MAX_SOURCE_ROOT_DEPTH = 12;
+	private static final int MAX_JAVA_FILES = 20_000;
+	private static final Set<String> EXCLUDED_DIRECTORIES = Set.of(".git", "build", "target", "out", "node_modules");
+	private static final Set<String> SUPPORTED_MAPPING_ANNOTATIONS = Set.of(
+		"RequestMapping", "GetMapping", "PostMapping", "PutMapping", "DeleteMapping", "PatchMapping"
+	);
 	private static final List<String> PROJECT_METADATA_FILES = List.of(
 		"build.gradle",
 		"build.gradle.kts",
@@ -47,15 +58,14 @@ public class SpringApiCatalogService {
 
 	public List<ApiCatalogItemResponse> getApiCatalog() {
 		Path projectRoot = resolveProjectRoot(null);
-		Path sourceRoot = resolveSourceRoot(projectRoot);
-		if (!Files.exists(sourceRoot)) {
+		List<Path> sourceRoots = discoverSourceRoots(projectRoot);
+		if (sourceRoots.isEmpty()) {
 			return List.of();
 		}
 
-		try (Stream<Path> paths = Files.walk(sourceRoot)) {
-			return paths
-				.filter(path -> path.toString().endsWith(".java"))
-				.flatMap(path -> scanController(sourceRoot, path).stream())
+		try {
+			return collectJavaFiles(sourceRoots).files().stream()
+				.flatMap(path -> scanController(findSourceRoot(sourceRoots, path), path).stream())
 				.flatMap(scan -> scan.endpoints().stream())
 				.sorted(Comparator.comparing(ApiCatalogItemResponse::path).thenComparing(ApiCatalogItemResponse::method))
 				.toList();
@@ -70,37 +80,45 @@ public class SpringApiCatalogService {
 
 	public ProjectStructureResponse getProjectStructure(String projectPath) {
 		Path projectRoot = resolveProjectRoot(projectPath);
-		Path sourceRoot = resolveSourceRoot(projectRoot);
-		if (!Files.exists(sourceRoot)) {
+		List<Path> sourceRoots = discoverSourceRoots(projectRoot);
+		if (sourceRoots.isEmpty()) {
+			AnalysisCoverageResponse coverage = new AnalysisCoverageResponse(
+				List.of(), 0, 0, 0, 0, discoverUnsupportedSourceWarnings(projectRoot)
+			);
 			return buildProjectStructure(
 				projectRoot,
-				sourceRoot,
+				null,
 				detectFramework(projectRoot),
 				relativizeProjectPath(projectRoot, detectFrameworkEvidencePath(projectRoot)).orElse("No Gradle or Maven build file was detected."),
 				ProjectAnalysisStatus.FAILED,
-				"No Java source root was found under the provided project path."
+				"No Java source root was found under the provided project path.",
+				coverage
 			);
 		}
 
-		try (Stream<Path> paths = Files.walk(sourceRoot)) {
-			List<Path> javaFiles = paths
-				.filter(path -> path.toString().endsWith(".java"))
-				.toList();
+		Path primarySourceRoot = sourceRoots.getFirst();
+		try {
+			JavaFileCollection javaFileCollection = collectJavaFiles(sourceRoots);
+			List<Path> javaFiles = javaFileCollection.files();
 			if (javaFiles.isEmpty()) {
+				AnalysisCoverageResponse coverage = buildCoverage(
+					projectRoot, sourceRoots, javaFiles, List.of(), List.of(), javaFileCollection.limitReached()
+				);
 				return buildProjectStructure(
 					projectRoot,
-					sourceRoot,
+					primarySourceRoot,
 					detectFramework(projectRoot),
 					relativizeProjectPath(projectRoot, detectFrameworkEvidencePath(projectRoot)).orElse("No Gradle or Maven build file was detected."),
 					ProjectAnalysisStatus.EMPTY,
-					"No Java files were found in the detected source root."
+					"No Java files were found in the detected source roots.",
+					coverage
 				);
 			}
 			String framework = detectFramework(projectRoot);
 			String frameworkEvidence = relativizeProjectPath(projectRoot, detectFrameworkEvidencePath(projectRoot))
 				.orElse("No Gradle or Maven build file was detected.");
 			List<ControllerScan> controllers = javaFiles.stream()
-				.map(javaFile -> scanController(sourceRoot, javaFile))
+				.map(javaFile -> scanController(findSourceRoot(sourceRoots, javaFile), javaFile))
 				.flatMap(Optional::stream)
 				.sorted(Comparator.comparing(ControllerScan::controller))
 				.toList();
@@ -116,28 +134,37 @@ public class SpringApiCatalogService {
 			ProjectAnalysisStatus analysisStatus = endpoints.isEmpty()
 				? ProjectAnalysisStatus.EMPTY
 				: ProjectAnalysisStatus.SUCCESS;
+			AnalysisCoverageResponse coverage = buildCoverage(
+				projectRoot, sourceRoots, javaFiles, controllers, endpoints, javaFileCollection.limitReached()
+			);
 
 			return buildProjectStructure(
 				projectRoot,
-				sourceRoot,
+				primarySourceRoot,
 				resolveProjectName(projectRoot),
 				framework,
 				frameworkEvidence,
 				analysisStatus,
-				buildAnalysisMessage(projectRoot, analysisStatus, controllers.size(), endpoints.size(), sourceRoot),
+				buildAnalysisMessage(analysisStatus, controllers.size(), endpoints.size(), coverage.sourceRoots()),
+				coverage,
 				detectInfrastructure(infrastructureDetails),
 				infrastructureDetails,
 				buildLayerSummary(classes),
 				buildDomains(projectRoot, controllers, classes, endpoints)
 			);
 		} catch (IOException exception) {
+			AnalysisCoverageResponse coverage = new AnalysisCoverageResponse(
+				sourceRoots.stream().map(root -> relativizeSourceRoot(projectRoot, root)).toList(),
+				0, 0, 0, 0, List.of("일부 프로젝트 파일을 읽지 못해 분석이 중단되었습니다.")
+			);
 			return buildProjectStructure(
 				projectRoot,
-				sourceRoot,
+				primarySourceRoot,
 				detectFramework(projectRoot),
 				relativizeProjectPath(projectRoot, detectFrameworkEvidencePath(projectRoot)).orElse("No Gradle or Maven build file was detected."),
 				ProjectAnalysisStatus.FAILED,
-				"Project files could not be read for Spring analysis."
+				"Project files could not be read for Spring analysis.",
+				coverage
 			);
 		}
 	}
@@ -150,17 +177,71 @@ public class SpringApiCatalogService {
 		return Path.of(projectPath).toAbsolutePath().normalize();
 	}
 
-	private Path resolveSourceRoot(Path projectRoot) {
-		if (projectRoot.endsWith(Path.of("src/main/java")) && Files.exists(projectRoot)) {
-			return projectRoot;
+	private List<Path> discoverSourceRoots(Path projectRoot) {
+		if (!Files.isDirectory(projectRoot)) {
+			return List.of();
+		}
+		if (projectRoot.endsWith(Path.of("src/main/java"))) {
+			return List.of(projectRoot);
 		}
 
-		Path direct = projectRoot.resolve("src/main/java");
-		if (Files.exists(direct)) {
-			return direct;
+		List<Path> roots = new ArrayList<>();
+		try {
+			Files.walkFileTree(projectRoot, Set.of(), MAX_SOURCE_ROOT_DEPTH, new SimpleFileVisitor<>() {
+				@Override
+				public FileVisitResult preVisitDirectory(Path directory, BasicFileAttributes attributes) {
+					if (!directory.equals(projectRoot) && isExcludedDirectory(directory)) {
+						return FileVisitResult.SKIP_SUBTREE;
+					}
+					if (directory.endsWith(Path.of("src/main/java"))) {
+						roots.add(directory);
+						return FileVisitResult.SKIP_SUBTREE;
+					}
+					return FileVisitResult.CONTINUE;
+				}
+			});
+		} catch (IOException exception) {
+			return List.of();
 		}
+		return roots.stream().sorted().toList();
+	}
 
-		return projectRoot.resolve("backend/src/main/java");
+	private boolean isExcludedDirectory(Path directory) {
+		Path fileName = directory.getFileName();
+		return fileName != null && EXCLUDED_DIRECTORIES.contains(fileName.toString());
+	}
+
+	private JavaFileCollection collectJavaFiles(List<Path> sourceRoots) throws IOException {
+		List<Path> files = new ArrayList<>();
+		boolean limitReached = false;
+		for (Path sourceRoot : sourceRoots) {
+			int remaining = MAX_JAVA_FILES - files.size();
+			if (remaining == 0) {
+				limitReached = true;
+				break;
+			}
+			try (Stream<Path> paths = Files.walk(sourceRoot)) {
+				List<Path> sourceFiles = paths
+					.filter(Files::isRegularFile)
+					.filter(path -> path.toString().endsWith(".java"))
+					.sorted()
+					.limit(remaining + 1L)
+					.toList();
+				files.addAll(sourceFiles.stream().limit(remaining).toList());
+				if (sourceFiles.size() > remaining) {
+					limitReached = true;
+					break;
+				}
+			}
+		}
+		return new JavaFileCollection(List.copyOf(files), limitReached);
+	}
+
+	private Path findSourceRoot(List<Path> sourceRoots, Path javaFile) {
+		return sourceRoots.stream()
+			.filter(javaFile::startsWith)
+			.max(Comparator.comparingInt(Path::getNameCount))
+			.orElse(javaFile.getParent());
 	}
 
 	private Optional<ControllerScan> scanController(Path sourceRoot, Path javaFile) {
@@ -172,7 +253,9 @@ public class SpringApiCatalogService {
 		}
 
 		List<String> lines = source.lines().toList();
-		if (lines.stream().map(String::trim).noneMatch(this::isRestControllerAnnotation)) {
+		int classDeclarationIndex = findClassDeclarationIndex(lines);
+		ControllerMode controllerMode = detectControllerMode(lines, classDeclarationIndex);
+		if (controllerMode == ControllerMode.NONE) {
 			return Optional.empty();
 		}
 
@@ -185,7 +268,6 @@ public class SpringApiCatalogService {
 		String packageName = extractPackageName(source).orElse("");
 		List<ApiCatalogItemResponse> catalog = new ArrayList<>();
 		String sourceFile = relativizeSourcePath(sourceRoot, javaFile);
-		int classDeclarationIndex = findClassDeclarationIndex(lines);
 
 		for (int index = 0; index < lines.size(); index += 1) {
 			String line = lines.get(index).trim();
@@ -203,7 +285,9 @@ public class SpringApiCatalogService {
 			}
 
 			Optional<HandlerMetadata> handler = findNextHandlerName(lines, annotationBlock.endIndex() + 1);
-			if (handler.isEmpty()) {
+			boolean methodResponseBody = hasResponseBodyBeforeMapping(lines, index, classDeclarationIndex)
+				|| handler.map(HandlerMetadata::responseBody).orElse(false);
+			if (handler.isEmpty() || (controllerMode == ControllerMode.METHOD_RESPONSE_BODY && !methodResponseBody)) {
 				continue;
 			}
 
@@ -242,6 +326,29 @@ public class SpringApiCatalogService {
 		return line.equals("@RestController") || line.startsWith("@RestController(");
 	}
 
+	private boolean isControllerAnnotation(String line) {
+		return line.equals("@Controller") || line.startsWith("@Controller(");
+	}
+
+	private boolean isResponseBodyAnnotation(String line) {
+		return line.equals("@ResponseBody") || line.startsWith("@ResponseBody(");
+	}
+
+	private ControllerMode detectControllerMode(List<String> lines, int classDeclarationIndex) {
+		List<String> classAnnotations = lines.subList(0, Math.min(classDeclarationIndex, lines.size())).stream()
+			.map(String::trim)
+			.toList();
+		if (classAnnotations.stream().anyMatch(this::isRestControllerAnnotation)) {
+			return ControllerMode.REST;
+		}
+		if (classAnnotations.stream().noneMatch(this::isControllerAnnotation)) {
+			return ControllerMode.NONE;
+		}
+		return classAnnotations.stream().anyMatch(this::isResponseBodyAnnotation)
+			? ControllerMode.REST
+			: ControllerMode.METHOD_RESPONSE_BODY;
+	}
+
 	private Optional<String> extractTypeName(String source) {
 		Matcher matcher = TYPE_NAME_PATTERN.matcher(source);
 		return matcher.find() ? Optional.of(matcher.group(1)) : Optional.empty();
@@ -274,11 +381,13 @@ public class SpringApiCatalogService {
 	}
 
 	private Optional<HandlerMetadata> findNextHandlerName(List<String> lines, int startIndex) {
+		boolean responseBody = false;
 		for (int index = startIndex; index < lines.size(); index += 1) {
 			String line = lines.get(index).trim();
+			responseBody = responseBody || isResponseBodyAnnotation(line);
 			Matcher matcher = METHOD_NAME_PATTERN.matcher(line);
 			if (matcher.find()) {
-				return Optional.of(new HandlerMetadata(matcher.group(1), index + 1));
+				return Optional.of(new HandlerMetadata(matcher.group(1), index + 1, responseBody));
 			}
 
 			if (line.startsWith("@")) {
@@ -287,6 +396,22 @@ public class SpringApiCatalogService {
 		}
 
 		return Optional.empty();
+	}
+
+	private boolean hasResponseBodyBeforeMapping(List<String> lines, int mappingIndex, int classDeclarationIndex) {
+		for (int index = mappingIndex - 1; index > classDeclarationIndex; index -= 1) {
+			String line = lines.get(index).trim();
+			if (line.isBlank()) {
+				continue;
+			}
+			if (isResponseBodyAnnotation(line)) {
+				return true;
+			}
+			if (!line.startsWith("@")) {
+				return false;
+			}
+		}
+		return false;
 	}
 
 	private String normalizePath(String basePath, String methodPath) {
@@ -613,17 +738,107 @@ public class SpringApiCatalogService {
 	}
 
 	private String buildAnalysisMessage(
-		Path projectRoot,
 		ProjectAnalysisStatus analysisStatus,
 		int controllerCount,
 		int endpointCount,
-		Path sourceRoot
+		List<String> sourceRoots
 	) {
-		String displaySourceRoot = relativizeSourceRoot(projectRoot, sourceRoot);
+		String sourceScope = sourceRoots.size() == 1
+			? sourceRoots.getFirst()
+			: sourceRoots.size() + " Java source roots";
 		if (analysisStatus == ProjectAnalysisStatus.EMPTY) {
-			return "Project files were read, but no REST API mappings were detected under " + displaySourceRoot + ".";
+			return "Project files were read, but no REST API mappings were detected under " + sourceScope + ".";
 		}
-		return "Detected " + controllerCount + " controller classes and " + endpointCount + " API mappings under " + displaySourceRoot + ".";
+		return "Detected " + controllerCount + " controller classes and " + endpointCount + " API mappings under " + sourceScope + ".";
+	}
+
+	private AnalysisCoverageResponse buildCoverage(
+		Path projectRoot,
+		List<Path> sourceRoots,
+		List<Path> javaFiles,
+		List<ControllerScan> controllers,
+		List<ApiCatalogItemResponse> endpoints,
+		boolean limitReached
+	) {
+		List<String> warnings = new ArrayList<>(discoverUnsupportedSourceWarnings(projectRoot));
+		boolean unsupportedMappings = javaFiles.stream().anyMatch(this::containsUnsupportedMappingAnnotation);
+		if (unsupportedMappings) {
+			warnings.add("합성 mapping annotation은 endpoint로 추측하지 않습니다. 표준 Spring mapping annotation으로 선언된 경로만 집계했습니다.");
+		}
+		if (limitReached) {
+			warnings.add("Java 파일이 " + MAX_JAVA_FILES + "개를 넘어 분석 범위를 제한했습니다.");
+		}
+		int candidates = (int) javaFiles.stream().filter(this::isControllerCandidate).count();
+		if (candidates > controllers.size()) {
+			warnings.add("Controller 후보 " + candidates + "개 중 " + controllers.size() + "개에서 REST 응답 mapping을 확인했습니다.");
+		}
+		return new AnalysisCoverageResponse(
+			sourceRoots.stream().map(root -> relativizeSourceRoot(projectRoot, root)).toList(),
+			javaFiles.size(),
+			candidates,
+			controllers.size(),
+			endpoints.size(),
+			List.copyOf(warnings)
+		);
+	}
+
+	private List<String> discoverUnsupportedSourceWarnings(Path projectRoot) {
+		if (!Files.isDirectory(projectRoot)) {
+			return List.of();
+		}
+		final boolean[] kotlinFound = {false};
+		try {
+			Files.walkFileTree(projectRoot, Set.of(), MAX_SOURCE_ROOT_DEPTH, new SimpleFileVisitor<>() {
+				@Override
+				public FileVisitResult preVisitDirectory(Path directory, BasicFileAttributes attributes) {
+					return !directory.equals(projectRoot) && isExcludedDirectory(directory)
+						? FileVisitResult.SKIP_SUBTREE
+						: FileVisitResult.CONTINUE;
+				}
+
+				@Override
+				public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) {
+					if (file.toString().endsWith(".kt")) {
+						kotlinFound[0] = true;
+						return FileVisitResult.TERMINATE;
+					}
+					return FileVisitResult.CONTINUE;
+				}
+			});
+		} catch (IOException exception) {
+			return List.of("지원 밖 소스 존재 여부를 확인하지 못했습니다.");
+		}
+		return kotlinFound[0]
+			? List.of("Kotlin 소스는 v0.1 분석 대상이 아니므로 Java endpoint 결과에 포함되지 않습니다.")
+			: List.of();
+	}
+
+	private boolean isControllerCandidate(Path javaFile) {
+		try {
+			return Files.readString(javaFile).lines()
+				.map(String::trim)
+				.anyMatch(line -> isRestControllerAnnotation(line) || isControllerAnnotation(line));
+		} catch (IOException exception) {
+			return false;
+		}
+	}
+
+	private boolean containsUnsupportedMappingAnnotation(Path javaFile) {
+		try {
+			String source = Files.readString(javaFile);
+			if (source.contains("@interface") && SUPPORTED_MAPPING_ANNOTATIONS.stream().anyMatch(name -> source.contains("@" + name))) {
+				return true;
+			}
+			Matcher matcher = UNSUPPORTED_MAPPING_PATTERN.matcher(source);
+			while (matcher.find()) {
+				if (!SUPPORTED_MAPPING_ANNOTATIONS.contains(matcher.group(1))) {
+					return true;
+				}
+			}
+		} catch (IOException exception) {
+			return false;
+		}
+		return false;
 	}
 
 	private String buildLayerEvidence(String layerName, List<ClassMetadata> classes) {
@@ -640,7 +855,8 @@ public class SpringApiCatalogService {
 		String framework,
 		String frameworkEvidence,
 		ProjectAnalysisStatus analysisStatus,
-		String message
+		String message,
+		AnalysisCoverageResponse analysisCoverage
 	) {
 		return buildProjectStructure(
 			projectRoot,
@@ -650,6 +866,7 @@ public class SpringApiCatalogService {
 			frameworkEvidence,
 			analysisStatus,
 			message,
+			analysisCoverage,
 			List.of(),
 			List.of(),
 			List.of(),
@@ -665,6 +882,7 @@ public class SpringApiCatalogService {
 		String frameworkEvidence,
 		ProjectAnalysisStatus analysisStatus,
 		String message,
+		AnalysisCoverageResponse analysisCoverage,
 		List<String> infrastructure,
 		List<ProjectEvidenceItemResponse> infrastructureDetails,
 		List<ProjectLayerResponse> layers,
@@ -675,8 +893,9 @@ public class SpringApiCatalogService {
 			framework,
 			frameworkEvidence,
 			analysisStatus,
-			relativizeSourceRoot(projectRoot, sourceRoot),
+			sourceRoot == null ? "" : relativizeSourceRoot(projectRoot, sourceRoot),
 			message,
+			analysisCoverage,
 			infrastructure,
 			infrastructureDetails,
 			layers,
@@ -743,7 +962,16 @@ public class SpringApiCatalogService {
 	private record ClassMetadata(String name, String packageName, String layerType) {
 	}
 
-	private record HandlerMetadata(String name, int lineNumber) {
+	private record HandlerMetadata(String name, int lineNumber, boolean responseBody) {
+	}
+
+	private record JavaFileCollection(List<Path> files, boolean limitReached) {
+	}
+
+	private enum ControllerMode {
+		NONE,
+		REST,
+		METHOD_RESPONSE_BODY
 	}
 
 }

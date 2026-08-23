@@ -746,4 +746,115 @@ class SpringApiCatalogServiceTest {
 		assertFalse(orderDomain.endpoints().stream().anyMatch(item -> item.path().contains("application/json")));
 		assertFalse(orderDomain.endpoints().stream().anyMatch(item -> item.path().contains("summary=true")));
 	}
+
+	@Test
+	void scansEveryJavaSourceRootInAMultiModuleProject(@TempDir Path projectRoot) throws IOException {
+		Files.writeString(projectRoot.resolve("settings.gradle"), "include 'orders', 'payments'");
+		Path orderRoot = projectRoot.resolve("orders/src/main/java/com/example/order");
+		Path paymentRoot = projectRoot.resolve("payments/src/main/java/com/example/payment");
+		Path excludedRoot = projectRoot.resolve("orders/build/generated/src/main/java/com/example/generated");
+		Files.createDirectories(orderRoot);
+		Files.createDirectories(paymentRoot);
+		Files.createDirectories(excludedRoot);
+		Files.writeString(orderRoot.resolve("OrderController.java"), simpleRestController("Order", "/api/orders"));
+		Files.writeString(paymentRoot.resolve("PaymentController.java"), simpleRestController("Payment", "/api/payments"));
+		Files.writeString(excludedRoot.resolve("GeneratedController.java"), simpleRestController("Generated", "/generated"));
+
+		ProjectStructureResponse structure = springApiCatalogService.getProjectStructure(projectRoot.toString());
+
+		assertEquals(ProjectAnalysisStatus.SUCCESS, structure.analysisStatus());
+		assertEquals(2, structure.domains().size());
+		assertEquals(List.of("orders/src/main/java", "payments/src/main/java"), structure.analysisCoverage().sourceRoots());
+		assertEquals(2, structure.analysisCoverage().scannedJavaFiles());
+		assertEquals(2, structure.analysisCoverage().controllerCandidates());
+		assertEquals(2, structure.analysisCoverage().detectedControllers());
+		assertEquals(2, structure.analysisCoverage().detectedEndpoints());
+	}
+
+	@Test
+	void detectsControllerMethodsOnlyWhenResponseBodyIsExplicit(@TempDir Path projectRoot) throws IOException {
+		Files.writeString(projectRoot.resolve("pom.xml"), "<project />");
+		Path sourceRoot = projectRoot.resolve("src/main/java/com/example/report");
+		Files.createDirectories(sourceRoot);
+		Files.writeString(sourceRoot.resolve("ReportController.java"), """
+			package com.example.report;
+
+			import org.springframework.stereotype.Controller;
+			import org.springframework.web.bind.annotation.GetMapping;
+			import org.springframework.web.bind.annotation.ResponseBody;
+
+			@Controller
+			public class ReportController {
+				@ResponseBody
+				@GetMapping("/api/reports")
+				public String listReports() { return "ok"; }
+
+				@GetMapping("/reports/page")
+				public String reportPage() { return "report"; }
+			}
+			""");
+		Files.writeString(sourceRoot.resolve("SummaryController.java"), """
+			package com.example.summary;
+
+			import org.springframework.stereotype.Controller;
+			import org.springframework.web.bind.annotation.GetMapping;
+			import org.springframework.web.bind.annotation.ResponseBody;
+
+			@Controller
+			@ResponseBody
+			public class SummaryController {
+				@GetMapping("/api/summaries")
+				public String listSummaries() { return "ok"; }
+			}
+			""");
+
+		ProjectStructureResponse structure = springApiCatalogService.getProjectStructure(projectRoot.toString());
+
+		assertEquals(ProjectAnalysisStatus.SUCCESS, structure.analysisStatus());
+		assertEquals(2, structure.analysisCoverage().controllerCandidates());
+		assertEquals(2, structure.analysisCoverage().detectedControllers());
+		assertEquals(2, structure.analysisCoverage().detectedEndpoints());
+		assertTrue(structure.domains().stream()
+			.flatMap(domain -> domain.endpoints().stream())
+			.map(ApiCatalogItemResponse::path)
+			.collect(Collectors.toSet())
+			.containsAll(Set.of("/api/reports", "/api/summaries")));
+	}
+
+	@Test
+	void reportsKotlinAndComposedMappingAsCoverageWarnings(@TempDir Path projectRoot) throws IOException {
+		Path javaRoot = projectRoot.resolve("app/src/main/java/com/example/order");
+		Path kotlinRoot = projectRoot.resolve("app/src/main/kotlin/com/example/order");
+		Files.createDirectories(javaRoot);
+		Files.createDirectories(kotlinRoot);
+		Files.writeString(javaRoot.resolve("PublicGet.java"), """
+			package com.example.order;
+
+			import org.springframework.web.bind.annotation.GetMapping;
+
+			@GetMapping
+			public @interface PublicGet {}
+			""");
+		Files.writeString(kotlinRoot.resolve("KotlinController.kt"), "class KotlinController");
+
+		ProjectStructureResponse structure = springApiCatalogService.getProjectStructure(projectRoot.toString());
+
+		assertTrue(structure.analysisCoverage().warnings().stream().anyMatch(message -> message.contains("Kotlin")));
+		assertTrue(structure.analysisCoverage().warnings().stream().anyMatch(message -> message.contains("합성 mapping")));
+	}
+
+	private String simpleRestController(String domain, String path) {
+		return """
+			package com.example.%s;
+
+			import org.springframework.web.bind.annotation.GetMapping;
+			import org.springframework.web.bind.annotation.RestController;
+
+			@RestController
+			public class %sController {
+				@GetMapping("%s")
+				public String list%s() { return "ok"; }
+			}
+			""".formatted(domain.toLowerCase(), domain, path, domain);
+	}
 }

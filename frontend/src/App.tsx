@@ -343,6 +343,14 @@ const FALLBACK_PROJECT_STRUCTURE: ProjectStructure = {
   analysisStatus: 'SUCCESS',
   sourceRoot: 'backend/src/main/java',
   analysisMessage: '기능을 둘러볼 수 있도록 StackFlow 샘플 프로젝트를 표시합니다.',
+  analysisCoverage: {
+    sourceRoots: ['backend/src/main/java'],
+    scannedJavaFiles: 24,
+    controllerCandidates: 2,
+    detectedControllers: 2,
+    detectedEndpoints: 6,
+    warnings: [],
+  },
   infrastructure: ['Redis', 'MySQL'],
   infrastructureDetails: [
     { name: 'Redis', detectedBy: 'sample', evidence: 'ProductCacheService and cache-refresh endpoints are part of the sample app.' },
@@ -1742,7 +1750,9 @@ function App() {
                       {PROJECT_STATUS_LABEL[projectStructure.analysisStatus]}
                     </StatusBadge>
                   </div>
-                  <p>{projectStructure.framework} · {projectStructure.sourceRoot || '소스 루트 미감지'}</p>
+                  <p>
+                    {projectStructure.framework} · source root {projectStructure.analysisCoverage.sourceRoots.length}개 · Java {projectStructure.analysisCoverage.scannedJavaFiles}개
+                  </p>
                 </div>
                 <p>{projectStatusContent.headerSummary}</p>
               </header>
@@ -2197,6 +2207,38 @@ function App() {
                 </summary>
                 <p>특정 도메인 관계가 확실하지 않은 클래스입니다.</p>
                 <LayerEvidenceList groups={commonLayerGroups} emptyMessage="도메인 밖에 남은 공통 클래스가 없습니다." />
+              </details>
+
+              <details className="inspector-disclosure coverage-evidence">
+                <summary>
+                  <span>
+                    <strong>분석 범위와 누락 가능성</strong>
+                    <small>source root {projectStructure.analysisCoverage.sourceRoots.length}개 · Java {projectStructure.analysisCoverage.scannedJavaFiles}개</small>
+                  </span>
+                  <StatusBadge tone={projectStructure.analysisCoverage.warnings.length > 0 ? 'warning' : 'success'}>
+                    {projectStructure.analysisCoverage.warnings.length > 0 ? `경고 ${projectStructure.analysisCoverage.warnings.length}개` : '경고 없음'}
+                  </StatusBadge>
+                </summary>
+                <div className="coverage-evidence__body">
+                  <div className="coverage-metrics" aria-label="분석 범위 수치">
+                    <span><strong>{projectStructure.analysisCoverage.scannedJavaFiles}</strong>Java 파일</span>
+                    <span><strong>{projectStructure.analysisCoverage.controllerCandidates}</strong>Controller 후보</span>
+                    <span><strong>{projectStructure.analysisCoverage.detectedControllers}</strong>감지 Controller</span>
+                    <span><strong>{projectStructure.analysisCoverage.detectedEndpoints}</strong>감지 API</span>
+                  </div>
+                  <div className="coverage-source-roots">
+                    <strong>탐색한 source root</strong>
+                    {projectStructure.analysisCoverage.sourceRoots.length > 0 ? (
+                      <ul>{projectStructure.analysisCoverage.sourceRoots.map((root) => <li key={root}>{root}</li>)}</ul>
+                    ) : <p>감지된 Java source root가 없습니다.</p>}
+                  </div>
+                  {projectStructure.analysisCoverage.warnings.length > 0 ? (
+                    <div className="coverage-warnings">
+                      <strong>누락 가능성</strong>
+                      <ul>{projectStructure.analysisCoverage.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+                    </div>
+                  ) : <p className="coverage-complete">현재 지원 범위에서 별도 경고가 없습니다.</p>}
+                </div>
               </details>
 
               <details className="inspector-disclosure source-evidence">

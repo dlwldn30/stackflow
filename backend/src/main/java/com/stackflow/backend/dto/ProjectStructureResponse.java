@@ -9,6 +9,7 @@ public record ProjectStructureResponse(
 	ProjectAnalysisStatus analysisStatus,
 	String sourceRoot,
 	String analysisMessage,
+	AnalysisCoverageResponse analysisCoverage,
 	List<String> infrastructure,
 	List<ProjectEvidenceItemResponse> infrastructureDetails,
 	List<ProjectLayerResponse> layers,
