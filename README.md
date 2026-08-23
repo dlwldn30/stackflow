@@ -1,230 +1,196 @@
 # StackFlow
 
-StackFlow is a Spring Boot project understanding and request-flow visualization MVP.
+[![CI](https://github.com/dlwldn30/stackflow/actions/workflows/ci.yml/badge.svg)](https://github.com/dlwldn30/stackflow/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-2563EB.svg)](LICENSE)
 
-It helps you map a Spring Boot project, select one API, run supported requests, and inspect where a request succeeded or failed.
+**Spring Boot 코드를 분석하고 OpenTelemetry 실제 실행 흐름과 비교해 장애 원인을 찾는 로컬 개발 도구입니다.**
 
-## Current Scope
+StackFlow는 Controller mapping과 계층 구조를 정적으로 분석한 뒤 API 요청에 W3C `traceparent`를 주입합니다. 대상 JVM의 OpenTelemetry Java Agent가 보낸 OTLP span을 받아 예상 경로와 실제 실행 경로, Redis·PostgreSQL 병목과 실패 지점을 한 화면에서 확인합니다.
 
-StackFlow is not a production APM replacement yet. The current MVP focuses on local project understanding and a runnable vertical slice.
+![StackFlow Trace Waterfall](docs/images/trace-waterfall.png)
 
-- `Project`: read a Spring Boot project and summarize domains, controllers, layers, infrastructure, and API count.
-- `Request`: select an API, configure a target request, send it, and inspect the HTTP response.
-- `Trace`: inspect bundled sample events or actual OpenTelemetry spans from an Agent-enabled external Spring Boot JVM.
+## 해결하려는 문제
 
-Current request modes:
+코드만 보면 호출될 것으로 예상한 Service·Repository·Cache가 실제 요청에서도 실행됐는지 알기 어렵습니다. 로그만으로는 부모·자식 호출 관계와 각 구간의 소요 시간을 다시 조립해야 합니다.
 
-- `Runtime Trace`: available for the bundled runtime-ready sample APIs.
-- `External Runtime Trace`: available after generating an instrumentation profile and restarting the target app with the OpenTelemetry Java Agent.
-- `Run target`: available for external targets only when the analyzed endpoint has an explicit HTTP method.
-- `Analyze only`: used for integration-focused sample flows or analyzed endpoints detected without an explicit HTTP method.
+StackFlow는 두 종류의 근거를 함께 제공합니다.
 
-## Implemented Features
+| 근거 | 확인하는 내용 |
+| --- | --- |
+| 정적 분석 | Domain, Controller, endpoint, 계층, Redis·DB 사용 가능성 |
+| 실제 Trace | 실행된 span, 부모·자식 관계, 소요 시간, 실패 원인, 실행되지 않은 예상 단계 |
 
-- Spring Boot backend with Gradle.
-- React + Vite + TypeScript frontend.
-- Static Spring project analysis from a local project path.
-- API catalog grouped by detected domain.
-- Estimated API flow for selected endpoints.
-- SSE-based sample runtime trace streaming.
-- Request flow graph with status, duration, and node detail.
-- External API execution through the StackFlow backend proxy.
-- External request editor for query parameters, headers, and JSON body.
-- JSON body validation before sending external `POST`, `PUT`, or `PATCH` requests.
-- External response panel with request evidence and response evidence.
-- OpenTelemetry Java Agent launch profile generation for Gradle, Maven, and executable JAR projects.
-- W3C `traceparent` correlation, OTLP HTTP/protobuf ingestion, and dynamic parent-child span graphs.
+## 5분 데모
 
-## External Runtime Trace Boundary
-
-For external Spring Boot projects, StackFlow currently shows:
-
-- Detected structure.
-- Estimated API flow.
-- HTTP request and response evidence.
-- Endpoints detected from method-level `@RequestMapping` even when `RequestMethod` is omitted.
-
-After an instrumentation profile is generated, StackFlow can show actual Agent spans for the external JVM. The target app must be restarted with the generated command. Source files and build files are not modified.
-
-The first supported boundary is one local Spring Boot JVM. Dynamic attach, multi-service distributed tracing, authentication, durable storage, and production APM operation are not included.
-
-If a detected endpoint does not declare an explicit HTTP method, StackFlow keeps it visible in the catalog but marks it as `Analyze only`. That endpoint cannot be executed or traced until the controller mapping becomes explicit.
-
-## Project Structure
-
-```text
-backend/
-  Spring Boot API, trace/session storage, project analyzer, external request proxy
-
-frontend/
-  Vite React app, Project/Request/Trace UI, React Flow graph
-
-examples/trace-lab/
-  External Spring Boot app with PostgreSQL and Redis failure scenarios
-
-docs/
-  Product direction, implementation plan, development convention, and analysis convention
-```
-
-## Run Locally
-
-Run backend and frontend in separate terminals.
-
-### Backend
+필수 환경은 Docker Desktop과 Docker Compose입니다.
 
 ```bash
-cd /Users/jiwoo/Desktop/stackflow/backend
-./gradlew bootRun
+git clone https://github.com/dlwldn30/stackflow.git
+cd stackflow
+docker compose up --build --wait
 ```
 
-Default backend URL:
+[http://localhost:5173](http://localhost:5173)을 열면 Trace Lab 분석과 요청 대상 설정이 자동으로 완료됩니다.
 
-```text
-http://localhost:18080
-```
+1. Product의 `GET /lab/products/{productId}`를 선택합니다.
+2. `API 요청 만들기`로 이동해 `productId`에 `1001`을 입력합니다.
+3. `요청 보내고 Trace 보기`를 누릅니다.
+4. Trace의 `타임라인`에서 Controller → Service → Redis → PostgreSQL 흐름을 확인합니다.
 
-### Frontend
+Docker 데모에서는 Java Agent와 OTLP 수집 주소가 이미 연결되어 있습니다. 별도 Agent 설정은 필요하지 않습니다.
+
+![StackFlow 3단계 데모](docs/images/demo.gif)
+
+종료:
 
 ```bash
-cd /Users/jiwoo/Desktop/stackflow/frontend
-npm install
-npm run dev
+docker compose down
 ```
 
-Frontend URL:
+데이터 볼륨까지 초기화하려면 `docker compose down --volumes`를 사용합니다.
+
+## 대표 장애 실험
+
+Compose를 실행한 상태에서 UI로 요청하거나 아래 자동 검증을 실행할 수 있습니다.
+
+```bash
+./scripts/verify-demo.sh
+```
+
+| 시나리오 | 실행 흐름 | 확인 결과 |
+| --- | --- | --- |
+| Cache miss | Redis miss → PostgreSQL → Redis save | 응답 `DATABASE`, Redis·PostgreSQL span |
+| Cache hit | Redis hit | 응답 `CACHE`, PostgreSQL span 없음 |
+| Redis 장애 | Redis 오류 → PostgreSQL fallback | 응답 `DATABASE_FALLBACK`, Trace `WARNING` |
+| 실제 DB timeout | `pg_sleep` → JDBC query timeout | HTTP 504, 약 1초 실패 PostgreSQL span |
+
+실제 DB timeout endpoint:
 
 ```text
-http://localhost:5173
+GET /lab/products/{productId}/database-timeout
 ```
 
-Vite proxies `/api/*` requests to `VITE_API_TARGET`. If the frontend shows `http proxy error`, check that the backend is running first.
+즉시 예외를 만드는 `GET /lab/products/database-error`는 실제 timeout과 구분되는 **모의 DB 오류**입니다.
 
-## How To Use
+## 동작 구조
 
-### 1. Project
-
-Use this view to understand a Spring Boot project structure.
-
-- Leave the project path empty to load the bundled StackFlow sample project.
-- Enter a Spring Boot project root path to analyze an external local project.
-- Use `폴더 선택` to open the native macOS folder picker and fill the absolute project path.
-- You can also paste an absolute project root path directly into the path field.
-- Example path:
+```mermaid
+flowchart LR
+  UI[React 작업창] -->|프로젝트 경로| Analyzer[Spring 정적 분석]
+  UI -->|API 요청| Proxy[요청 프록시]
+  Proxy -->|traceparent| App[Agent 적용 Spring Boot]
+  App --> Redis[(Redis)]
+  App --> PostgreSQL[(PostgreSQL)]
+  App -->|OTLP HTTP/protobuf| Collector[StackFlow OTLP 수집기]
+  Collector -->|SSE / Trace API| UI
+```
 
 ```text
-/Users/jiwoo/Desktop/stackflow/backend
+프로젝트 분석
+→ Controller와 endpoint 선택
+→ Java Agent 실행 설정 확인
+→ traceparent가 포함된 API 요청
+→ OTLP span 수집·중복 제거
+→ Waterfall에서 실제 흐름과 실패 원인 확인
 ```
 
-### 2. Request
+## 핵심 기능
 
-Use this view to select and run one API.
+- 다중 `src/main/java` source root 탐색과 Spring mapping 정적 분석
+- `@RestController`, `@Controller + @ResponseBody`, shortcut·multiline·multi-path mapping 지원
+- HTTP method 미지정 endpoint의 보수적인 분석 전용 처리
+- 분석 범위, 감지 Controller·endpoint 수, 누락 가능성 경고 제공
+- OpenTelemetry Java Agent 실행 profile 생성
+- W3C `traceparent` 강제 주입과 OTLP HTTP/protobuf 수집
+- 활성 capture에 속한 trace만 저장하는 인메모리 세션 경계
+- span 부모·자식 관계 기반 Waterfall·Node Graph·이벤트 보기
+- exclusive time 기준 병목 span 3개와 인프라 원인 span 우선 선택
+- Redis, PostgreSQL, JDBC, HTTP Client span 분류
+- 허용 목록 기반 metadata 저장과 SQL statement·header·body 차단
 
-- Select an API from the detected catalog.
-- If the endpoint is marked `Analyze only`, use it for structure review only.
-- For external projects, enter the target base URL.
-- Add query parameters, headers, or JSON body when needed.
-- Check `Request sent` and `Response received` after execution.
+<details>
+<summary>프로젝트 분석·API 요청 화면 보기</summary>
 
-Example external target:
+![프로젝트 분석 화면](docs/images/project-analysis.png)
 
-```text
-http://localhost:8091
-```
+![API 요청 화면](docs/images/api-request.png)
 
-### 3. Trace
+</details>
 
-Use this view to inspect actual runtime events.
+## 임의 로컬 프로젝트 분석
 
-- Runtime trace is supported for bundled sample APIs and Agent-enabled external Spring Boot apps.
-- Integration-focused sample domains stay analysis-only by design.
-- For an external project, generate `실행 Trace 설정`, download the official Java Agent, and run the generated command from the target project root.
-- Send an API request with Trace capture enabled; StackFlow injects `traceparent` and waits up to 15 seconds for OTLP spans.
-- The graph highlights success, warning, error, timeout, and idle nodes.
-
-External setup flow:
-
-```text
-1. Analyze an absolute external project path.
-2. In Project, set the Java Agent path and StackFlow collector URL.
-3. Generate the launch command.
-4. Restart the target app with that command.
-5. In Request, enter the target base URL and send an API request.
-6. Inspect the actual span tree in Trace.
-```
-
-## Redis And PostgreSQL Trace Lab
-
-Use [examples/trace-lab/README.md](examples/trace-lab/README.md) to verify an external Spring Boot trace end to end. The lab provides four flows:
-
-- Redis miss, PostgreSQL lookup, then Redis save.
-- Redis hit without a PostgreSQL query.
-- Redis connection failure with PostgreSQL fallback.
-- Deliberate PostgreSQL query failure with HTTP 500.
-
-Its Docker Compose file runs only PostgreSQL and Redis. The Spring Boot app runs with the Java Agent command generated by StackFlow.
-
-## Sample Runtime Scenarios
-
-Use the bundled sample APIs to verify graph behavior.
-
-- `Normal`: successful product request.
-- `Redis Down`: Redis node warning or fallback path.
-- `DB Timeout`: database timeout node.
-- `Service Error`: service-layer failure node.
-
-## API Overview
-
-Backend APIs:
-
-```text
-GET  /api/project/structure
-POST /api/project/structure/analyze
-POST /api/instrumentation/profile
-POST /api/external/request
-POST /v1/traces
-POST /api/traces/session
-GET  /api/traces/{traceId}/stream
-GET  /api/traces
-GET  /api/traces/{traceId}
-GET  /api/products
-GET  /api/products/{productId}
-GET  /api/products/{productId}/stock
-POST /api/products/{productId}/cache-refresh
-```
-
-## Verification
+Docker 데모의 backend는 Trace Lab 소스만 read-only로 마운트합니다. 다른 로컬 프로젝트는 backend와 frontend를 native로 실행해야 파일 경로를 읽을 수 있습니다.
 
 Backend:
 
 ```bash
-cd /Users/jiwoo/Desktop/stackflow/backend
-./gradlew test
+cd backend
+STACKFLOW_ALLOW_PRIVATE_TARGETS=true ./gradlew bootRun
 ```
 
 Frontend:
 
 ```bash
-cd /Users/jiwoo/Desktop/stackflow/frontend
-npm run lint
-npm run build
+cd frontend
+npm ci
+VITE_API_TARGET=http://localhost:18080 npm run dev
 ```
 
-## Development Convention
+프로젝트 화면에서 Finder 폴더 선택 또는 절대 경로 입력 후 분석합니다. 실제 Trace는 `실행 Trace 설정`에서 생성한 명령으로 대상 Spring Boot JVM을 재시작한 뒤 수집할 수 있습니다. 대상 소스와 Gradle/Maven 파일은 수정하지 않습니다.
 
-This repository follows the project convention in [docs/development-convention.md](docs/development-convention.md).
+## 지원 범위
 
-Current examples:
+v0.1은 다음 경계 안에서 동작합니다.
+
+- Java 기반 Spring Boot, 단일 로컬 JVM
+- Spring MVC, JDBC, Lettuce 등 Java Agent가 지원하는 자동 계측
+- Gradle, Maven, 실행 JAR용 Agent 명령 생성
+- 메모리 기반 Trace 저장과 15초 수집 timeout
+
+현재 제외 범위:
+
+- Kotlin과 합성 annotation의 추측 분석
+- 다중 서비스 분산 Trace
+- 실행 중 JVM 동적 attach
+- 인증, 영구 저장, sampling 관리
+- production APM 운영과 AI 원인 분석
+
+## 보안·데이터 정책
+
+- 사용자가 넣은 `traceparent`, `tracestate`는 제거하고 StackFlow가 만든 correlation 값만 사용합니다.
+- 기본 설정은 loopback target만 허용합니다. Docker 데모에서만 내부 네트워크 target을 명시적으로 허용하고 모든 host 포트는 `127.0.0.1`에만 바인딩합니다.
+- SQL statement, HTTP header, query, request/response body는 Trace metadata에 저장하지 않습니다.
+- HTTP method·route, DB system·operation·namespace, exception type 등 허용 key만 최대 2KB로 저장합니다.
+- OTLP 요청은 5MB로 제한하고 StackFlow가 시작하지 않은 trace ID는 저장하지 않습니다.
+
+## 검증
+
+```bash
+cd backend && ./gradlew test --rerun-tasks
+cd ../examples/trace-lab && ./gradlew test
+cd ../../frontend && npm run test && npm run lint && npm run build
+cd .. && docker compose config && ./scripts/verify-demo.sh
+```
+
+GitHub Actions는 backend, Trace Lab, frontend, 실제 Docker Compose E2E를 PR마다 실행합니다.
+
+## 저장소 구성
 
 ```text
-Issue:  [✨ Feat] 외부 API request editor 지원
-Branch: feat/11-external-api-request-editor
-PR:     [✨ Feat] 외부 API request editor 지원 (#11)
-Commit: feat: ✨ 외부 API request editor 지원
+backend/             Spring 분석, 요청 프록시, OTLP 수집, Trace API
+frontend/            React 작업창, Request editor, Waterfall·Graph UI
+examples/trace-lab/  Redis·PostgreSQL 정상/장애 실험용 Spring Boot 앱
+docs/                분석 규칙, 외부 Trace 설계, 개발 규칙
+scripts/             재현 가능한 Docker 데모 검증
 ```
 
-## Planning Docs
+상세 문서:
 
-- [Product direction and implementation plan](docs/product-direction-and-implementation-plan.md)
-- [Development convention](docs/development-convention.md)
-- [StackFlow analysis convention](docs/stackflow-analysis-convention.md)
-- [External Spring Boot runtime tracing design](docs/external-runtime-tracing-design.md)
+- [외부 Runtime Trace 설계](docs/external-runtime-tracing-design.md)
+- [StackFlow 정적 분석 규칙](docs/stackflow-analysis-convention.md)
+- [Trace Lab 실험 방법](examples/trace-lab/README.md)
+- [개발 규칙](docs/development-convention.md)
+
+## 라이선스
+
+[MIT License](LICENSE)
