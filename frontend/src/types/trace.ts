@@ -190,6 +190,15 @@ export interface ProjectDomain {
   packageRoots: string[]
 }
 
+export interface AnalysisCoverage {
+  sourceRoots: string[]
+  scannedJavaFiles: number
+  controllerCandidates: number
+  detectedControllers: number
+  detectedEndpoints: number
+  warnings: string[]
+}
+
 export interface ProjectStructure {
   projectName: string
   framework: string
@@ -197,6 +206,7 @@ export interface ProjectStructure {
   analysisStatus: ProjectAnalysisStatus
   sourceRoot: string
   analysisMessage: string
+  analysisCoverage: AnalysisCoverage
   infrastructure: string[]
   infrastructureDetails: ProjectEvidenceItem[]
   layers: ProjectLayer[]
