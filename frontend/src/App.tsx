@@ -410,10 +410,10 @@ const FALLBACK_PROJECT_STRUCTURE: ProjectStructure = {
 
 function App() {
   const [productId, setProductId] = useState('1001')
-  const [projectPath, setProjectPath] = useState('')
+  const [projectPath, setProjectPath] = useState(import.meta.env.VITE_DEFAULT_PROJECT_PATH ?? '')
   const [folderPickerState, setFolderPickerState] = useState<'idle' | 'loading' | 'error'>('idle')
   const [folderPickerMessage, setFolderPickerMessage] = useState('Finder에서 프로젝트 폴더를 선택할 수 있습니다.')
-  const [targetBaseUrl, setTargetBaseUrl] = useState('')
+  const [targetBaseUrl, setTargetBaseUrl] = useState(import.meta.env.VITE_DEFAULT_TARGET_BASE_URL ?? '')
   const [queryParams, setQueryParams] = useState<ExternalRequestEntry[]>([
     createRequestEntry('page', '1', false),
   ])
@@ -497,7 +497,9 @@ function App() {
   const projectStatusContent = PROJECT_STATUS_CONTENT[projectStructure.analysisStatus]
   const selectedDomainDisplayMode = getDomainDisplayMode(selectedDomain, analysisTarget === 'sample')
   const hasIntegrationBoundary = selectedDomainDisplayMode?.tone === 'integration'
-  const externalTraceReady = analysisTarget === 'external' && Boolean(instrumentationProfile)
+  const demoTraceReady = import.meta.env.VITE_DEMO_TRACE_READY === 'true'
+    && projectPath.trim() === import.meta.env.VITE_DEFAULT_PROJECT_PATH
+  const externalTraceReady = analysisTarget === 'external' && (demoTraceReady || Boolean(instrumentationProfile))
   const instrumentationCommand = instrumentationProfile
     ? instrumentationProfile.commands[instrumentationProfile.buildTool.toLowerCase()]
       ?? instrumentationProfile.commands.jar
@@ -580,9 +582,17 @@ function App() {
 
   async function loadApiCatalog() {
     try {
-      const structure = await getProjectStructure()
+      const defaultProjectPath = import.meta.env.VITE_DEFAULT_PROJECT_PATH
+      const structure = defaultProjectPath
+        ? await analyzeProject(defaultProjectPath)
+        : await getProjectStructure()
       const analyzedCatalog = flattenProjectApis(structure)
-      applyProjectStructure(structure, analyzedCatalog, structure.analysisMessage, 'sample')
+      applyProjectStructure(
+        structure,
+        analyzedCatalog,
+        structure.analysisMessage,
+        defaultProjectPath ? 'external' : 'sample',
+      )
     } catch {
       startTransition(() => {
         setProjectStructure(FALLBACK_PROJECT_STRUCTURE)
@@ -2176,32 +2186,40 @@ function App() {
                       <strong>실행 Trace 설정</strong>
                       <small>Java Agent 재실행 명령</small>
                     </span>
-                    <StatusBadge tone={instrumentationProfile ? 'success' : profileState === 'error' ? 'error' : 'neutral'}>
-                      {instrumentationProfile ? '명령 생성 완료' : 'Agent 설정 필요'}
+                    <StatusBadge tone={demoTraceReady || instrumentationProfile ? 'success' : profileState === 'error' ? 'error' : 'neutral'}>
+                      {demoTraceReady ? 'Agent 연결됨' : instrumentationProfile ? '명령 생성 완료' : 'Agent 설정 필요'}
                     </StatusBadge>
                   </summary>
                   <div className="instrumentation-setup">
-                    <p className="instrumentation-setup__intro">
-                      소스 수정 없이 Java Agent로 대상 앱을 재시작합니다.
-                    </p>
-                    <label className="field">
-                      <span>OpenTelemetry Java Agent JAR</span>
-                      <input value={agentPath} onChange={(event) => setAgentPath(event.target.value)} />
-                    </label>
-                    <label className="field">
-                      <span>StackFlow 수집 주소</span>
-                      <input value={collectorBaseUrl} onChange={(event) => setCollectorBaseUrl(event.target.value)} />
-                    </label>
-                    <div className="instrumentation-setup__actions">
-                      <button type="button" onClick={() => void generateInstrumentationProfile()} disabled={profileState === 'loading'}>
-                        <ScanSearch size={15} aria-hidden="true" />
-                        {profileState === 'loading' ? '설정 생성 중' : '실행 명령 생성'}
-                      </button>
-                      <a href="https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases" target="_blank" rel="noreferrer">
-                        공식 Agent 다운로드
-                      </a>
-                    </div>
-                    <p className={profileState === 'error' ? 'external-error' : 'empty-copy'}>{profileMessage}</p>
+                    {demoTraceReady ? (
+                      <p className="instrumentation-setup__intro">
+                        Docker 데모가 Java Agent와 OTLP 수집 주소를 연결했습니다. API 요청을 보내면 실제 span을 바로 수집합니다.
+                      </p>
+                    ) : (
+                      <>
+                        <p className="instrumentation-setup__intro">
+                          소스 수정 없이 Java Agent로 대상 앱을 재시작합니다.
+                        </p>
+                        <label className="field">
+                          <span>OpenTelemetry Java Agent JAR</span>
+                          <input value={agentPath} onChange={(event) => setAgentPath(event.target.value)} />
+                        </label>
+                        <label className="field">
+                          <span>StackFlow 수집 주소</span>
+                          <input value={collectorBaseUrl} onChange={(event) => setCollectorBaseUrl(event.target.value)} />
+                        </label>
+                        <div className="instrumentation-setup__actions">
+                          <button type="button" onClick={() => void generateInstrumentationProfile()} disabled={profileState === 'loading'}>
+                            <ScanSearch size={15} aria-hidden="true" />
+                            {profileState === 'loading' ? '설정 생성 중' : '실행 명령 생성'}
+                          </button>
+                          <a href="https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases" target="_blank" rel="noreferrer">
+                            공식 Agent 다운로드
+                          </a>
+                        </div>
+                        <p className={profileState === 'error' ? 'external-error' : 'empty-copy'}>{profileMessage}</p>
+                      </>
+                    )}
                     {instrumentationProfile && instrumentationCommand ? (
                       <div className="instrumentation-profile">
                         <div className="evidence-grid">
