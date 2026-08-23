@@ -1,13 +1,25 @@
 :root {
-  font-family:
-    'Sora',
-    'IBM Plex Sans',
-    system-ui,
-    sans-serif;
+  --color-canvas: #f4f6f8;
+  --color-surface: #ffffff;
+  --color-ink: #17212b;
+  --color-muted: #6c7887;
+  --color-line: #d6dce5;
+  --color-line-strong: #c3cbd6;
+  --color-spring: #1f7a55;
+  --color-spring-soft: #e8f5ef;
+  --color-action: #2563eb;
+  --color-action-soft: #eaf1ff;
+  --color-warning: #a86400;
+  --color-warning-soft: #fff3dc;
+  --color-error: #c2413c;
+  --color-error-soft: #fdeceb;
+  --font-sans: 'Pretendard', 'SUIT', 'Noto Sans KR', 'Apple SD Gothic Neo', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
+  font-family: var(--font-sans);
   line-height: 1.5;
   font-weight: 400;
-  color: #1f2933;
-  background: #efe7da;
+  color: var(--color-ink);
+  background: var(--color-canvas);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -18,15 +30,27 @@
   box-sizing: border-box;
 }
 
+html {
+  min-width: 320px;
+  background: var(--color-canvas);
+}
+
 body {
   margin: 0;
   min-width: 320px;
+  min-height: 100vh;
 }
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
+}
+
+button,
+summary {
+  -webkit-tap-highlight-color: transparent;
 }
 
 #root {

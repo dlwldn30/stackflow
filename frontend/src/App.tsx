@@ -1,9 +1,36 @@
 import { useEffect, useMemo, useRef, useState, startTransition } from 'react'
-import type { ChangeEvent } from 'react'
 import { Background, Controls, ReactFlow } from '@xyflow/react'
 import type { ReactFlowInstance } from '@xyflow/react'
+import {
+  AlertCircle,
+  ArrowLeft,
+  ArrowRight,
+  Boxes,
+  Braces,
+  CheckCircle2,
+  ChevronRight,
+  Database,
+  FolderOpen,
+  Network,
+  Plus,
+  Route,
+  ScanSearch,
+  Send,
+  Trash2,
+} from 'lucide-react'
 import './App.css'
+import { EvidenceProgress } from './components/EvidenceProgress'
+import { StatusBadge } from './components/StatusBadge'
+import { WorkflowTabs } from './components/WorkflowTabs'
 import { buildGraph, getNodeDetail } from './lib/graph'
+import {
+  EVENT_STATUS_LABEL,
+  PROJECT_STATUS_LABEL,
+  STREAM_STATUS_LABEL,
+  TRACE_COLLECTION_STATUS_LABEL,
+  getResultStatusLabel,
+} from './ui/copy'
+import type { StreamStatus, ViewMode } from './ui/copy'
 import type {
   ApiCatalogItem,
   ApiMethod,
@@ -11,11 +38,15 @@ import type {
   ExternalRequestEntry,
   ExternalRequestResponse,
   HttpMethod,
+  InstrumentationProfile,
   ProjectAnalysisStatus,
   ProductPayload,
   ProjectDomain,
+  ProjectLayer,
   ProjectStructure,
   TraceDetail,
+  TraceCollectionStatus,
+  TraceCollectionStatusEvent,
   TraceEvent,
   TraceSessionResponse,
   TraceStartedEvent,
@@ -24,11 +55,56 @@ import type {
 } from './types/trace'
 
 const SCENARIOS = [
-  { value: 'normal', label: 'Normal' },
-  { value: 'redis-down', label: 'Redis Down' },
-  { value: 'db-timeout', label: 'DB Timeout' },
-  { value: 'service-error', label: 'Service Error' },
+  { value: 'normal', label: '정상 요청' },
+  { value: 'redis-down', label: 'Redis 연결 실패' },
+  { value: 'db-timeout', label: 'DB 시간 초과' },
+  { value: 'service-error', label: 'Service 오류' },
 ] as const
+
+const FAILURE_COMPONENT_PRIORITY: TraceEvent['component'][] = [
+  'MYSQL',
+  'POSTGRESQL',
+  'DATABASE',
+  'REDIS',
+  'HTTP_CLIENT',
+  'GATEWAY',
+  'REPOSITORY',
+  'SERVICE',
+  'CONTROLLER',
+  'INTERNAL',
+  'RESPONSE',
+  'CLIENT',
+]
+
+function getPrimaryFailureEvent(trace: TraceDetail | null): TraceEvent | null {
+  const failedEvents = trace?.events.filter((event) =>
+    event.status === 'ERROR' || event.status === 'TIMEOUT',
+  ) ?? []
+
+  for (const component of FAILURE_COMPONENT_PRIORITY) {
+    const event = failedEvents.find((candidate) =>
+      candidate.component === component && Boolean(candidate.errorType || candidate.errorMessage),
+    )
+    if (event) return event
+  }
+
+  return failedEvents.find((event) => event.component !== 'RESPONSE') ?? failedEvents[0] ?? null
+}
+
+function matchesTraceEndpoint(api: ApiDefinition, trace: TraceDetail) {
+  if (api.methodSpecified && api.method !== trace.method) {
+    return false
+  }
+
+  const pathPattern = api.pathTemplate
+    .split('/')
+    .map((segment) => /^\{[^}]+\}$/.test(segment)
+      ? '[^/]+'
+      : segment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('/')
+
+  return new RegExp(`^${pathPattern}$`).test(trace.endpoint)
+}
 
 type ApiDefinition = {
   id: string
@@ -47,8 +123,6 @@ type ApiDefinition = {
   buildPath: (productId: string) => string
 }
 
-type ViewMode = 'project' | 'api' | 'runtime'
-
 type EstimatedFlowStep = {
   id: string
   layer: string
@@ -65,12 +139,6 @@ type ExternalRequestSnapshot = {
   requestBody: string
 }
 
-type SelectedFolderInfo = {
-  name: string
-  fileCount: number
-  sampleFiles: string[]
-}
-
 type ProjectStatusContent = {
   headerSummary: string
   nextStepTitle: string
@@ -85,6 +153,22 @@ type DomainDisplayMode = {
   tone: 'runtime' | 'integration'
 } | null
 
+type LayerGroup = {
+  id: 'entry' | 'business' | 'data' | 'integration' | 'model' | 'support'
+  label: string
+  description: string
+  layerNames: string[]
+  classes: string[]
+}
+
+type DomainStructureStep = {
+  id: string
+  label: string
+  value: string
+  detail: string
+  tone: 'entry' | 'business' | 'data' | 'integration' | 'infrastructure'
+}
+
 type ApiMethodLike = {
   method: ApiMethod
   methodSpecified: boolean
@@ -92,8 +176,8 @@ type ApiMethodLike = {
 
 const EMPTY_DOMAIN: ProjectDomain = {
   id: 'empty',
-  name: 'No domain detected',
-  description: 'Static analysis completed without a usable API domain.',
+  name: '감지된 도메인 없음',
+  description: '정적 분석 결과에서 사용할 수 있는 API 도메인을 찾지 못했습니다.',
   responsibilities: [],
   infrastructure: [],
   infrastructureDetails: [],
@@ -107,9 +191,9 @@ const EMPTY_API_DEFINITION: ApiDefinition = {
   id: 'empty-api',
   method: 'GET',
   methodSpecified: true,
-  label: 'No API detected',
+  label: '감지된 API 없음',
   pathTemplate: '/',
-  description: 'Analyze a Spring Boot project with REST controllers to populate this view.',
+  description: 'REST Controller가 있는 Spring Boot 프로젝트를 분석하세요.',
   requestType: 'NONE',
   requiresProductId: false,
   controller: 'Unavailable',
@@ -122,60 +206,34 @@ const EMPTY_API_DEFINITION: ApiDefinition = {
 
 const PROJECT_STATUS_CONTENT: Record<ProjectAnalysisStatus, ProjectStatusContent> = {
   SUCCESS: {
-    headerSummary: 'Analysis completed. Review the detected map here, then move to Request to inspect one API.',
-    nextStepTitle: 'Review detected APIs, then move to Request.',
-    nextStepDetail: 'Pick a detected domain or endpoint, confirm the estimated flow, and continue in Request when you are ready to execute one API.',
-    emptyDomainMessage: 'Analysis completed, but no grouped domain is available to show in this panel.',
-    emptyEndpointMessage: 'Analysis completed, but no endpoint evidence is available for the selected domain.',
+    headerSummary: '분석이 끝났습니다. 도메인과 API를 확인한 뒤 요청을 만들어 보세요.',
+    nextStepTitle: '실행할 API를 하나 선택하세요.',
+    nextStepDetail: '도메인과 예상 흐름을 확인한 뒤 API 요청 탭에서 요청을 실행할 수 있습니다.',
+    emptyDomainMessage: '분석은 완료됐지만 묶어서 보여줄 도메인이 없습니다.',
+    emptyEndpointMessage: '선택한 도메인에서 API 근거를 찾지 못했습니다.',
   },
   EMPTY: {
-    headerSummary: 'Project files were read successfully, but no REST API mappings were detected.',
-    nextStepTitle: 'Check controller annotations, package layout, and naming conventions.',
-    nextStepDetail: 'Verify that the project exposes `@RestController` endpoints and uses explicit Spring role names such as Controller, Service or UseCase, and Repository or Store.',
-    emptyDomainMessage: 'The project was read successfully, but StackFlow did not find any REST API domain to map.',
-    emptyEndpointMessage: 'The project was read successfully, but StackFlow did not find any REST endpoint evidence to list here.',
+    headerSummary: '프로젝트는 읽었지만 REST API 매핑을 찾지 못했습니다.',
+    nextStepTitle: 'Controller annotation과 패키지 구성을 확인하세요.',
+    nextStepDetail: '`@RestController`와 Spring mapping annotation이 있는지 확인하고 다시 분석하세요.',
+    emptyDomainMessage: '프로젝트를 읽었지만 표시할 REST API 도메인이 없습니다.',
+    emptyEndpointMessage: '프로젝트를 읽었지만 표시할 endpoint 근거가 없습니다.',
   },
   FAILED: {
-    headerSummary: 'Analysis could not read the requested Spring source path.',
-    nextStepTitle: 'Verify the project root and that `src/main/java` or `backend/src/main/java` exists.',
-    nextStepDetail: 'Fix the project path first, then run analysis again so StackFlow can inspect controllers, mappings, and supporting layers.',
-    emptyDomainMessage: 'Analysis failed before StackFlow could build any project domain evidence.',
-    emptyEndpointMessage: 'Analysis failed before StackFlow could collect any endpoint evidence.',
+    headerSummary: '입력한 경로에서 Spring 소스 루트를 읽지 못했습니다.',
+    nextStepTitle: '프로젝트 루트 경로를 다시 확인하세요.',
+    nextStepDetail: '`src/main/java` 또는 `backend/src/main/java`가 있는 루트를 입력한 뒤 다시 분석하세요.',
+    emptyDomainMessage: '분석에 실패해 도메인 근거를 만들지 못했습니다.',
+    emptyEndpointMessage: '분석에 실패해 endpoint 근거를 수집하지 못했습니다.',
   },
 }
-
-const VIEW_MODES: Array<{
-  id: ViewMode
-  label: string
-  title: string
-  description: string
-}> = [
-  {
-    id: 'project',
-    label: 'Project',
-    title: 'See structure only',
-    description: 'Domains, layers, controllers, and infrastructure from static Spring analysis.',
-  },
-  {
-    id: 'api',
-    label: 'Request',
-    title: 'Send one API call',
-    description: 'Pick an endpoint, edit request options, and inspect the HTTP response.',
-  },
-  {
-    id: 'runtime',
-    label: 'Trace',
-    title: 'Inspect the flow',
-    description: 'Open the graph only when you need runtime events and the failing node.',
-  },
-]
 
 const FALLBACK_API_CATALOG: ApiDefinition[] = [
   {
     id: 'product-detail',
     method: 'GET',
     methodSpecified: true,
-    label: 'Product detail',
+    label: '상품 상세 조회',
     pathTemplate: '/api/products/{productId}',
     description: 'Redis cache hit/miss와 DB fallback을 확인하는 기본 상품 조회 API입니다.',
     requestType: 'QUERY_DETAIL',
@@ -191,7 +249,7 @@ const FALLBACK_API_CATALOG: ApiDefinition[] = [
     id: 'product-list',
     method: 'GET',
     methodSpecified: true,
-    label: 'Product list',
+    label: '상품 목록 조회',
     pathTemplate: '/api/products',
     description: '상품 목록을 조회하며 Redis 없이 Service -> Repository -> MySQL 경로를 확인합니다.',
     requestType: 'QUERY_LIST',
@@ -207,7 +265,7 @@ const FALLBACK_API_CATALOG: ApiDefinition[] = [
     id: 'product-stock',
     method: 'GET',
     methodSpecified: true,
-    label: 'Product stock',
+    label: '상품 재고 조회',
     pathTemplate: '/api/products/{productId}/stock',
     description: '상품 재고 조회 API로 DB timeout과 Service 예외 위치를 확인합니다.',
     requestType: 'QUERY_STOCK',
@@ -223,7 +281,7 @@ const FALLBACK_API_CATALOG: ApiDefinition[] = [
     id: 'cache-refresh',
     method: 'POST',
     methodSpecified: true,
-    label: 'Refresh cache',
+    label: '상품 캐시 갱신',
     pathTemplate: '/api/products/{productId}/cache-refresh',
     description: 'DB에서 상품을 다시 읽고 Redis에 저장하는 쓰기성 요청 흐름을 확인합니다.',
     requestType: 'CACHE_WRITE',
@@ -239,7 +297,7 @@ const FALLBACK_API_CATALOG: ApiDefinition[] = [
     id: 'payment-list',
     method: 'GET',
     methodSpecified: true,
-    label: 'Payment list',
+    label: '결제 목록 조회',
     pathTemplate: '/api/payments',
     description: 'UseCase -> Gateway -> Client 경계를 따라 외부 결제 조회 흐름을 보여주는 샘플 API입니다.',
     requestType: 'QUERY_LIST',
@@ -255,7 +313,7 @@ const FALLBACK_API_CATALOG: ApiDefinition[] = [
     id: 'payment-quote',
     method: 'POST',
     methodSpecified: true,
-    label: 'Create payment quote',
+    label: '결제 견적 생성',
     pathTemplate: '/api/payments/quote',
     description: '외부 결제 연동 경계가 Gateway와 Client로 어떻게 보이는지 보여주는 샘플 API입니다.',
     requestType: 'WRITE',
@@ -270,12 +328,12 @@ const FALLBACK_API_CATALOG: ApiDefinition[] = [
 ]
 
 const FALLBACK_PROJECT_STRUCTURE: ProjectStructure = {
-  projectName: 'StackFlow sample project',
+  projectName: 'StackFlow 샘플 프로젝트',
   framework: 'Spring Boot',
-  frameworkEvidence: 'Bundled StackFlow sample project metadata.',
+  frameworkEvidence: 'StackFlow 샘플 프로젝트 metadata에서 확인했습니다.',
   analysisStatus: 'SUCCESS',
   sourceRoot: 'backend/src/main/java',
-  analysisMessage: 'Showing the bundled StackFlow sample project for exploration.',
+  analysisMessage: '기능을 둘러볼 수 있도록 StackFlow 샘플 프로젝트를 표시합니다.',
   infrastructure: ['Redis', 'MySQL'],
   infrastructureDetails: [
     { name: 'Redis', detectedBy: 'sample', evidence: 'ProductCacheService and cache-refresh endpoints are part of the sample app.' },
@@ -364,61 +422,115 @@ const FALLBACK_PROJECT_STRUCTURE: ProjectStructure = {
 function App() {
   const [productId, setProductId] = useState('1001')
   const [projectPath, setProjectPath] = useState('')
-  const [selectedFolderInfo, setSelectedFolderInfo] = useState<SelectedFolderInfo | null>(null)
+  const [folderPickerState, setFolderPickerState] = useState<'idle' | 'loading' | 'error'>('idle')
+  const [folderPickerMessage, setFolderPickerMessage] = useState('Finder에서 프로젝트 폴더를 선택할 수 있습니다.')
   const [targetBaseUrl, setTargetBaseUrl] = useState('')
   const [queryParams, setQueryParams] = useState<ExternalRequestEntry[]>([
     createRequestEntry('page', '1', false),
   ])
   const [requestHeaders, setRequestHeaders] = useState<ExternalRequestEntry[]>([
-    createRequestEntry('Authorization', 'Bearer local-token', false),
+    createRequestEntry('Authorization', '', false),
   ])
   const [requestBody, setRequestBody] = useState('{\n  "name": "Sample product"\n}')
   const [requestBodyError, setRequestBodyError] = useState<string | null>(null)
   const [externalRequestSnapshot, setExternalRequestSnapshot] = useState<ExternalRequestSnapshot | null>(null)
   const [scenario, setScenario] = useState<(typeof SCENARIOS)[number]['value']>('normal')
+  const [requestOptionTab, setRequestOptionTab] = useState<'query' | 'headers' | 'body'>('query')
   const [activeView, setActiveView] = useState<ViewMode>('project')
   const [apiCatalog, setApiCatalog] = useState<ApiDefinition[]>(FALLBACK_API_CATALOG)
   const [projectStructure, setProjectStructure] = useState<ProjectStructure>(FALLBACK_PROJECT_STRUCTURE)
-  const [catalogSource, setCatalogSource] = useState<'analyzed' | 'fallback'>('fallback')
+  const [, setCatalogSource] = useState<'analyzed' | 'fallback'>('fallback')
   const [analysisTarget, setAnalysisTarget] = useState<'sample' | 'external'>('sample')
   const [analysisState, setAnalysisState] = useState<'idle' | 'loading' | 'error'>('idle')
-  const [analysisMessage, setAnalysisMessage] = useState('Using the default StackFlow backend project.')
+  const [analysisMessage, setAnalysisMessage] = useState('기본 StackFlow 샘플 프로젝트를 사용하고 있습니다.')
   const [selectedApiId, setSelectedApiId] = useState(FALLBACK_API_CATALOG[0].id)
   const [selectedDomainId, setSelectedDomainId] = useState(FALLBACK_PROJECT_STRUCTURE.domains[0].id)
+  const [apiScope, setApiScope] = useState<'all' | 'domain'>('domain')
   const [traceDetail, setTraceDetail] = useState<TraceDetail | null>(null)
   const [recentTraces, setRecentTraces] = useState<TraceSummary[]>([])
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [requestState, setRequestState] = useState<'idle' | 'loading' | 'error'>('idle')
-  const [streamStatus, setStreamStatus] = useState<'idle' | 'connecting' | 'streaming' | 'completed' | 'error'>('idle')
-  const [requestMessage, setRequestMessage] = useState<string>('Open a live stream and run a request.')
+  const [streamStatus, setStreamStatus] = useState<StreamStatus>('idle')
+  const [requestMessage, setRequestMessage] = useState<string>('API를 선택하고 요청을 실행하세요.')
   const [lastResponseBody, setLastResponseBody] = useState<unknown>(null)
   const [externalResponse, setExternalResponse] = useState<ExternalRequestResponse | null>(null)
+  const [agentPath, setAgentPath] = useState('~/.stackflow/agents/opentelemetry-javaagent.jar')
+  const [collectorBaseUrl, setCollectorBaseUrl] = useState('http://localhost:18080')
+  const [instrumentationProfile, setInstrumentationProfile] = useState<InstrumentationProfile | null>(null)
+  const [profileState, setProfileState] = useState<'idle' | 'loading' | 'error'>('idle')
+  const [profileMessage, setProfileMessage] = useState('Agent 경로와 수집 주소를 확인한 뒤 실행 명령을 생성하세요.')
+  const [traceCollectionStatus, setTraceCollectionStatus] = useState<TraceCollectionStatus>('DISABLED')
   const activeStreamRef = useRef<EventSource | null>(null)
   const activeRunIdRef = useRef(0)
   const flowInstanceRef = useRef<ReactFlowInstance | null>(null)
-  const folderInputRef = useRef<HTMLInputElement | null>(null)
 
   const graph = buildGraph(traceDetail)
-  const selectedNode = getNodeDetail(graph.states, selectedNodeId ?? graph.states.find((state) => state.active)?.id ?? null)
+  const primaryFailureEvent = getPrimaryFailureEvent(traceDetail)
+  const primaryFailureNodeId = primaryFailureEvent?.spanId ?? primaryFailureEvent?.component ?? null
+  const selectedNode = getNodeDetail(
+    graph.states,
+    selectedNodeId ?? primaryFailureNodeId ?? graph.states.find((state) => state.active)?.id ?? null,
+  )
   const activeNodeCount = graph.states.filter((state) => state.active).length
   const latestEvent = traceDetail?.events.at(-1) ?? null
+  const inspectorEvent = primaryFailureEvent ?? latestEvent
+  const primaryFailureLabel = graph.states.find((state) => state.id === primaryFailureNodeId)?.label
+    ?? primaryFailureEvent?.component
+    ?? null
   const selectedDomain = projectStructure.domains.find((domain) => domain.id === selectedDomainId) ?? projectStructure.domains[0] ?? EMPTY_DOMAIN
   const hasDetectedDomains = projectStructure.domains.length > 0
   const hasDetectedApis = apiCatalog.length > 0
   const domainApis = apiCatalog.filter((api) => api.domainId === selectedDomain.id)
-  const visibleApis = domainApis.length > 0 ? domainApis : apiCatalog
+  const visibleApis = apiScope === 'all' ? apiCatalog : domainApis
   const selectedApi = visibleApis.find((api) => api.id === selectedApiId) ?? visibleApis[0] ?? EMPTY_API_DEFINITION
-  const projectFacts = buildProjectFacts(projectStructure)
+  const projectMetrics = buildProjectMetrics(projectStructure)
+  const domainLayerGroups = groupProjectLayers(selectedDomain.layers)
+  const domainStructurePath = buildDomainStructurePath(domainLayerGroups, selectedDomain.infrastructure)
+  const supportingDomainGroups = domainLayerGroups.filter((group) =>
+    (group.id === 'model' || group.id === 'support') && group.classes.length > 0,
+  )
+  const commonLayerGroups = groupProjectLayers(buildCommonProjectLayers(projectStructure))
+  const commonClassCount = commonLayerGroups.reduce((sum, group) => sum + group.classes.length, 0)
   const activeRoute = graph.states.filter((state) => state.active)
   const estimatedFlow = hasDetectedApis ? buildEstimatedFlow(selectedApi, selectedDomain) : []
+  const traceComparison = traceDetail?.source === 'OPENTELEMETRY'
+    ? compareEstimatedAndActualFlow(estimatedFlow, traceDetail.events)
+    : null
   const hasConcreteMethod = hasDetectedApis && isConcreteMethodApi(selectedApi)
   const runtimeSupported = hasDetectedApis && hasConcreteMethod && analysisTarget === 'sample' && isStackFlowRuntimeApi(selectedApi)
   const externalRunnable = hasDetectedApis && hasConcreteMethod && analysisTarget === 'external'
   const analyzeOnly = hasDetectedApis && !runtimeSupported && !externalRunnable
   const projectStatusContent = PROJECT_STATUS_CONTENT[projectStructure.analysisStatus]
-  const hasIntegrationBoundary = selectedDomain.layers.some((layer) => layer.name === 'Gateway' || layer.name === 'Client')
-  const selectedDomainDisplayMode = getDomainDisplayMode(selectedDomain)
-  const runtimeModeLabel = runtimeSupported ? 'Run trace' : externalRunnable ? 'Run target' : 'Analyze only'
+  const selectedDomainDisplayMode = getDomainDisplayMode(selectedDomain, analysisTarget === 'sample')
+  const hasIntegrationBoundary = selectedDomainDisplayMode?.tone === 'integration'
+  const externalTraceReady = analysisTarget === 'external' && Boolean(instrumentationProfile)
+  const instrumentationCommand = instrumentationProfile
+    ? instrumentationProfile.commands[instrumentationProfile.buildTool.toLowerCase()]
+      ?? instrumentationProfile.commands.jar
+    : null
+  const runtimeModeLabel = runtimeSupported
+    ? '요청·Trace 가능'
+    : externalRunnable
+      ? externalTraceReady ? '요청 후 Trace 확인' : '외부 API 요청'
+      : '정적 분석만 가능'
+  const traceDisplayStatus = traceDetail?.source === 'OPENTELEMETRY'
+    ? TRACE_COLLECTION_STATUS_LABEL[traceCollectionStatus]
+    : streamStatus === 'idle' && traceDetail
+      ? EVENT_STATUS_LABEL[traceDetail.resultStatus]
+      : STREAM_STATUS_LABEL[streamStatus]
+  const traceDisplayTone = streamStatus === 'idle' && traceDetail
+    ? traceDetail.resultStatus === 'SUCCESS'
+      ? 'success'
+      : traceDetail.resultStatus === 'WARNING'
+        ? 'warning'
+        : 'error'
+    : streamStatus === 'completed'
+      ? 'success'
+      : streamStatus === 'error'
+        ? 'error'
+        : streamStatus === 'idle'
+          ? 'neutral'
+          : 'info'
   const currentResultStatus = externalResponse?.resultStatus ?? traceDetail?.resultStatus ?? 'IDLE'
   const externalPath = selectedApi.buildPath(productId)
   const externalTargetPreview = buildExternalTargetPreview(targetBaseUrl, externalPath, queryParams)
@@ -426,37 +538,8 @@ function App() {
   const selectedApiMethodLabel = getApiMethodLabel(selectedApi)
   const selectedApiMethodClassName = getApiMethodBadgeClassName(selectedApi)
   const graphFitKey = `${traceDetail?.traceId ?? 'empty'}-${traceDetail?.events.length ?? 0}`
-  const workflowSteps = [
-    {
-      number: '01',
-      title: 'Read project map',
-      detail: `${projectStructure.projectName} · ${projectStructure.domains.length} domain`,
-      state: activeView === 'project' || analysisState === 'loading' ? 'active' : catalogSource === 'analyzed' ? 'done' : 'warning',
-    },
-    {
-      number: '02',
-      title: 'Choose endpoint',
-      detail: `${selectedApiMethodLabel} ${selectedApi.pathTemplate}`,
-      state: activeView === 'api' ? 'active' : 'done',
-    },
-    {
-      number: '03',
-      title: requestState === 'loading' ? (runtimeSupported ? 'Streaming request' : 'Calling target API') : runtimeModeLabel,
-      detail: requestState === 'loading'
-        ? runtimeSupported ? 'SSE events are arriving' : targetBaseUrl
-        : selectedApi.requestType,
-      state: activeView === 'runtime' || requestState === 'loading' ? 'active' : traceDetail || externalResponse ? 'done' : 'idle',
-    },
-    {
-      number: '04',
-      title: 'Inspect result',
-      detail: selectedNode ? `${selectedNode.label} node selected` : externalResponse ? `HTTP ${externalResponse.httpStatus || '-'}` : traceDetail ? 'Select a graph node' : 'Waiting for result',
-      state: activeView === 'runtime' && selectedNode ? 'active' : traceDetail || externalResponse ? 'done' : 'idle',
-    },
-  ]
-
   const recentEvents = useMemo(() => {
-    return traceDetail?.events.slice().reverse().slice(0, 6) ?? []
+    return traceDetail?.events.slice(0, 8) ?? []
   }, [traceDetail])
 
   const formattedResponseBody = useMemo(() => {
@@ -489,17 +572,23 @@ function App() {
     }
 
     const frame = window.requestAnimationFrame(() => {
-      flowInstanceRef.current?.fitView({ padding: 0.18, duration: 280, includeHiddenNodes: true })
+      flowInstanceRef.current?.fitView({ padding: 0.14, duration: 180, includeHiddenNodes: true })
     })
+    const settledFit = window.setTimeout(() => {
+      flowInstanceRef.current?.fitView({ padding: 0.14, duration: 0, includeHiddenNodes: true })
+    }, 180)
 
-    return () => window.cancelAnimationFrame(frame)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.clearTimeout(settledFit)
+    }
   }, [graphFitKey])
 
   async function loadApiCatalog() {
     try {
       const response = await fetch('/api/project/structure')
       if (!response.ok) {
-        throw new Error('Project structure request failed.')
+        throw new Error('프로젝트 구조를 불러오지 못했습니다.')
       }
 
       const structure = (await response.json()) as ProjectStructure
@@ -511,7 +600,7 @@ function App() {
         setApiCatalog(FALLBACK_API_CATALOG)
         setCatalogSource('fallback')
         setAnalysisTarget('sample')
-        setAnalysisMessage('Showing the bundled StackFlow sample project. Enter a project path to analyze your own Spring Boot app.')
+        setAnalysisMessage('샘플 프로젝트를 표시하고 있습니다. 직접 분석하려면 프로젝트 경로를 입력하세요.')
         setSelectedDomainId((current) =>
           FALLBACK_PROJECT_STRUCTURE.domains.some((domain) => domain.id === current)
             ? current
@@ -522,19 +611,26 @@ function App() {
     }
   }
 
-  async function analyzeProjectPath() {
+  async function analyzeProjectPath(pathOverride?: string) {
+    const requestedPath = pathOverride ?? projectPath
+    if (pathOverride === undefined && !requestedPath.trim()) {
+      setAnalysisState('error')
+      setAnalysisMessage('분석할 프로젝트 폴더를 선택하거나 절대 경로를 입력하세요. 데모는 별도 버튼으로 열 수 있습니다.')
+      return
+    }
+
     setAnalysisState('loading')
-    setAnalysisMessage('Reading project files and Spring mappings...')
-    const nextAnalysisTarget = projectPath.trim() === '' ? 'sample' : 'external'
+    setAnalysisMessage('프로젝트 파일과 Spring mapping을 읽고 있습니다...')
+    const nextAnalysisTarget = requestedPath.trim() === '' ? 'sample' : 'external'
 
     try {
       const response = await fetch('/api/project/structure/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectPath }),
+        body: JSON.stringify({ projectPath: requestedPath }),
       })
       if (!response.ok) {
-        throw new Error('Project analysis request failed.')
+        throw new Error('프로젝트 분석 요청에 실패했습니다.')
       }
 
       const structure = (await response.json()) as ProjectStructure
@@ -544,7 +640,43 @@ function App() {
       setActiveView('project')
     } catch (error) {
       setAnalysisState('error')
-      setAnalysisMessage(error instanceof Error ? error.message : 'Project analysis failed.')
+      setAnalysisMessage(error instanceof Error ? error.message : '프로젝트 분석에 실패했습니다.')
+    }
+  }
+
+  async function selectLocalProjectFolder() {
+    setFolderPickerState('loading')
+    setFolderPickerMessage('폴더 선택창을 여는 중입니다...')
+
+    try {
+      const response = await fetch('/api/project/folder/select', { method: 'POST' })
+      if (!response.ok) {
+        throw new Error('폴더 선택 요청에 실패했습니다.')
+      }
+
+      const selection = (await response.json()) as {
+        supported: boolean
+        selected: boolean
+        projectPath: string | null
+        message: string
+      }
+      if (!selection.supported) {
+        setFolderPickerState('error')
+        setFolderPickerMessage(selection.message)
+        return
+      }
+      if (!selection.selected || !selection.projectPath) {
+        setFolderPickerState('idle')
+        setFolderPickerMessage(selection.message)
+        return
+      }
+
+      setProjectPath(selection.projectPath)
+      setFolderPickerState('idle')
+      setFolderPickerMessage('선택한 경로가 입력되었습니다. 프로젝트 분석을 실행하세요.')
+    } catch (error) {
+      setFolderPickerState('error')
+      setFolderPickerMessage(error instanceof Error ? error.message : '폴더 선택창을 열지 못했습니다.')
     }
   }
 
@@ -563,24 +695,62 @@ function App() {
       setApiCatalog(analyzedCatalog)
       setCatalogSource('analyzed')
       setAnalysisTarget(target)
+      setApiScope(target === 'external' ? 'all' : 'domain')
       setAnalysisMessage(message)
       setSelectedDomainId((current) => structure.domains.some((domain) => domain.id === current) ? current : (structure.domains[0]?.id ?? EMPTY_DOMAIN.id))
       setSelectedApiId((current) => analyzedCatalog.some((api) => api.id === current) ? current : (analyzedCatalog[0]?.id ?? EMPTY_API_DEFINITION.id))
       if (target === 'external') {
+        setInstrumentationProfile(null)
+        setProfileState('idle')
+        setProfileMessage('Agent 경로와 수집 주소를 확인한 뒤 실행 명령을 생성하세요.')
+        setTraceCollectionStatus('DISABLED')
         setTraceDetail(null)
         setSelectedNodeId(null)
         setLastResponseBody(null)
         setExternalResponse(null)
         setStreamStatus('idle')
         setRequestState('idle')
-        setRequestMessage('External project loaded. Enter a target base URL, then run the selected endpoint.')
+        setRequestMessage('외부 프로젝트를 불러왔습니다. 대상 URL을 입력한 뒤 요청을 실행하세요.')
       }
       if (target === 'sample') {
         setExternalResponse(null)
         setRequestState('idle')
-        setRequestMessage('Open a live stream and run a request.')
+        setRequestMessage('API를 선택하고 요청을 실행하세요.')
       }
     })
+  }
+
+  async function generateInstrumentationProfile() {
+    if (analysisTarget !== 'external' || !projectPath.trim()) {
+      setProfileState('error')
+      setProfileMessage('먼저 외부 Spring 프로젝트 경로를 분석하세요.')
+      return
+    }
+
+    setProfileState('loading')
+    setProfileMessage('분석된 클래스와 public method로 Agent 실행 설정을 만들고 있습니다...')
+    try {
+      const response = await fetch('/api/instrumentation/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectPath: projectPath.trim(),
+          collectorBaseUrl: collectorBaseUrl.trim(),
+          agentPath: agentPath.trim(),
+        }),
+      })
+      if (!response.ok) {
+        throw new Error('실행 Trace 설정을 생성하지 못했습니다.')
+      }
+
+      const profile = (await response.json()) as InstrumentationProfile
+      setInstrumentationProfile(profile)
+      setProfileState('idle')
+      setProfileMessage('명령을 터미널에서 실행해 대상 앱을 Agent와 함께 재시작하세요.')
+    } catch (error) {
+      setProfileState('error')
+      setProfileMessage(error instanceof Error ? error.message : '실행 Trace 설정 생성에 실패했습니다.')
+    }
   }
 
   function selectDomain(domain: ProjectDomain) {
@@ -588,6 +758,7 @@ function App() {
       return
     }
     setSelectedDomainId(domain.id)
+    setApiScope('domain')
     setActiveView('project')
     const nextApi = apiCatalog.find((api) => api.domainId === domain.id)
     if (nextApi) {
@@ -596,28 +767,19 @@ function App() {
     }
   }
 
+  function selectApi(api: ApiDefinition) {
+    setSelectedApiId(api.id)
+    setSelectedDomainId(api.domainId)
+    setExternalResponse(null)
+    setActiveView('api')
+  }
+
   function updateQueryParam(id: string, patch: Partial<ExternalRequestEntry>) {
     setQueryParams((current) => updateRequestEntries(current, id, patch))
   }
 
   function updateRequestHeader(id: string, patch: Partial<ExternalRequestEntry>) {
     setRequestHeaders((current) => updateRequestEntries(current, id, patch))
-  }
-
-  function handleFolderSelection(event: ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(event.target.files ?? [])
-    if (files.length === 0) {
-      return
-    }
-
-    const firstPath = files[0].webkitRelativePath || files[0].name
-    const rootName = firstPath.split('/')[0] || 'Selected folder'
-    setSelectedFolderInfo({
-      name: rootName,
-      fileCount: files.length,
-      sampleFiles: files.slice(0, 4).map((file) => file.webkitRelativePath || file.name),
-    })
-    event.target.value = ''
   }
 
   function removeQueryParam(id: string) {
@@ -645,7 +807,7 @@ function App() {
       setActiveView('project')
       setRequestState('error')
       setStreamStatus('idle')
-      setRequestMessage('No detected REST API is available to run from the current analysis result.')
+      setRequestMessage('현재 분석 결과에는 실행할 REST API가 없습니다.')
       return
     }
 
@@ -655,8 +817,8 @@ function App() {
       setStreamStatus('idle')
       setRequestMessage(
         selectedApi.methodSpecified
-          ? 'This sample API is analysis-only. Switch to Product endpoints for runtime trace, or use an external target to execute requests.'
-          : 'This endpoint was detected from static analysis, but the HTTP method was not explicit. Review the code first, then run it outside StackFlow.',
+          ? '이 API는 정적 분석만 가능합니다. Product API를 선택하면 실제 Trace를 확인할 수 있습니다.'
+          : '정적 분석에서 endpoint는 찾았지만 HTTP method가 명시되지 않았습니다. 소스에서 method를 먼저 확인하세요.',
       )
       return
     }
@@ -673,14 +835,14 @@ function App() {
     setRequestState('loading')
     setStreamStatus('connecting')
     setActiveView('runtime')
-    setRequestMessage('Creating trace session and opening live stream...')
+    setRequestMessage('Trace 세션을 만들고 실시간 연결을 여는 중입니다...')
     setLastResponseBody(null)
     setExternalResponse(null)
 
     try {
       const sessionResponse = await fetch('/api/traces/session', { method: 'POST' })
       if (!sessionResponse.ok) {
-        throw new Error('Trace session could not be created.')
+        throw new Error('Trace 세션을 만들지 못했습니다.')
       }
 
       const session = (await sessionResponse.json()) as TraceSessionResponse
@@ -700,13 +862,13 @@ function App() {
         }
         activeStreamRef.current = stream
         setStreamStatus('streaming')
-        setRequestMessage('Live stream connected. Running request through StackFlow...')
+        setRequestMessage('실시간 연결이 열렸습니다. API 요청을 실행합니다...')
       } catch {
         if (activeRunIdRef.current !== runId) {
           return
         }
         setStreamStatus('error')
-        setRequestMessage('Live stream unavailable. Running request and falling back to final trace load...')
+        setRequestMessage('실시간 연결을 열지 못했습니다. 요청 후 최종 Trace를 불러옵니다...')
       }
 
       const search = new URLSearchParams({ traceId })
@@ -724,7 +886,7 @@ function App() {
       setLastResponseBody(payload)
 
       if (!payload.traceId) {
-        throw new Error('Request did not return a trace id.')
+        throw new Error('응답에서 Trace ID를 받지 못했습니다.')
       }
 
       const finalTrace = await fetchTraceWithRetry(payload.traceId)
@@ -734,7 +896,14 @@ function App() {
 
       startTransition(() => {
         setTraceDetail(finalTrace)
-        setSelectedNodeId((current) => current ?? finalTrace.events.at(-1)?.component ?? null)
+        const failureEvent = getPrimaryFailureEvent(finalTrace)
+        setSelectedNodeId(
+          failureEvent?.spanId
+            ?? failureEvent?.component
+            ?? finalTrace.events.at(-1)?.spanId
+            ?? finalTrace.events.at(-1)?.component
+            ?? null,
+        )
         setRequestState(response.ok ? 'idle' : 'error')
         setStreamStatus(response.ok ? 'completed' : 'error')
         setRequestMessage(buildRequestMessage(finalTrace.resultStatus, payload))
@@ -758,7 +927,7 @@ function App() {
       }
       setRequestState('error')
       setStreamStatus('error')
-      setRequestMessage(error instanceof Error ? error.message : 'Request failed unexpectedly.')
+      setRequestMessage(error instanceof Error ? error.message : '요청 실행 중 오류가 발생했습니다.')
     }
   }
 
@@ -769,8 +938,8 @@ function App() {
       setStreamStatus('idle')
       setRequestMessage(
         selectedApi.methodSpecified
-          ? 'This API is analysis-only. Configure runtime instrumentation before tracing external project internals.'
-          : 'This endpoint was detected from static analysis, but the HTTP method was not explicit. Confirm the verb in source before sending a request.',
+          ? '이 샘플 API는 정적 분석만 제공합니다. Product API를 선택하면 샘플 Trace를 실행할 수 있습니다.'
+          : 'endpoint의 HTTP method가 명시되지 않았습니다. 소스에서 method를 확인한 뒤 요청하세요.',
       )
       return
     }
@@ -781,14 +950,18 @@ function App() {
       setActiveView('api')
       setRequestState('error')
       setStreamStatus('idle')
-      setRequestMessage('Target base URL is required before running an external endpoint.')
+      setRequestMessage('외부 API를 요청하려면 대상 기본 URL을 입력하세요.')
       return
     }
 
+    const captureTrace = externalTraceReady
+    const runId = activeRunIdRef.current + 1
+    activeRunIdRef.current = runId
     closeActiveStream()
     setActiveView('api')
     setRequestState('loading')
     setStreamStatus('idle')
+    setTraceCollectionStatus(captureTrace ? 'PENDING' : 'DISABLED')
     setTraceDetail(null)
     setSelectedNodeId(null)
     setLastResponseBody(null)
@@ -802,8 +975,8 @@ function App() {
         JSON.parse(nextRequestBody)
       } catch {
         setRequestState('error')
-        setRequestBodyError('Request body must be valid JSON before running this endpoint.')
-        setRequestMessage('Fix the JSON request body before running the external request.')
+        setRequestBodyError('요청 본문은 올바른 JSON 형식이어야 합니다.')
+        setRequestMessage('JSON 요청 본문을 수정한 뒤 다시 실행하세요.')
         return
       }
     }
@@ -816,7 +989,7 @@ function App() {
       requestBody: nextRequestBody,
     }
 
-    setRequestMessage(`Calling ${selectedApiMethodLabel} ${externalTargetPreview}...`)
+    setRequestMessage(`${selectedApiMethodLabel} ${externalTargetPreview} 요청 중...`)
 
     try {
       const response = await fetch('/api/external/request', {
@@ -829,22 +1002,51 @@ function App() {
           queryParams: toEnabledEntries(queryParams),
           headers: toEnabledEntries(requestHeaders),
           requestBody: nextRequestBody || null,
+          captureTrace,
         }),
       })
       if (!response.ok) {
-        throw new Error('External request proxy failed.')
+        throw new Error('외부 API 요청 프록시가 실패했습니다.')
       }
 
       const payload = (await response.json()) as ExternalRequestResponse
       startTransition(() => {
         setExternalResponse(payload)
+        setLastResponseBody(parseResponseBody(payload.responseBody))
         setExternalRequestSnapshot(requestSnapshot)
         setRequestState(payload.resultStatus === 'SUCCESS' ? 'idle' : 'error')
+        setTraceCollectionStatus(payload.traceCollectionStatus)
         setRequestMessage(buildExternalRequestMessage(payload))
       })
+
+      if (payload.traceId) {
+        const traceId = payload.traceId
+        setTraceDetail(createPlaceholderTrace(
+          traceId,
+          selectedApiMethodLabel,
+          externalPath,
+          'external-opentelemetry',
+          'OPENTELEMETRY',
+          instrumentationProfile?.serviceName ?? projectStructure.projectName,
+        ))
+        setStreamStatus('connecting')
+        setActiveView('runtime')
+        setRequestMessage('외부 요청은 완료됐습니다. OpenTelemetry span을 기다리고 있습니다...')
+        try {
+          const stream = await openTraceStream(traceId, runId)
+          if (activeRunIdRef.current !== runId) {
+            stream.close()
+            return
+          }
+          activeStreamRef.current = stream
+        } catch {
+          setStreamStatus('error')
+          setRequestMessage('Trace 실시간 연결을 열지 못했습니다. Agent와 수집 주소를 확인하세요.')
+        }
+      }
     } catch (error) {
       setRequestState('error')
-      setRequestMessage(error instanceof Error ? error.message : 'External request failed unexpectedly.')
+      setRequestMessage(error instanceof Error ? error.message : '외부 API 요청 중 오류가 발생했습니다.')
     }
   }
 
@@ -912,7 +1114,7 @@ function App() {
               startedAt: payload.timestamp,
             }
           })
-          setRequestMessage('Receiving live events...')
+          setRequestMessage('실행 이벤트를 수집하고 있습니다...')
         })
       }
 
@@ -929,12 +1131,33 @@ function App() {
 
             return {
               ...current,
-              events: [...current.events, payload],
+              events: current.events.some((event) =>
+                event.eventId === payload.eventId || Boolean(payload.spanId && event.spanId === payload.spanId),
+              ) ? current.events : [...current.events, payload],
               endedAt: payload.endedAt,
             }
           })
-          setSelectedNodeId(payload.component)
+          setSelectedNodeId(payload.spanId ?? payload.component)
         })
+      }
+
+      const onCollectionStatus = (rawEvent: MessageEvent<string>) => {
+        if (activeRunIdRef.current !== runId) {
+          return
+        }
+        const payload = JSON.parse(rawEvent.data) as TraceCollectionStatusEvent
+        setTraceCollectionStatus(payload.status)
+        if (payload.status === 'PENDING') {
+          setStreamStatus('connecting')
+        } else if (payload.status === 'COLLECTING') {
+          setStreamStatus('streaming')
+        } else if (payload.status === 'COMPLETED') {
+          setStreamStatus('completed')
+        } else if (payload.status === 'TIMED_OUT') {
+          terminalReceived = true
+          setStreamStatus('error')
+        }
+        setRequestMessage(payload.message)
       }
 
       const onTerminal = (rawEvent: MessageEvent<string>, nextStatus: 'completed' | 'error') => {
@@ -960,10 +1183,23 @@ function App() {
           })
           setRequestMessage(
             nextStatus === 'completed'
-              ? 'Live trace completed. Finalizing detail view...'
-              : `Live trace failed at ${payload.errorType ?? 'unknown component'}. Finalizing detail view...`,
+              ? 'Trace 수집이 완료됐습니다. 상세 결과를 정리합니다...'
+              : `${payload.errorType ?? '알 수 없는 지점'}에서 Trace가 실패했습니다. 상세 결과를 정리합니다...`,
           )
         })
+        void fetchTraceWithRetry(payload.traceId).then((detail) => {
+          if (activeRunIdRef.current !== runId) return
+          setTraceDetail(detail)
+          const failureEvent = getPrimaryFailureEvent(detail)
+          setSelectedNodeId(
+            failureEvent?.spanId
+              ?? failureEvent?.component
+              ?? detail.events[0]?.spanId
+              ?? detail.events[0]?.component
+              ?? null,
+          )
+          void loadRecentTraces()
+        }).catch(() => undefined)
       }
 
       const onError = () => {
@@ -977,7 +1213,7 @@ function App() {
         }
 
         if (!opened) {
-          finalizeReject(new Error('Live stream could not be opened.'))
+          finalizeReject(new Error('실시간 연결을 열지 못했습니다.'))
           return
         }
 
@@ -990,6 +1226,7 @@ function App() {
       stream.addEventListener('stream_ready', onReady as EventListener)
       stream.addEventListener('trace_started', onStarted as EventListener)
       stream.addEventListener('trace_event', onTraceEvent as EventListener)
+      stream.addEventListener('trace_collection_status', onCollectionStatus as EventListener)
       stream.addEventListener('trace_completed', ((event: Event) => onTerminal(event as MessageEvent<string>, 'completed')) as EventListener)
       stream.addEventListener('trace_failed', ((event: Event) => onTerminal(event as MessageEvent<string>, 'error')) as EventListener)
       stream.addEventListener('error', onError as EventListener)
@@ -1004,171 +1241,173 @@ function App() {
   async function selectTrace(traceId: string) {
     closeActiveStream()
     const detail = await fetchTraceWithRetry(traceId)
+    const matchingApi = apiCatalog.find((api) => matchesTraceEndpoint(api, detail))
     startTransition(() => {
       setTraceDetail(detail)
       setSelectedNodeId(null)
+      if (matchingApi) {
+        setSelectedApiId(matchingApi.id)
+        setSelectedDomainId(matchingApi.domainId)
+      }
       setLastResponseBody(null)
       setStreamStatus('idle')
       setRequestState('idle')
-      setRequestMessage(`Loaded trace ${detail.traceId.slice(0, 8)} from history.`)
+      setRequestMessage(`기록에서 Trace ${detail.traceId.slice(0, 8)}를 불러왔습니다.`)
     })
   }
 
   return (
     <main className="app-shell">
-      <header className="topbar">
+      <header className={`topbar topbar--${activeView}`}>
         <div className="topbar__brand">
-          <span className="topbar__mark">SF</span>
+          <span className="topbar__mark" aria-hidden="true">SF</span>
           <div>
             <strong>StackFlow</strong>
-            <span>Map a Spring project, run one endpoint, inspect the failure node.</span>
+            <span>{projectStructure.projectName}</span>
           </div>
         </div>
-        <div className="topbar__meta">
-          <div>
-            <span>Trace</span>
-            <strong>{traceDetail?.traceId.slice(0, 8) ?? 'waiting'}</strong>
+        <EvidenceProgress
+          activeView={activeView}
+          analysisReady={projectStructure.analysisStatus === 'SUCCESS'}
+          requestReady={hasDetectedApis && hasConcreteMethod}
+          traceReady={Boolean(traceDetail)}
+        />
+        {activeView === 'runtime' ? (
+          <div className="topbar__trace-meta">
+            <span><small>Trace ID</small><strong>{traceDetail?.traceId.slice(0, 8) ?? '대기'}</strong></span>
+            <span><small>결과</small><strong>{getResultStatusLabel(currentResultStatus)}</strong></span>
+            <span><small>상태</small><strong>{traceDisplayStatus}</strong></span>
+            <span><small>이벤트</small><strong>{traceDetail?.events.length ?? 0}</strong></span>
           </div>
-          <div>
-            <span>Result</span>
-            <strong className={`status-text status-text--${currentResultStatus.toLowerCase()}`}>
-              {currentResultStatus}
-            </strong>
-          </div>
-          <div>
-            <span>Stream</span>
-            <strong>{streamStatus.toUpperCase()}</strong>
-          </div>
-          <div>
-            <span>Events</span>
-            <strong>{traceDetail?.events.length ?? 0}</strong>
-          </div>
-        </div>
+        ) : (
+          <StatusBadge tone={projectStructure.analysisStatus === 'SUCCESS' ? 'success' : projectStructure.analysisStatus === 'FAILED' ? 'error' : 'warning'}>
+            {PROJECT_STATUS_LABEL[projectStructure.analysisStatus]}
+          </StatusBadge>
+        )}
       </header>
 
-      <nav className="workflow-rail" aria-label="StackFlow workflow">
-        {workflowSteps.map((step) => (
-          <div key={step.number} className={`workflow-step workflow-step--${step.state}`}>
-            <span>{step.number}</span>
-            <div>
-              <strong>{step.title}</strong>
-              <small>{step.detail}</small>
-            </div>
-          </div>
-        ))}
-      </nav>
-
-      <nav className="view-switcher" aria-label="StackFlow view modes">
-        {VIEW_MODES.map((mode) => (
-          <button
-            key={mode.id}
-            type="button"
-            className={`view-switcher__item${activeView === mode.id ? ' is-active' : ''}${((analysisTarget === 'external' && mode.id === 'runtime') || (!hasDetectedApis && mode.id !== 'project')) ? ' is-disabled' : ''}`}
-            disabled={(analysisTarget === 'external' && mode.id === 'runtime') || (!hasDetectedApis && mode.id !== 'project')}
-            onClick={() => setActiveView(mode.id)}
-          >
-            <span>{mode.label}</span>
-            <strong>{mode.title}</strong>
-            <small>
-              {analysisTarget === 'external' && mode.id === 'runtime'
-                ? 'Instrumentation is required before external internals can be traced.'
-                : !hasDetectedApis && mode.id !== 'project'
-                  ? 'Analyze a project with detected REST APIs before this view becomes available.'
-                : mode.description}
-            </small>
-          </button>
-        ))}
-      </nav>
+      <WorkflowTabs
+        activeView={activeView}
+        hasDetectedApis={hasDetectedApis}
+        traceAvailable={Boolean(traceDetail)}
+        externalProject={analysisTarget === 'external'}
+        onChange={setActiveView}
+      />
 
       <section className={`workspace workspace--${activeView}`}>
         <aside className="left-panel control-rail">
           <div className="panel-card control-card">
-            <div className="panel-header">
+            <div className="panel-header control-header">
               <div>
-                <span className="section-label">Operator runbook</span>
-                <h2>Map, estimate, then trace</h2>
-                <p>Static analysis and actual runtime evidence stay separated.</p>
+                <span className="section-label">
+                  {activeView === 'project' ? '프로젝트 탐색' : activeView === 'api' ? 'API 선택' : 'Trace 기록'}
+                </span>
+                <h2>
+                  {activeView === 'project' ? '프로젝트 열기' : activeView === 'api' ? apiScope === 'all' ? '전체 API' : selectedDomain.name : '최근 Trace'}
+                </h2>
+                <p>
+                  {activeView === 'project'
+                    ? 'Spring Boot 루트 폴더를 선택하세요.'
+                    : activeView === 'api'
+                      ? '실행하거나 확인할 endpoint를 선택하세요.'
+                      : '이전 실행 기록을 다시 확인할 수 있습니다.'}
+                </p>
               </div>
-              <span className={`pill pill--${catalogSource === 'analyzed' ? 'success' : 'warning'}`}>{catalogSource}</span>
+              <StatusBadge tone={activeView === 'project' && analysisTarget === 'external' ? 'success' : 'info'}>
+                {activeView === 'project'
+                  ? (analysisTarget === 'external' ? '외부 프로젝트' : '샘플')
+                  : activeView === 'api'
+                    ? `${visibleApis.length}개 API`
+                    : `${recentTraces.length}개 기록`}
+              </StatusBadge>
             </div>
 
-            <section className="setup-step setup-step--project">
+            {activeView === 'project' ? (
+              <section className="setup-step setup-step--project">
               <div className="setup-step__head">
-                <span>01</span>
+                <ScanSearch size={18} aria-hidden="true" />
                 <div>
-                  <strong>Project structure</strong>
-                  <small>Paste a Spring Boot project path, then let StackFlow map it.</small>
+                  <strong>분석할 프로젝트</strong>
+                  <small>build.gradle 또는 pom.xml이 있는 폴더를 선택합니다.</small>
                 </div>
               </div>
 
               <div className="project-path-form">
-                <label className="field">
-                  <span>Project root path</span>
-                  <input
-                    value={projectPath}
-                    onChange={(event) => setProjectPath(event.target.value)}
-                    placeholder="/Users/jiwoo/Desktop/my-spring-project"
-                  />
-                </label>
-                <div className="folder-picker-row">
+                <div className="project-path-input-row">
+                  <label className="field">
+                    <span>프로젝트 루트 경로</span>
+                    <input
+                      value={projectPath}
+                      onChange={(event) => {
+                        setProjectPath(event.target.value)
+                        setFolderPickerState('idle')
+                      }}
+                      placeholder="/Users/jiwoo/Desktop/my-spring-project"
+                    />
+                  </label>
                   <button
                     className="folder-picker-button"
                     type="button"
-                    onClick={() => folderInputRef.current?.click()}
+                    onClick={() => void selectLocalProjectFolder()}
+                    disabled={folderPickerState === 'loading' || analysisState === 'loading'}
                   >
-                    Browse folder
+                    <FolderOpen size={16} aria-hidden="true" />
+                    {folderPickerState === 'loading' ? '선택 중' : '폴더 선택'}
                   </button>
-                  <input
-                    ref={folderInputRef}
-                    className="folder-picker-input"
-                    type="file"
-                    multiple
-                    onChange={handleFolderSelection}
-                    {...{ webkitdirectory: '', directory: '' }}
-                  />
-                  <p>Browser mode can preview the chosen folder, but cannot read its absolute path. Paste the root path above to run backend analysis.</p>
                 </div>
-                {selectedFolderInfo ? (
-                  <div className="folder-selection-card">
-                    <div>
-                      <span>Selected folder</span>
-                      <strong>{selectedFolderInfo.name}</strong>
-                    </div>
-                    <span>{selectedFolderInfo.fileCount} files detected</span>
-                    <ul>
-                      {selectedFolderInfo.sampleFiles.map((file) => (
-                        <li key={file}>{file}</li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-                <button
-                  className="analyze-button"
-                  type="button"
-                  onClick={() => void analyzeProjectPath()}
-                  disabled={analysisState === 'loading'}
-                >
-                  {analysisState === 'loading' ? 'Analyzing project...' : 'Analyze project'}
-                </button>
-                <p className={`analysis-message analysis-message--${analysisState}`}>{analysisMessage}</p>
-                <p className="analysis-submessage">{projectStatusContent.headerSummary}</p>
-                <p className="analysis-submessage analysis-submessage--detail">{projectStructure.analysisMessage}</p>
-              </div>
+                <p className={`project-path-help ${folderPickerState === 'error' ? 'project-path-help--error' : ''}`}>
+                  {folderPickerMessage}
+                </p>
+                <div className="project-primary-actions">
+                  <button
+                    className="analyze-button"
+                    type="button"
+                    onClick={() => void analyzeProjectPath()}
+                    disabled={analysisState === 'loading' || !projectPath.trim()}
+                  >
+                    <ScanSearch size={17} aria-hidden="true" />
+                    {analysisState === 'loading' ? '분석 중' : '프로젝트 분석'}
+                  </button>
+                  <button className="sample-project-button" type="button" onClick={() => void analyzeProjectPath('')} disabled={analysisState === 'loading'}>
+                    데모 프로젝트
+                  </button>
+                </div>
 
-              <div className="project-strip" aria-label="Detected project summary">
-                {projectFacts.map((item) => (
-                  <span key={item.label}>
-                    <strong>{item.label}</strong>
-                    {item.value}
-                  </span>
-                ))}
+                <div className={`analysis-summary analysis-summary--${analysisState === 'error' ? 'failed' : projectStructure.analysisStatus.toLowerCase()}`}>
+                  {analysisState !== 'error' && projectStructure.analysisStatus === 'SUCCESS' ? <CheckCircle2 size={18} aria-hidden="true" /> : <AlertCircle size={18} aria-hidden="true" />}
+                  <div>
+                    <span>{analysisTarget === 'external' ? projectStructure.projectName : 'StackFlow 샘플'}</span>
+                    <strong>
+                      {analysisState === 'error'
+                        ? analysisMessage
+                        : projectStructure.analysisStatus === 'SUCCESS'
+                          ? `도메인 ${projectStructure.domains.length}개 · API ${apiCatalog.length}개`
+                          : PROJECT_STATUS_LABEL[projectStructure.analysisStatus]}
+                    </strong>
+                  </div>
+                  {hasDetectedApis && analysisState !== 'error' ? (
+                    <button type="button" onClick={() => setActiveView('api')}>
+                      API 보기
+                      <ArrowRight size={15} aria-hidden="true" />
+                    </button>
+                  ) : null}
+                  <details>
+                    <summary>기술 메시지</summary>
+                    <p>{analysisMessage}</p>
+                    <p>{projectStructure.analysisMessage}</p>
+                  </details>
+                </div>
               </div>
 
               <div className="domain-compact">
+                <div className="section-row domain-compact__head">
+                  <span className="section-label">도메인</span>
+                  <span>{projectStructure.domains.length}개</span>
+                </div>
                 <div className="domain-list domain-list--compact">
                   {hasDetectedDomains ? (
                     projectStructure.domains.map((domain) => {
-                      const displayMode = getDomainDisplayMode(domain)
+                      const displayMode = getDomainDisplayMode(domain, analysisTarget === 'sample')
 
                       return (
                         <button
@@ -1179,49 +1418,48 @@ function App() {
                         >
                           <div className="domain-item__title">
                             <strong>{domain.name}</strong>
-                            <small>{domain.endpoints.length} APIs</small>
+                            <small>{domain.endpoints.length}개 API</small>
                           </div>
                           {displayMode ? (
                             <span className={`domain-mode-badge domain-mode-badge--${displayMode.tone}`}>
                               {displayMode.label}
                             </span>
                           ) : null}
-                          <span>{domain.description}</span>
                           <em>{domain.controllers.map((controller) => controller.name).join(', ')}</em>
                         </button>
                       )
                     })
                   ) : (
-                    <p className="empty-copy">No API domain was detected in this analysis result.</p>
+                    <p className="empty-copy">분석 결과에서 API 도메인을 찾지 못했습니다.</p>
                   )}
                 </div>
-                <div className="layer-stack">
-                  {selectedDomain.layers.map((layer) => (
-                    <span key={layer.name}>
-                      {layer.name}
-                      <small>{layer.classes.length}</small>
-                    </span>
-                  ))}
-                </div>
-                <div className="domain-meta">
-                  <span>{selectedDomain.responsibilities.join(' / ') || 'No responsibilities detected'}</span>
-                  <span>{selectedDomain.infrastructure.join(' / ') || 'No infrastructure detected'}</span>
+              </div>
+              </section>
+            ) : null}
+
+            {activeView === 'api' ? (
+              <>
+                <section className="setup-step setup-step--endpoint">
+              <div className="setup-step__head">
+                <ChevronRight size={18} aria-hidden="true" />
+                <div>
+                  <strong>Endpoint 선택</strong>
+                  <small>전체 API를 보거나 선택한 도메인만 좁혀서 확인합니다.</small>
                 </div>
               </div>
-            </section>
 
-            <section className="setup-step setup-step--endpoint">
-              <div className="setup-step__head">
-                <span>02</span>
-                <div>
-                  <strong>Choose endpoint</strong>
-                  <small>Only APIs in the selected domain are shown here.</small>
-                </div>
+              <div className="api-scope-control" role="group" aria-label="API 표시 범위">
+                <button type="button" className={apiScope === 'all' ? 'is-active' : ''} onClick={() => setApiScope('all')}>
+                  전체 API <strong>{apiCatalog.length}</strong>
+                </button>
+                <button type="button" className={apiScope === 'domain' ? 'is-active' : ''} onClick={() => setApiScope('domain')}>
+                  {selectedDomain.name} <strong>{domainApis.length}</strong>
+                </button>
               </div>
 
               <div className="section-row">
-                <span className="section-label">API catalog</span>
-                <span>{visibleApis.length} / {apiCatalog.length} endpoints</span>
+                <span className="section-label">API 목록</span>
+                <span>{apiScope === 'all' ? `전체 ${apiCatalog.length}개` : `${selectedDomain.name} ${domainApis.length}개 · 전체 ${apiCatalog.length}개`}</span>
               </div>
               <div className="api-list api-list--catalog">
                 {hasDetectedApis ? (
@@ -1230,11 +1468,7 @@ function App() {
                       key={api.id}
                       type="button"
                       className={`api-item${selectedApi.id === api.id ? ' is-selected' : ''}`}
-                      onClick={() => {
-                        setSelectedApiId(api.id)
-                        setExternalResponse(null)
-                        setActiveView('api')
-                      }}
+                      onClick={() => selectApi(api)}
                     >
                       <span className={getApiMethodBadgeClassName(api)}>{getApiMethodLabel(api)}</span>
                       <div>
@@ -1243,26 +1477,38 @@ function App() {
                         <p>{api.requestType} · {api.description}</p>
                         <span className="api-item__handler">{api.controller}.{api.handler}</span>
                         {!api.methodSpecified ? (
-                          <span className="api-item__handler">Static analysis only · HTTP method not explicit</span>
+                          <span className="api-item__handler">정적 분석만 가능 · HTTP method 미지정</span>
                         ) : null}
                       </div>
                     </button>
                   ))
                 ) : (
-                  <p className="empty-copy">No detected REST API is available for request or trace views.</p>
+                  <p className="empty-copy">요청하거나 Trace를 확인할 REST API가 없습니다.</p>
                 )}
               </div>
-            </section>
+                </section>
 
-            <section className="setup-step setup-step--run">
+                <section className="setup-step setup-step--run">
+              <div className="request-context-bar">
+                <button type="button" onClick={() => setActiveView('project')}>
+                  <ArrowLeft size={15} aria-hidden="true" />
+                  프로젝트 구조
+                </button>
+                <span>
+                  <strong>{selectedDomain.name}</strong>
+                  {selectedApiMethodLabel} {selectedApi.pathTemplate}
+                </span>
+              </div>
               <div className="setup-step__head">
-                <span>03</span>
+                <Send size={18} aria-hidden="true" />
                 <div>
-                  <strong>{runtimeSupported ? 'Run live trace' : 'Run endpoint'}</strong>
+                  <strong>{runtimeSupported || externalTraceReady ? 'API 요청과 Trace 실행' : '외부 API 요청'}</strong>
                   <small>
                     {runtimeSupported
-                      ? 'The stream opens first, then the selected API request runs.'
-                      : 'Call the selected endpoint through the StackFlow backend proxy.'}
+                      ? '실시간 연결을 연 뒤 선택한 API를 실행합니다.'
+                      : externalTraceReady
+                        ? '요청에 traceparent를 넣고 Java Agent가 보낸 실제 span을 수집합니다.'
+                        : 'StackFlow backend proxy를 통해 선택한 endpoint를 호출합니다.'}
                   </small>
                 </div>
               </div>
@@ -1272,10 +1518,10 @@ function App() {
                 <div>
                   <strong>{selectedApi.label}</strong>
                   <small>{selectedApi.pathTemplate}</small>
-                  {!selectedApi.methodSpecified ? <small>Detected from static analysis only. HTTP method was not explicit.</small> : null}
+                  {!selectedApi.methodSpecified ? <small>HTTP method가 명시되지 않아 정적 분석만 가능합니다.</small> : null}
                 </div>
                 <span className={`pill pill--inline ${runtimeSupported ? 'pill--success' : 'pill--warning'}`}>
-                  {runtimeModeLabel}
+                      {runtimeModeLabel}
                 </span>
               </div>
 
@@ -1284,11 +1530,11 @@ function App() {
                   <>
                     <div className="request-block request-block--basic">
                       <div className="request-block__head">
-                        <span>Basic request</span>
-                        <small>Use a public target URL, or enable private targets on the backend for local apps.</small>
+                        <span>요청 대상</span>
+                        <small>기본값은 공개 URL만 허용합니다.</small>
                       </div>
                       <label className="field">
-                        <span>Target base URL</span>
+                        <span>대상 기본 URL</span>
                         <input
                           value={targetBaseUrl}
                           onChange={(event) => setTargetBaseUrl(event.target.value)}
@@ -1297,22 +1543,34 @@ function App() {
                       </label>
                       {selectedApi.requiresProductId ? (
                         <label className="field">
-                          <span>Path variable value</span>
+                          <span>Path variable 값</span>
                           <input value={productId} onChange={(event) => setProductId(event.target.value)} />
                         </label>
                       ) : null}
+                      <details className="security-note">
+                        <summary>로컬·사설 URL 요청 안내</summary>
+                        <p>로컬 앱을 호출하려면 backend에서 private target 허용 설정을 켜야 합니다.</p>
+                      </details>
                     </div>
-                    <details className="advanced-request">
-                      <summary>
-                        <span>Advanced request options</span>
-                        <small>{countEnabledEntries(queryParams)} query / {countEnabledEntries(requestHeaders)} headers / {bodyAllowed ? 'body available' : 'no body'}</small>
-                      </summary>
-                      <div className="advanced-request__body">
+                    <div className="request-options">
+                      <div className="request-option-tabs" role="tablist" aria-label="요청 옵션">
+                        <button type="button" role="tab" aria-selected={requestOptionTab === 'query'} className={requestOptionTab === 'query' ? 'is-active' : ''} onClick={() => setRequestOptionTab('query')}>
+                          Query <span>{countEnabledEntries(queryParams)}</span>
+                        </button>
+                        <button type="button" role="tab" aria-selected={requestOptionTab === 'headers'} className={requestOptionTab === 'headers' ? 'is-active' : ''} onClick={() => setRequestOptionTab('headers')}>
+                          Header <span>{countEnabledEntries(requestHeaders)}</span>
+                        </button>
+                        <button type="button" role="tab" aria-selected={requestOptionTab === 'body'} className={requestOptionTab === 'body' ? 'is-active' : ''} onClick={() => setRequestOptionTab('body')}>
+                          Body <span>{bodyAllowed ? 'JSON' : '-'}</span>
+                        </button>
+                      </div>
+                      {requestOptionTab === 'query' ? (
                         <div className="request-editor">
                           <div className="request-editor__head">
-                            <span>Query params</span>
+                            <span>쿼리 파라미터</span>
                             <button type="button" onClick={() => setQueryParams((current) => [...current, createRequestEntry('', '', true)])}>
-                              Add query
+                              <Plus size={14} aria-hidden="true" />
+                              항목 추가
                             </button>
                           </div>
                           <div className="request-entry-list">
@@ -1324,7 +1582,7 @@ function App() {
                                     checked={entry.enabled}
                                     onChange={(event) => updateQueryParam(entry.id, { enabled: event.target.checked })}
                                   />
-                                  <span>{entry.enabled ? 'on' : 'off'}</span>
+                                  <span>{entry.enabled ? '사용' : '제외'}</span>
                                 </label>
                                 <input
                                   value={entry.key}
@@ -1336,18 +1594,21 @@ function App() {
                                   onChange={(event) => updateQueryParam(entry.id, { value: event.target.value })}
                                   placeholder="value"
                                 />
-                                <button type="button" onClick={() => removeQueryParam(entry.id)} aria-label="Remove query parameter">
-                                  Remove
+                                <button type="button" onClick={() => removeQueryParam(entry.id)} aria-label="쿼리 파라미터 삭제">
+                                  <Trash2 size={14} aria-hidden="true" />
                                 </button>
                               </div>
                             ))}
                           </div>
                         </div>
+                      ) : null}
+                      {requestOptionTab === 'headers' ? (
                         <div className="request-editor">
                           <div className="request-editor__head">
-                            <span>Headers</span>
+                            <span>요청 헤더</span>
                             <button type="button" onClick={() => setRequestHeaders((current) => [...current, createRequestEntry('', '', true)])}>
-                              Add header
+                              <Plus size={14} aria-hidden="true" />
+                              항목 추가
                             </button>
                           </div>
                           <div className="request-entry-list">
@@ -1359,7 +1620,7 @@ function App() {
                                     checked={entry.enabled}
                                     onChange={(event) => updateRequestHeader(entry.id, { enabled: event.target.checked })}
                                   />
-                                  <span>{entry.enabled ? 'on' : 'off'}</span>
+                                  <span>{entry.enabled ? '사용' : '제외'}</span>
                                 </label>
                                 <input
                                   value={entry.key}
@@ -1371,15 +1632,17 @@ function App() {
                                   onChange={(event) => updateRequestHeader(entry.id, { value: event.target.value })}
                                   placeholder="Bearer token"
                                 />
-                                <button type="button" onClick={() => removeRequestHeader(entry.id)} aria-label="Remove request header">
-                                  Remove
+                                <button type="button" onClick={() => removeRequestHeader(entry.id)} aria-label="요청 헤더 삭제">
+                                  <Trash2 size={14} aria-hidden="true" />
                                 </button>
                               </div>
                             ))}
                           </div>
                         </div>
+                      ) : null}
+                      {requestOptionTab === 'body' ? (
                         <label className={`field request-body-field${bodyAllowed ? '' : ' is-disabled'}`}>
-                          <span>{bodyAllowed ? 'JSON body' : 'JSON body unavailable for this method'}</span>
+                          <span>{bodyAllowed ? 'JSON 요청 본문' : '이 HTTP method는 요청 본문을 사용하지 않습니다'}</span>
                           <textarea
                             value={requestBody}
                             onChange={(event) => {
@@ -1390,10 +1653,10 @@ function App() {
                             rows={6}
                           />
                         </label>
-                      </div>
-                    </details>
+                      ) : null}
+                    </div>
                     <div className="request-preview request-preview--send">
-                      <span>Request to be sent</span>
+                      <span>실행할 요청</span>
                       <div>
                         <span className={selectedApiMethodClassName}>{selectedApiMethodLabel}</span>
                         <strong>{externalTargetPreview}</strong>
@@ -1410,7 +1673,7 @@ function App() {
                 ) : null}
                 {runtimeSupported ? (
                   <label className="field">
-                    <span>Failure scenario</span>
+                    <span>실행 시나리오</span>
                     <select value={scenario} onChange={(event) => setScenario(event.target.value as (typeof SCENARIOS)[number]['value'])}>
                       {SCENARIOS.map((item) => (
                         <option key={item.value} value={item.value}>
@@ -1421,27 +1684,69 @@ function App() {
                   </label>
                 ) : null}
                 <button className="run-button" type="button" onClick={() => void runRequest()} disabled={requestState === 'loading' || !hasDetectedApis || analyzeOnly}>
+                  <Send size={17} aria-hidden="true" />
                   {requestState === 'loading'
-                    ? (runtimeSupported ? 'Streaming events...' : 'Calling target...')
+                    ? (runtimeSupported ? 'Trace 수집 중...' : '외부 API 요청 중...')
                     : runtimeSupported
-                      ? 'Run runtime trace'
-                      : externalRunnable
-                        ? 'Run external request'
-                        : 'Analyze only'}
+                      ? '요청 보내고 Trace 보기'
+                    : externalRunnable
+                        ? externalTraceReady ? '요청 보내고 Trace 보기' : '외부 API 요청'
+                        : '정적 분석만 가능'}
                 </button>
                 <p className="request-message">{requestMessage}</p>
+
+                <section className="request-result-panel" aria-label="API 응답">
+                  <div className="section-row">
+                    <div>
+                      <span className="section-label">응답</span>
+                      <strong>{externalRunnable ? '외부 HTTP 결과' : '실행 결과'}</strong>
+                    </div>
+                    <span className={`pill pill--inline pill--${((externalRunnable ? externalResponse?.resultStatus : traceDetail?.resultStatus) ?? 'idle').toLowerCase()}`}>
+                      {externalRunnable
+                        ? externalResponse ? `HTTP ${externalResponse.httpStatus || '-'}` : '대기'
+                        : traceDetail ? `HTTP ${traceDetail.httpStatus || '-'}` : '대기'}
+                    </span>
+                  </div>
+                  {externalRunnable ? (
+                    externalResponse ? (
+                      <>
+                        <div className="request-result-meta">
+                          <span><strong>{externalResponse.durationMs}ms</strong>소요 시간</span>
+                          <span><strong>{externalResponse.contentType || '-'}</strong>Content-Type</span>
+                          <span><strong>{externalResponse.traceId?.slice(0, 8) || '-'}</strong>Trace ID</span>
+                        </div>
+                        {externalResponse.errorMessage ? <p className="external-error">{externalResponse.errorMessage}</p> : null}
+                        {formattedExternalResponseBody ? (
+                          <pre className="response-body response-body--external">{formattedExternalResponseBody}</pre>
+                        ) : <p className="empty-copy">대상 API가 빈 응답 본문을 반환했습니다.</p>}
+                      </>
+                    ) : <p className="empty-copy">대상 URL을 입력하고 요청을 보내면 여기에 응답이 표시됩니다.</p>
+                  ) : formattedResponseBody ? (
+                    <>
+                      <div className="request-result-meta">
+                        <span><strong>{traceDetail?.durationMs ?? 0}ms</strong>소요 시간</span>
+                        <span><strong>{traceDetail?.events.length ?? 0}</strong>실행 이벤트</span>
+                        <span><strong>{traceDetail?.traceId.slice(0, 8) ?? '-'}</strong>Trace ID</span>
+                      </div>
+                      <pre className="response-body response-body--external">{formattedResponseBody}</pre>
+                    </>
+                  ) : <p className="empty-copy">요청을 실행하면 JSON 응답이 여기에 표시됩니다.</p>}
+                </section>
               </div>
-            </section>
+                </section>
+              </>
+            ) : null}
           </div>
 
-          <div className="panel-card recent-card">
+          {activeView === 'runtime' ? (
+            <div className="panel-card recent-card">
             <div className="panel-header">
-              <h2>Recent traces</h2>
+              <h2>최근 Trace</h2>
               <span>{recentTraces.length}</span>
             </div>
             <div className="trace-list">
               {recentTraces.length === 0 ? (
-                <p className="empty-copy">No trace captured yet.</p>
+                <p className="empty-copy">아직 수집된 Trace가 없습니다.</p>
               ) : (
                 recentTraces.map((trace) => (
                   <button
@@ -1455,122 +1760,145 @@ function App() {
                       <span>{trace.traceId.slice(0, 8)}</span>
                     </div>
                     <div>
-                      <span className={`pill pill--inline pill--${trace.resultStatus.toLowerCase()}`}>{trace.resultStatus}</span>
+                      <span className={`pill pill--inline pill--${trace.resultStatus.toLowerCase()}`}>{EVENT_STATUS_LABEL[trace.resultStatus]}</span>
                       <span>{trace.durationMs}ms</span>
                     </div>
                   </button>
                 ))
               )}
             </div>
-          </div>
+            </div>
+          ) : null}
         </aside>
 
         <section className="graph-panel">
           {activeView === 'project' ? (
             <div className="panel-card panel-card--map">
-              <div className="graph-head">
-                <div>
-                  <span className="section-label">Project · static map</span>
-                  <h2>{projectStructure.projectName}</h2>
-                  <p>Start here. Keep this screen for structure only, then switch to Request when you want to run an API.</p>
+              <header className="project-overview-head">
+                <div className="project-overview-title">
+                  <span className="section-label">분석된 프로젝트</span>
+                  <div>
+                    <h2>{projectStructure.projectName}</h2>
+                    <StatusBadge tone={projectStructure.analysisStatus === 'SUCCESS' ? 'success' : projectStructure.analysisStatus === 'FAILED' ? 'error' : 'warning'}>
+                      {PROJECT_STATUS_LABEL[projectStructure.analysisStatus]}
+                    </StatusBadge>
+                  </div>
+                  <p>{projectStructure.framework} · {projectStructure.sourceRoot || '소스 루트 미감지'}</p>
                 </div>
-                <span className={`pill pill--inline ${projectStructure.analysisStatus === 'SUCCESS' ? 'pill--success' : 'pill--warning'}`}>
-                  {projectStructure.analysisStatus}
-                </span>
-              </div>
+                <p>{projectStatusContent.headerSummary}</p>
+              </header>
 
-              <div className="map-board" aria-label="Detected project map">
-                <section className="map-column map-column--summary">
-                  <span className="section-label">Detected summary</span>
-                  <div className="project-strip project-strip--map">
-                    {projectFacts.map((item) => (
-                      <span key={item.label}>
-                        <strong>{item.label}</strong>
-                        {item.value}
-                      </span>
-                    ))}
-                  </div>
-                  {projectStructure.analysisStatus !== 'FAILED' ? (
-                    <article className="analysis-guide-card">
-                      <strong>Best read with explicit Spring roles</strong>
-                      <p>Use names like Controller, Service or UseCase, Cache, Repository or Store, Gateway, and Client so the static map stays explainable.</p>
-                      <small>Reference: docs/stackflow-analysis-convention.md</small>
-                    </article>
-                  ) : null}
-                  <div className="map-domain-list">
-                    {hasDetectedDomains ? (
-                      projectStructure.domains.map((domain) => {
-                        const displayMode = getDomainDisplayMode(domain)
+              <section className="project-metric-strip" aria-label="프로젝트 분석 요약">
+                {projectMetrics.map((metric) => (
+                  <article key={metric.id}>
+                    <span className="project-metric-icon" aria-hidden="true">
+                      {metric.id === 'domains' ? <Boxes size={17} /> : metric.id === 'apis' ? <Braces size={17} /> : metric.id === 'controllers' ? <Network size={17} /> : <Database size={17} />}
+                    </span>
+                    <span>{metric.label}</span>
+                    <strong>{metric.value}</strong>
+                    <small>{metric.detail}</small>
+                  </article>
+                ))}
+              </section>
 
-                        return (
-                          <button
-                            key={domain.id}
-                            type="button"
-                            className={`map-domain-card${selectedDomain.id === domain.id ? ' is-selected' : ''}`}
-                            onClick={() => selectDomain(domain)}
-                          >
-                            <strong>{domain.name}</strong>
-                            {displayMode ? (
-                              <span className={`domain-mode-badge domain-mode-badge--${displayMode.tone}`}>
-                                {displayMode.label}
-                              </span>
-                            ) : null}
-                            <span>{domain.endpoints.length} APIs</span>
-                            <small>{domain.description}</small>
-                          </button>
-                        )
-                      })
-                    ) : (
-                      <p className="empty-copy">{projectStatusContent.emptyDomainMessage}</p>
-                    )}
-                  </div>
-                </section>
-
+              <div className="map-board" aria-label="분석된 프로젝트 구조">
                 <section className="map-column map-column--domain-detail">
-                  <div className="map-detail-head">
+                  <header className="domain-focus-head">
                     <div>
-                      <span className="section-label">Selected domain</span>
-                      <strong>{hasDetectedDomains ? selectedDomain.name : 'No detected domain'}</strong>
-                      <p>{hasDetectedDomains ? selectedDomain.description : projectStatusContent.headerSummary}</p>
-                      {hasDetectedDomains && selectedDomainDisplayMode ? (
-                        <small className="map-detail-mode">{selectedDomainDisplayMode.detail}</small>
-                      ) : null}
+                      <span className="section-label">선택한 도메인</span>
+                      <div className="domain-focus-title">
+                        <strong>{hasDetectedDomains ? selectedDomain.name : '감지된 도메인 없음'}</strong>
+                        {hasDetectedDomains && selectedDomainDisplayMode ? (
+                          <span className={`domain-mode-badge domain-mode-badge--${selectedDomainDisplayMode.tone}`}>
+                            {selectedDomainDisplayMode.label}
+                          </span>
+                        ) : null}
+                      </div>
+                      <p>{hasDetectedDomains ? getDomainDescription(selectedDomain, analysisTarget === 'sample') : projectStatusContent.headerSummary}</p>
                     </div>
-                    <span className={`pill pill--inline ${projectStructure.analysisStatus === 'SUCCESS' ? 'pill--success' : 'pill--warning'}`}>{selectedDomain.endpoints.length} APIs</span>
+                    {selectedDomain.endpoints.length > 0 ? (
+                      <button className="domain-primary-action" type="button" onClick={() => setActiveView('api')}>
+                        선택한 API로 요청
+                        <ArrowRight size={16} aria-hidden="true" />
+                      </button>
+                    ) : null}
+                  </header>
+
+                  <div className="domain-identity-strip">
+                    <span>
+                      <small>Controller</small>
+                      <strong>{selectedDomain.controllers.map((controller) => controller.name).join(', ') || '감지되지 않음'}</strong>
+                    </span>
+                    <span>
+                      <small>Base path</small>
+                      <strong>{selectedDomain.controllers.map((controller) => controller.basePath || '/').join(' · ') || '-'}</strong>
+                    </span>
+                    <span>
+                      <small>Endpoint</small>
+                      <strong>{selectedDomain.endpoints.length}개</strong>
+                    </span>
                   </div>
-                  <div className="map-node-grid">
-                    <article className="map-node-card">
-                      <strong>Controllers</strong>
-                      <span>{selectedDomain.controllers.map((controller) => controller.name).join(', ') || 'Not detected'}</span>
-                      <small>{selectedDomain.controllers.map((controller) => `${controller.basePath || '/'} · ${controller.endpointCount} endpoints`).join(' / ')}</small>
-                      <small>{selectedDomain.controllers.map((controller) => controller.sourceFile).join(' / ')}</small>
-                    </article>
-                    <article className="map-node-card">
-                      <strong>Layers</strong>
-                      <span>{selectedDomain.layers.map((layer) => layer.name).join(' -> ') || 'Not detected'}</span>
-                      <small>{selectedDomain.layers.flatMap((layer) => layer.classes).join(', ')}</small>
-                      <small>{selectedDomain.layers.map((layer) => layer.evidence).join(' / ')}</small>
-                    </article>
-                    <article className="map-node-card map-node-card--infra">
-                      <strong>Infrastructure</strong>
-                      <span>{selectedDomain.infrastructure.join(' / ') || 'Not detected'}</span>
-                      <small>{selectedDomain.infrastructureDetails.map((item) => `${item.name}: ${item.evidence}`).join(' / ') || 'No infrastructure evidence recorded.'}</small>
-                    </article>
-                    <article className="map-node-card">
-                      <strong>Responsibilities</strong>
-                      <span>{selectedDomain.responsibilities.join(' / ') || 'Not detected'}</span>
-                      <small>{selectedDomain.packageRoots.join(' / ') || 'Use Request view to inspect one selected endpoint.'}</small>
-                    </article>
+
+                  <section className="domain-structure-section" aria-label="도메인 구조 경로">
+                    <div className="section-row">
+                      <div>
+                        <span className="section-label">구조 경로</span>
+                        <strong>코드에서 감지한 주요 역할</strong>
+                      </div>
+                      <span>실제 실행 순서는 Trace에서 확인합니다.</span>
+                    </div>
+                    {domainStructurePath.length > 0 ? (
+                      <div className="domain-structure-path">
+                        {domainStructurePath.map((step) => (
+                          <article key={step.id} className={`domain-structure-step domain-structure-step--${step.tone}`}>
+                            <span>{step.label}</span>
+                            <strong>{step.value}</strong>
+                            <small>{step.detail}</small>
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="empty-copy">이 도메인에서 역할이 명확한 클래스를 찾지 못했습니다.</p>
+                    )}
+                    {supportingDomainGroups.length > 0 ? (
+                      <div className="domain-supporting-groups">
+                        {supportingDomainGroups.map((group) => (
+                          <span key={group.id}>
+                            <strong>{group.label}</strong>
+                            {group.classes.length}개
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </section>
+
+                  <div className="section-row map-endpoint-head">
+                    <div>
+                      <span className="section-label">감지된 API</span>
+                      <strong>{selectedApiMethodLabel} {selectedApi.pathTemplate}</strong>
+                    </div>
+                    <span>{selectedDomain.endpoints.length}개</span>
                   </div>
                   <div className="map-endpoint-list">
                     {selectedDomain.endpoints.length > 0 ? (
                       selectedDomain.endpoints.map((endpoint) => (
-                        <article key={endpoint.id} className="map-endpoint-card">
-                          <strong>{getApiMethodLabel(endpoint)} {endpoint.path}</strong>
-                          <span>{endpoint.controller}.{endpoint.handler}</span>
-                          {!endpoint.methodSpecified ? <small>Static analysis only · HTTP method not explicit</small> : null}
-                          <small>{endpoint.sourceFile}:{endpoint.sourceLine || '?'}</small>
-                        </article>
+                        <button
+                          key={endpoint.id}
+                          type="button"
+                          className={`map-endpoint-card${selectedApi.id === endpoint.id ? ' is-selected' : ''}`}
+                          onClick={() => {
+                            setSelectedApiId(endpoint.id)
+                            setExternalResponse(null)
+                          }}
+                        >
+                          <span className={getApiMethodBadgeClassName(endpoint)}>{getApiMethodLabel(endpoint)}</span>
+                          <span className="map-endpoint-card__content">
+                            <strong>{endpoint.path}</strong>
+                            <small>{endpoint.controller}.{endpoint.handler}</small>
+                            {!endpoint.methodSpecified ? <small>정적 분석만 가능 · HTTP method 미지정</small> : null}
+                          </span>
+                          <ChevronRight size={16} aria-hidden="true" />
+                        </button>
                       ))
                     ) : (
                       <p className="empty-copy">{projectStatusContent.emptyEndpointMessage}</p>
@@ -1583,20 +1911,19 @@ function App() {
 
           {activeView === 'api' ? (
             <div className="panel-card panel-card--api-flow">
-              <div className="graph-head">
-                <div>
-                  <span className="section-label">Request path · estimated</span>
-                  <h2>{selectedApiMethodLabel} {selectedApi.pathTemplate}</h2>
-                  <p>Use this as a preview. Actual node timing lives in the Trace view.</p>
-                </div>
-                <span className={`pill pill--inline ${runtimeSupported ? 'pill--success' : 'pill--warning'}`}>
-                  {runtimeModeLabel}
-                </span>
-              </div>
-
+              <details className="request-flow-disclosure">
+                <summary>
+                  <span>
+                    <span className="section-label">보조 정보</span>
+                    <strong>예상 호출 경로</strong>
+                    <small>{selectedApiMethodLabel} {selectedApi.pathTemplate} · 코드 구조 기반</small>
+                  </span>
+                  <span>{estimatedFlow.length}단계</span>
+                </summary>
+                <div className="request-flow-content">
               <div className="api-flow-summary">
                 <span>
-                  <strong>Domain</strong>
+                  <strong>도메인</strong>
                   {selectedDomain.name}
                 </span>
                 <span>
@@ -1604,16 +1931,16 @@ function App() {
                   {selectedApi.controller}.{selectedApi.handler}
                 </span>
                 <span>
-                  <strong>Request type</strong>
+                  <strong>요청 유형</strong>
                   {selectedApi.requestType}
                 </span>
                 <span>
-                  <strong>Evidence level</strong>
-                  {hasIntegrationBoundary ? 'Estimated with integration boundary' : 'Estimated from code shape'}
+                  <strong>근거 수준</strong>
+                  {hasIntegrationBoundary ? '외부 연동 경계 포함' : '코드 구조 기반 예상'}
                 </span>
               </div>
 
-              <div className="estimated-flow" aria-label="Estimated API flow">
+              <div className="estimated-flow" aria-label="예상 API 흐름">
                 {estimatedFlow.length > 0 ? (
                   estimatedFlow.map((step, index) => (
                     <article key={step.id} className="estimated-step">
@@ -1629,30 +1956,40 @@ function App() {
                     </article>
                   ))
                 ) : (
-                  <p className="empty-copy">No estimated request path is available because the analysis did not detect any REST API.</p>
+                  <p className="empty-copy">REST API를 찾지 못해 예상 요청 경로를 만들 수 없습니다.</p>
                 )}
               </div>
 
               <div className="analysis-boundary">
                 <strong>
                   {runtimeSupported
-                    ? 'Send the request here, then inspect Trace when needed.'
+                    ? '이 API는 요청 후 실제 Trace를 확인할 수 있습니다.'
                     : !selectedApi.methodSpecified
-                      ? 'This flow is static only because the handler mapping did not declare an explicit HTTP method.'
+                      ? 'Handler mapping에 HTTP method가 없어 정적 분석만 제공합니다.'
+                      : externalRunnable && externalTraceReady
+                        ? '외부 요청에 Trace Context를 연결해 실제 span을 수집합니다.'
+                        : externalRunnable
+                          ? '실행 명령을 생성하고 Agent로 대상 앱을 재시작하세요.'
                       : hasIntegrationBoundary
-                      ? 'This flow highlights static integration boundaries, not live provider calls.'
-                      : 'External internals are not traced yet.'}
+                      ? '외부 연동 경계를 정적 분석으로 표시합니다.'
+                      : '이 샘플 API는 정적 분석만 제공합니다.'}
                 </strong>
                 <p>
                   {runtimeSupported
-                    ? 'The Request view keeps response checking separate from graph inspection.'
+                    ? '왼쪽 요청 설정에서 API를 실행하면 Trace 탭으로 이동합니다.'
                     : !selectedApi.methodSpecified
-                      ? 'StackFlow can show the endpoint boundary from source analysis, but it will not guess a runnable verb for request or trace execution.'
+                      ? 'StackFlow는 HTTP method를 임의로 추측하지 않습니다. 소스에서 method를 확인하세요.'
+                      : externalRunnable && externalTraceReady
+                        ? '요청 시 traceparent를 강제로 주입하고 같은 trace ID의 OTLP span을 기다립니다.'
+                        : externalRunnable
+                          ? '프로젝트 구조 탭의 실행 Trace 설정에서 재실행 명령을 만들 수 있습니다.'
                       : hasIntegrationBoundary
-                      ? 'Gateway and Client layers show where StackFlow expects an outbound payment or provider boundary, based on naming and package shape.'
-                      : 'External project internals require a future Spring Boot starter or agent before StackFlow can show actual node events.'}
+                      ? 'Gateway와 Client는 naming과 package 구조에서 감지한 외부 호출 경계입니다.'
+                      : 'Product 샘플 API를 선택하면 내장 Runtime Trace를 실행할 수 있습니다.'}
                 </p>
               </div>
+                </div>
+              </details>
             </div>
           ) : null}
 
@@ -1660,43 +1997,95 @@ function App() {
             <div className="panel-card panel-card--graph">
               <div className="graph-head">
                 <div>
-                  <span className="section-label">Runtime Trace · actual</span>
-                  <h2>{selectedDomain.name} request flow</h2>
+                  <span className="section-label">실제 실행 결과 · Runtime Trace</span>
+                  <h2>{selectedDomain.name} 요청 흐름</h2>
                   <p>
                     {traceDetail
                       ? `${traceDetail.method} ${traceDetail.endpoint} · HTTP ${traceDetail.httpStatus || '-'}`
                       : runtimeSupported
-                        ? `Run ${selectedApiMethodLabel} ${selectedApi.pathTemplate} to activate the live graph.`
+                        ? `${selectedApiMethodLabel} ${selectedApi.pathTemplate} 요청을 실행하면 실제 흐름이 표시됩니다.`
+                        : externalTraceReady
+                          ? `${selectedApiMethodLabel} ${selectedApi.pathTemplate} 요청 후 실제 OpenTelemetry span을 표시합니다.`
                         : !selectedApi.methodSpecified
-                          ? 'This selected API is analysis-only because the handler mapping did not declare an explicit HTTP method.'
-                          : 'This selected API is analysis-only. Runtime instrumentation is not connected.'}
+                          ? 'HTTP method가 명시되지 않아 정적 분석만 가능합니다.'
+                          : '프로젝트 구조에서 Agent 실행 설정을 먼저 생성하세요.'}
                   </p>
                 </div>
-                <span className={`pill pill--inline pill--${streamStatus === 'completed' ? 'success' : streamStatus === 'streaming' ? 'loading' : streamStatus}`}>
-                  {streamStatus.toUpperCase()}
-                </span>
+                <StatusBadge tone={traceDisplayTone}>
+                  {traceDisplayStatus}
+                </StatusBadge>
               </div>
 
-              <div className="graph-context" aria-label="Current graph context">
+              {!traceDetail ? (
+                <div className="trace-empty-state">
+                  <Route size={34} aria-hidden="true" />
+                  <strong>먼저 API 요청을 실행하세요</strong>
+                  <p>{analysisTarget === 'external' ? 'Agent로 대상 앱을 재시작한 뒤 API 요청을 보내면 실제 부모·자식 span을 확인할 수 있습니다.' : '실행 가능한 Product API를 보내면 Controller부터 Response까지 실제 호출 경로를 확인할 수 있습니다.'}</p>
+                  <button type="button" onClick={() => setActiveView('api')}>
+                    API 요청으로 이동
+                    <ArrowRight size={16} aria-hidden="true" />
+                  </button>
+                </div>
+              ) : (
+                <>
+              <div className="graph-context" aria-label="현재 Trace 정보">
                 <span>
-                  <strong>Domain</strong>
+                  <strong>도메인</strong>
                   {selectedDomain.name}
                 </span>
                 <span>
-                  <strong>Controller</strong>
-                  {selectedApi.controller}
+                  <strong>{traceDetail.source === 'OPENTELEMETRY' ? 'Service' : 'Controller'}</strong>
+                  {traceDetail.source === 'OPENTELEMETRY' ? traceDetail.serviceName ?? '-' : selectedApi.controller}
                 </span>
                 <span>
                   <strong>Endpoint</strong>
                   {selectedApiMethodLabel} {selectedApi.pathTemplate}
                 </span>
                 <span>
-                  <strong>Trace goal</strong>
-                  Find the first failing node
+                  <strong>확인 목표</strong>
+                  첫 실패 지점 찾기
                 </span>
               </div>
 
-              <div className="flow-route">
+              {primaryFailureEvent ? (
+                <section className="trace-failure-summary" aria-label="첫 실패 지점">
+                  <AlertCircle size={18} aria-hidden="true" />
+                  <div>
+                    <span>첫 실패 지점</span>
+                    <strong>{primaryFailureLabel} · {primaryFailureEvent.errorType ?? EVENT_STATUS_LABEL[primaryFailureEvent.status]}</strong>
+                    <p>{primaryFailureEvent.errorMessage ?? `${primaryFailureEvent.eventType} 실행 중 실패했습니다.`}</p>
+                  </div>
+                  <button type="button" onClick={() => setSelectedNodeId(primaryFailureNodeId)}>
+                    상세 보기
+                    <ChevronRight size={15} aria-hidden="true" />
+                  </button>
+                </section>
+              ) : null}
+
+              {traceComparison ? (
+                <section className="trace-comparison" aria-label="예상 흐름과 실제 Trace 비교">
+                  <div>
+                    <span className="section-label">정적 예상 단계</span>
+                    {traceComparison.expected.map((item) => (
+                      <p key={item.id} className={item.matched ? 'is-matched' : 'is-missing'}>
+                        <strong>{item.label}</strong>
+                        <span>{item.matched ? '실제 호출 확인' : '실행되지 않은 예상 단계'}</span>
+                      </p>
+                    ))}
+                  </div>
+                  <div>
+                    <span className="section-label">실제 OpenTelemetry span</span>
+                    {traceComparison.actual.map((item) => (
+                      <p key={item.id} className={item.expected ? 'is-matched' : 'is-unexpected'}>
+                        <strong>{item.label}</strong>
+                        <span>{item.expected ? '예상 흐름과 일치' : '예상에 없던 실제 호출'}</span>
+                      </p>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+
+              <div className={`flow-route${traceDetail.source === 'OPENTELEMETRY' ? ' flow-route--spans' : ''}`}>
                 {graph.states.map((state) => (
                   <button
                     key={state.id}
@@ -1705,32 +2094,34 @@ function App() {
                     onClick={() => setSelectedNodeId(state.id)}
                   >
                     <span>{state.label}</span>
-                    <strong>{state.active ? `${state.durationMs}ms` : 'idle'}</strong>
+                    <strong>{state.active ? `${state.durationMs}ms` : '대기'}</strong>
                   </button>
                 ))}
               </div>
 
               <div className="graph-toolbar">
                 <div>
-                  <span>{traceDetail?.events.length ?? 0} live events</span>
-                  <strong>{activeRoute.length > 0 ? activeRoute.map((state) => state.label).join(' -> ') : 'Run a request to activate the path'}</strong>
+                  <span>{traceDetail.events.length}개 실행 이벤트</span>
+                  <strong>{activeRoute.length > 0 ? activeRoute.map((state) => state.label).join(' → ') : '실행된 경로가 없습니다'}</strong>
                 </div>
-                <div className="legend-strip" aria-label="Graph status legend">
-                  <span className="legend-chip legend-chip--success">success</span>
-                  <span className="legend-chip legend-chip--warning">warning</span>
-                  <span className="legend-chip legend-chip--error">error</span>
-                  <span className="legend-chip legend-chip--idle">idle</span>
+                <div className="legend-strip" aria-label="그래프 상태 범례">
+                  <span className="legend-chip legend-chip--success">성공</span>
+                  <span className="legend-chip legend-chip--warning">주의</span>
+                  <span className="legend-chip legend-chip--error">실패</span>
+                  <span className="legend-chip legend-chip--idle">대기</span>
                 </div>
               </div>
 
               <div className="graph-surface">
-                <div className="graph-lanes" aria-hidden="true">
-                  <span>client</span>
-                  <span>application</span>
-                  <span>cache</span>
-                  <span>data</span>
-                  <span>response</span>
-                </div>
+                {traceDetail.source === 'SAMPLE' ? (
+                  <div className="graph-lanes" aria-hidden="true">
+                    <span>client</span>
+                    <span>application</span>
+                    <span>cache</span>
+                    <span>data</span>
+                    <span>response</span>
+                  </div>
+                ) : null}
                 <ReactFlow
                   key={traceDetail?.traceId ?? 'empty-flow'}
                   fitView
@@ -1738,8 +2129,11 @@ function App() {
                   onInit={(instance) => {
                     flowInstanceRef.current = instance
                     window.requestAnimationFrame(() => {
-                      instance.fitView({ padding: 0.18, duration: 180, includeHiddenNodes: true })
+                      instance.fitView({ padding: 0.14, duration: 120, includeHiddenNodes: true })
                     })
+                    window.setTimeout(() => {
+                      instance.fitView({ padding: 0.14, duration: 0, includeHiddenNodes: true })
+                    }, 180)
                   }}
                   nodes={graph.nodes}
                   edges={graph.edges}
@@ -1755,6 +2149,8 @@ function App() {
                   <Background gap={20} size={1} />
                 </ReactFlow>
               </div>
+                </>
+              )}
             </div>
           ) : null}
         </section>
@@ -1764,40 +2160,97 @@ function App() {
             <div className="panel-card inspector-workbench">
               <div className="panel-header">
                 <div>
-                  <span className="section-label">Project evidence</span>
-                  <h2>{hasDetectedDomains ? selectedDomain.name : projectStructure.projectName}</h2>
-                  <p>{projectStatusContent.headerSummary}</p>
+                  <span className="section-label">상세 정보</span>
+                  <h2>분석 근거</h2>
+                  <p>{hasDetectedDomains ? `${selectedDomain.name} 도메인에 연결된 코드 근거입니다.` : projectStatusContent.headerSummary}</p>
                 </div>
-                <span className={`pill pill--inline ${projectStructure.analysisStatus === 'SUCCESS' ? 'pill--success' : 'pill--warning'}`}>{projectStructure.analysisStatus}</span>
+                <StatusBadge tone="neutral">{hasDetectedDomains ? selectedDomain.name : projectStructure.projectName}</StatusBadge>
               </div>
-              <div className="insight-list">
-                <article>
-                  <span>Project</span>
-                  <strong>{projectStructure.projectName}</strong>
-                  <p>{projectStructure.framework}</p>
-                  <p>{projectStructure.frameworkEvidence}</p>
-                </article>
-                <article>
-                  <span>Domain APIs</span>
-                  <strong>{selectedDomain.endpoints.length}</strong>
-                  <p>{selectedDomain.responsibilities.join(' / ') || 'No request type detected'}</p>
-                </article>
-                <article>
-                  <span>Detected infra</span>
-                  <strong>{selectedDomain.infrastructure.join(' / ') || 'None'}</strong>
-                  <p>{selectedDomain.infrastructureDetails.map((item) => `${item.detectedBy}: ${item.evidence}`).join(' / ') || 'Based on class names and endpoint paths.'}</p>
-                </article>
-                <article>
-                  <span>Analysis source</span>
-                  <strong>{projectStructure.analysisStatus}</strong>
-                  <p>{projectStructure.sourceRoot}</p>
-                </article>
-                <article className="insight-list__next-step">
-                  <span>Next step</span>
-                  <strong>{projectStatusContent.nextStepTitle}</strong>
-                  <p>{projectStatusContent.nextStepDetail}</p>
-                </article>
+              <div className="evidence-scope-strip">
+                <span><strong>{selectedDomain.layers.flatMap((layer) => layer.classes).length}</strong>개 클래스</span>
+                <span><strong>{selectedDomain.infrastructure.length}</strong>개 인프라</span>
               </div>
+
+              {analysisTarget === 'external' && projectStructure.analysisStatus === 'SUCCESS' ? (
+                <details className="inspector-disclosure">
+                  <summary>
+                    <span>
+                      <strong>실행 Trace 설정</strong>
+                      <small>Java Agent 재실행 명령</small>
+                    </span>
+                    <StatusBadge tone={instrumentationProfile ? 'success' : profileState === 'error' ? 'error' : 'neutral'}>
+                      {instrumentationProfile ? '명령 생성 완료' : 'Agent 설정 필요'}
+                    </StatusBadge>
+                  </summary>
+                  <div className="instrumentation-setup">
+                    <p className="instrumentation-setup__intro">
+                      소스 수정 없이 Java Agent로 대상 앱을 재시작합니다.
+                    </p>
+                    <label className="field">
+                      <span>OpenTelemetry Java Agent JAR</span>
+                      <input value={agentPath} onChange={(event) => setAgentPath(event.target.value)} />
+                    </label>
+                    <label className="field">
+                      <span>StackFlow 수집 주소</span>
+                      <input value={collectorBaseUrl} onChange={(event) => setCollectorBaseUrl(event.target.value)} />
+                    </label>
+                    <div className="instrumentation-setup__actions">
+                      <button type="button" onClick={() => void generateInstrumentationProfile()} disabled={profileState === 'loading'}>
+                        <ScanSearch size={15} aria-hidden="true" />
+                        {profileState === 'loading' ? '설정 생성 중' : '실행 명령 생성'}
+                      </button>
+                      <a href="https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases" target="_blank" rel="noreferrer">
+                        공식 Agent 다운로드
+                      </a>
+                    </div>
+                    <p className={profileState === 'error' ? 'external-error' : 'empty-copy'}>{profileMessage}</p>
+                    {instrumentationProfile && instrumentationCommand ? (
+                      <div className="instrumentation-profile">
+                        <div className="evidence-grid">
+                          <span><strong>Build</strong>{instrumentationProfile.buildTool}</span>
+                          <span><strong>계측 클래스</strong>{instrumentationProfile.instrumentedClasses.length}개</span>
+                          <span><strong>public method</strong>{instrumentationProfile.instrumentedMethodCount}개</span>
+                        </div>
+                        <pre className="instrumentation-command">{instrumentationCommand}</pre>
+                        <details>
+                          <summary>계측 대상과 환경 변수 보기</summary>
+                          <p>{instrumentationProfile.instrumentedClasses.join('\n') || '추가 method 계측 대상 없음'}</p>
+                          <pre className="instrumentation-command">{Object.entries(instrumentationProfile.environment).map(([key, value]) => `${key}=${value}`).join('\n')}</pre>
+                        </details>
+                      </div>
+                    ) : null}
+                  </div>
+                </details>
+              ) : null}
+
+              <details className="inspector-disclosure">
+                <summary>
+                  <span><strong>클래스 근거</strong><small>역할별로 분류된 코드</small></span>
+                  <strong>{selectedDomain.layers.flatMap((layer) => layer.classes).length}개</strong>
+                </summary>
+                <LayerEvidenceList groups={domainLayerGroups} emptyMessage="이 도메인에 확실히 연결된 클래스가 없습니다." />
+              </details>
+
+              <details className="inspector-disclosure project-common-evidence">
+                <summary>
+                  <span><strong>프로젝트 공통 클래스</strong><small>도메인 미귀속 근거</small></span>
+                  <strong>{commonClassCount}개</strong>
+                </summary>
+                <p>특정 도메인 관계가 확실하지 않은 클래스입니다.</p>
+                <LayerEvidenceList groups={commonLayerGroups} emptyMessage="도메인 밖에 남은 공통 클래스가 없습니다." />
+              </details>
+
+              <details className="inspector-disclosure source-evidence">
+                <summary><span><strong>소스 분석 근거</strong><small>경로·패키지·탐지 규칙</small></span></summary>
+                <dl>
+                  <div><dt>프로젝트</dt><dd>{projectStructure.projectName} · {projectStructure.framework}</dd></div>
+                  <div><dt>소스 루트</dt><dd>{projectStructure.sourceRoot || '-'}</dd></div>
+                  <div><dt>소스 파일</dt><dd>{selectedDomain.controllers.map((controller) => controller.sourceFile).join(' / ') || '-'}</dd></div>
+                  <div><dt>패키지</dt><dd>{selectedDomain.packageRoots.join(' / ') || '-'}</dd></div>
+                  <div><dt>Layer 근거</dt><dd>{selectedDomain.layers.map((layer) => layer.evidence).join(' / ') || '-'}</dd></div>
+                  <div><dt>Infra 근거</dt><dd>{selectedDomain.infrastructureDetails.map((item) => `${item.name}: ${item.evidence}`).join(' / ') || '-'}</dd></div>
+                </dl>
+              </details>
             </div>
           ) : null}
 
@@ -1805,7 +2258,7 @@ function App() {
             <div className="panel-card inspector-workbench">
               <div className="panel-header">
                 <div>
-                  <span className="section-label">API evidence</span>
+                  <span className="section-label">선택한 API 근거</span>
                   <h2>{selectedApi.label}</h2>
                   <p>{selectedApi.description}</p>
                 </div>
@@ -1815,34 +2268,34 @@ function App() {
               </div>
               <div className="insight-list">
                 <article>
-                  <span>Selected handler</span>
+                  <span>Handler</span>
                   <strong>{selectedApi.controller}.{selectedApi.handler}</strong>
                   <p>{selectedApiMethodLabel} {selectedApi.pathTemplate}</p>
                 </article>
                 <article>
-                  <span>Estimated path</span>
-                  <strong>{estimatedFlow.map((step) => step.label).join(' -> ')}</strong>
-                  <p>{hasIntegrationBoundary ? 'UseCase, Gateway, and Client are shown separately so outbound integration boundaries stay visible in the estimated path.' : 'Class names come from detected domain layers where available.'}</p>
+                  <span>예상 경로</span>
+                  <strong>{estimatedFlow.map((step) => step.label).join(' → ')}</strong>
+                  <p>{hasIntegrationBoundary ? 'UseCase, Gateway, Client를 분리해 외부 연동 경계를 표시합니다.' : '감지된 domain layer의 클래스 이름을 기준으로 구성합니다.'}</p>
                 </article>
                 <article>
-                  <span>Runtime boundary</span>
-                  <strong>{runtimeSupported ? 'Actual trace available' : !selectedApi.methodSpecified ? 'Static analysis only' : hasIntegrationBoundary ? 'Static integration view only' : 'Instrumentation required'}</strong>
-                  <p>{runtimeSupported ? 'Switch to Runtime Trace and run the sample API.' : !selectedApi.methodSpecified ? 'The endpoint exists, but the controller method did not declare an explicit HTTP verb.' : hasIntegrationBoundary ? 'This sample endpoint is intended to explain integration layering, not to emit live trace events.' : 'External app internals cannot be traced yet.'}</p>
+                  <span>실행 가능 범위</span>
+                  <strong>{runtimeSupported || externalTraceReady ? '실제 Trace 가능' : !selectedApi.methodSpecified ? '정적 분석만 가능' : externalRunnable ? 'Agent 설정 필요' : hasIntegrationBoundary ? '외부 연동 구조만 표시' : '정적 분석만 가능'}</strong>
+                  <p>{runtimeSupported ? '요청을 실행하면 Trace 탭에서 실제 흐름을 확인할 수 있습니다.' : externalTraceReady ? 'traceparent와 OTLP로 외부 앱의 실제 span을 연결합니다.' : !selectedApi.methodSpecified ? 'Controller method에 HTTP verb가 명시되지 않았습니다.' : externalRunnable ? '프로젝트 구조에서 실행 명령을 생성하고 대상 앱을 재시작하세요.' : hasIntegrationBoundary ? '이 샘플 API는 연동 계층을 정적으로 설명합니다.' : '이 API는 현재 정적 분석만 제공합니다.'}</p>
                 </article>
               </div>
               {externalRunnable ? (
                 <section className="inspector-section response-card external-response-card">
                   <div className="section-row">
-                    <span className="section-label">External HTTP evidence</span>
+                    <span className="section-label">외부 HTTP 결과</span>
                     <span className={`pill pill--inline pill--${(externalResponse?.resultStatus ?? 'idle').toLowerCase()}`}>
-                      {externalResponse ? `HTTP ${externalResponse.httpStatus || '-'}` : 'WAITING'}
+                      {externalResponse ? `HTTP ${externalResponse.httpStatus || '-'}` : '대기'}
                     </span>
                   </div>
                   {externalResponse ? (
                     <>
                       <article className="evidence-block evidence-block--request">
                         <header>
-                          <span>Request sent</span>
+                          <span>보낸 요청</span>
                           <strong>{externalRequestSnapshot?.method ?? (selectedApi.methodSpecified ? selectedApi.method : selectedApiMethodLabel)}</strong>
                         </header>
                         <p>{externalRequestSnapshot?.targetUrl ?? externalTargetPreview}</p>
@@ -1852,29 +2305,35 @@ function App() {
                             {countEnabledEntries(externalRequestSnapshot?.queryParams ?? [])}
                           </span>
                           <span>
-                            <strong>Headers</strong>
+                            <strong>Header</strong>
                             {countEnabledEntries(externalRequestSnapshot?.headers ?? [])}
                           </span>
                           <span>
                             <strong>Body</strong>
-                            {externalRequestSnapshot?.requestBody ? 'enabled' : 'none'}
+                            {externalRequestSnapshot?.requestBody ? '사용' : '없음'}
                           </span>
                         </div>
                       </article>
                       <article className="evidence-block evidence-block--response">
                         <header>
-                          <span>Response received</span>
+                          <span>받은 응답</span>
                           <strong>HTTP {externalResponse.httpStatus || '-'}</strong>
                         </header>
                         <div className="evidence-grid">
                           <span>
-                            <strong>Duration</strong>
+                            <strong>소요 시간</strong>
                             {externalResponse.durationMs}ms
                           </span>
                           <span>
-                            <strong>Content type</strong>
+                            <strong>Content-Type</strong>
                             {externalResponse.contentType || '-'}
                           </span>
+                          {externalResponse.traceId ? (
+                            <span>
+                              <strong>Trace</strong>
+                              {externalResponse.traceId.slice(0, 8)} · {TRACE_COLLECTION_STATUS_LABEL[traceCollectionStatus]}
+                            </span>
+                          ) : null}
                         </div>
                       </article>
                       {externalResponse.errorMessage ? (
@@ -1883,27 +2342,27 @@ function App() {
                       {formattedExternalResponseBody ? (
                         <pre className="response-body response-body--external">{formattedExternalResponseBody}</pre>
                       ) : (
-                        <p className="empty-copy">The target returned an empty body.</p>
+                        <p className="empty-copy">대상 API가 빈 응답 본문을 반환했습니다.</p>
                       )}
                     </>
                   ) : (
-                    <p className="empty-copy">Enter a target base URL, then run this endpoint to inspect the returned payload.</p>
+                    <p className="empty-copy">대상 기본 URL을 입력하고 요청을 실행하면 응답을 확인할 수 있습니다.</p>
                   )}
                 </section>
               ) : null}
               {!externalRunnable ? (
                 <section className="inspector-section response-card external-response-card">
                   <div className="section-row">
-                    <span className="section-label">Response</span>
+                    <span className="section-label">응답</span>
                     <span className={`pill pill--inline pill--${(traceDetail?.resultStatus ?? 'idle').toLowerCase()}`}>
-                      {traceDetail ? `HTTP ${traceDetail.httpStatus || '-'}` : 'WAITING'}
+                      {traceDetail ? `HTTP ${traceDetail.httpStatus || '-'}` : '대기'}
                     </span>
                   </div>
                   {formattedResponseBody ? (
                     <>
                       <article className="evidence-block evidence-block--response">
                         <header>
-                          <span>Response received</span>
+                          <span>받은 응답</span>
                           <strong>{traceDetail?.durationMs ?? 0}ms</strong>
                         </header>
                         <div className="evidence-grid">
@@ -1912,19 +2371,19 @@ function App() {
                             {traceDetail?.traceId.slice(0, 8) ?? '-'}
                           </span>
                           <span>
-                            <strong>Events</strong>
+                            <strong>이벤트</strong>
                             {traceDetail?.events.length ?? 0}
                           </span>
                           <span>
-                            <strong>Result</strong>
-                            {traceDetail?.resultStatus ?? 'IDLE'}
+                            <strong>결과</strong>
+                            {traceDetail ? EVENT_STATUS_LABEL[traceDetail.resultStatus] : '대기'}
                           </span>
                         </div>
                       </article>
                       <pre className="response-body response-body--external">{formattedResponseBody}</pre>
                     </>
                   ) : (
-                    <p className="empty-copy">Send the selected sample request to inspect the returned JSON.</p>
+                    <p className="empty-copy">선택한 API를 실행하면 JSON 응답이 표시됩니다.</p>
                   )}
                 </section>
               ) : null}
@@ -1936,9 +2395,9 @@ function App() {
               <div className="panel-card inspector-workbench">
                 <div className="panel-header">
                   <div>
-                    <span className="section-label">Runtime evidence</span>
-                    <h2>{latestEvent ? latestEvent.component : 'No trace yet'}</h2>
-                    <p>{latestEvent ? latestEvent.eventType : 'Run a trace, then click a graph node to inspect evidence.'}</p>
+                    <span className="section-label">실행 근거</span>
+                    <h2>{inspectorEvent ? inspectorEvent.component : 'Trace 대기'}</h2>
+                    <p>{inspectorEvent ? inspectorEvent.eventType : 'API 요청을 실행한 뒤 그래프 node를 선택하세요.'}</p>
                   </div>
                   <span className={`pill pill--inline pill--${(traceDetail?.resultStatus ?? 'success').toLowerCase()}`}>
                     HTTP {traceDetail?.httpStatus || '-'}
@@ -1947,37 +2406,37 @@ function App() {
 
                 <div className="runtime-meter runtime-meter--compact">
                   <span>{traceDetail ? `${traceDetail.durationMs}ms` : '0ms'}</span>
-                  <span>{activeNodeCount} active nodes</span>
+                  <span>{activeNodeCount}개 활성 node</span>
                 </div>
 
                 <section className="inspector-section response-card">
                   <div className="section-row">
-                    <span className="section-label">Returned JSON</span>
-                    <span>{traceDetail?.resultStatus ?? 'IDLE'}</span>
+                    <span className="section-label">응답 JSON</span>
+                    <span>{traceDetail ? EVENT_STATUS_LABEL[traceDetail.resultStatus] : '대기'}</span>
                   </div>
                   {formattedResponseBody ? (
                     <pre className="response-body">{formattedResponseBody}</pre>
                   ) : (
-                    <p className="empty-copy">Run a request to inspect the response payload.</p>
+                    <p className="empty-copy">요청을 실행하면 응답 본문이 표시됩니다.</p>
                   )}
                 </section>
 
                 <section className="inspector-section inspector-card">
                   <div className="section-row">
-                    <span className="section-label">Clicked node evidence</span>
+                    <span className="section-label">선택한 node 근거</span>
                     {selectedNode ? (
                       <span className={`pill pill--inline pill--${selectedNode.status.toLowerCase()}`}>
-                        {selectedNode.status}
+                        {EVENT_STATUS_LABEL[selectedNode.status]}
                       </span>
                     ) : null}
                   </div>
                   {!selectedNode ? (
-                    <p className="empty-copy">Click Controller, Service, Redis, Repository, MySQL, or Response in the graph.</p>
+                    <p className="empty-copy">그래프에서 확인할 실행 node를 선택하세요.</p>
                   ) : (
                     <div className="detail-stack">
                       <div className="detail-summary">
                         <strong>{selectedNode.label}</strong>
-                        <span>{selectedNode.durationMs}ms total</span>
+                        <span>총 {selectedNode.durationMs}ms</span>
                       </div>
                       <div className="detail-grid">
                         <div>
@@ -1985,37 +2444,49 @@ function App() {
                           <strong>{traceDetail?.traceId ?? '-'}</strong>
                         </div>
                         <div>
-                          <span>Visits</span>
+                          <span>호출 횟수</span>
                           <strong>{selectedNode.visits.length}</strong>
                         </div>
                       </div>
                       <div className="visit-list">
                         {selectedNode.visits.length === 0 ? (
-                          <p className="empty-copy">This node was not visited in the current trace.</p>
+                          <p className="empty-copy">현재 Trace에서 이 node는 호출되지 않았습니다.</p>
                         ) : (
                           selectedNode.visits.map((event) => (
                             <article key={event.eventId} className="visit-card">
                               <header>
                                 <strong>{event.eventType}</strong>
-                                <span className={`pill pill--inline pill--${event.status.toLowerCase()}`}>{event.status}</span>
+                                <span className={`pill pill--inline pill--${event.status.toLowerCase()}`}>{EVENT_STATUS_LABEL[event.status]}</span>
                               </header>
                               <dl>
                                 <div>
-                                  <dt>Duration</dt>
+                                  <dt>소요 시간</dt>
                                   <dd>{event.durationMs}ms</dd>
                                 </div>
                                 <div>
-                                  <dt>Error Type</dt>
+                                  <dt>오류 유형</dt>
                                   <dd>{event.errorType ?? '-'}</dd>
                                 </div>
                                 <div>
-                                  <dt>Error Message</dt>
+                                  <dt>오류 메시지</dt>
                                   <dd>{event.errorMessage ?? '-'}</dd>
                                 </div>
+                                {event.spanId ? (
+                                  <div>
+                                    <dt>Span / Parent</dt>
+                                    <dd>{event.spanId} / {event.parentSpanId ?? 'root'}</dd>
+                                  </div>
+                                ) : null}
+                                {event.serviceName ? (
+                                  <div>
+                                    <dt>Service / Kind</dt>
+                                    <dd>{event.serviceName} / {event.spanKind ?? '-'}</dd>
+                                  </div>
+                                ) : null}
                               </dl>
                               <div className="metadata-list">
                                 {Object.keys(event.metadata).length === 0 ? (
-                                  <span className="metadata-item">No metadata</span>
+                                  <span className="metadata-item">metadata 없음</span>
                                 ) : (
                                   Object.entries(event.metadata).map(([key, value]) => (
                                     <span key={key} className="metadata-item">
@@ -2036,14 +2507,14 @@ function App() {
               <div className="panel-card timeline-card timeline-card--compact">
                 <div className="panel-header">
                   <div>
-                    <h2>Live event log</h2>
-                    <p>Latest event first. Click graph nodes for full detail.</p>
+                    <h2>실행 이벤트</h2>
+                    <p>발생 시간순으로 표시합니다.</p>
                   </div>
                   <span>{recentEvents.length}</span>
                 </div>
                 <div className="timeline-list">
                 {recentEvents.length === 0 ? (
-                  <p className="empty-copy">No live event received yet.</p>
+                  <p className="empty-copy">아직 수집된 실행 이벤트가 없습니다.</p>
                 ) : (
                   recentEvents.map((event, index) => (
                     <article key={event.eventId} className="timeline-item">
@@ -2053,13 +2524,13 @@ function App() {
                       <div className="timeline-item__body">
                         <header>
                           <strong>{event.component}</strong>
-                          <span className={`pill pill--inline pill--${event.status.toLowerCase()}`}>{event.status}</span>
+                          <span className={`pill pill--inline pill--${event.status.toLowerCase()}`}>{EVENT_STATUS_LABEL[event.status]}</span>
                         </header>
                         <p>{event.eventType}</p>
                         <div className="timeline-item__meta">
                           <span>{event.durationMs}ms</span>
                           <span>{new Date(event.startedAt).toLocaleTimeString()}</span>
-                          <span>{event.errorType ?? 'no error'}</span>
+                          <span>{event.errorType ?? '오류 없음'}</span>
                         </div>
                       </div>
                     </article>
@@ -2072,6 +2543,44 @@ function App() {
         </aside>
       </section>
     </main>
+  )
+}
+
+function LayerEvidenceList({ groups, emptyMessage }: { groups: LayerGroup[]; emptyMessage: string }) {
+  const populatedGroups = groups.filter((group) => group.classes.length > 0)
+
+  if (populatedGroups.length === 0) {
+    return <p className="empty-copy">{emptyMessage}</p>
+  }
+
+  return (
+    <div className="layer-evidence-list">
+      {populatedGroups.map((group) => {
+        const previewClasses = group.classes.slice(0, 5)
+        const remainingClasses = group.classes.slice(5)
+
+        return (
+          <details key={group.id} className="layer-evidence-group">
+            <summary>
+              <span>{group.label}</span>
+              <strong>{group.classes.length}</strong>
+            </summary>
+            <small>{group.layerNames.join(' · ')}</small>
+            <div className="layer-class-list">
+              {previewClasses.map((className) => <code key={className}>{className}</code>)}
+            </div>
+            {remainingClasses.length > 0 ? (
+              <details className="layer-evidence-more">
+                <summary>{remainingClasses.length}개 더 보기</summary>
+                <div className="layer-class-list">
+                  {remainingClasses.map((className) => <code key={className}>{className}</code>)}
+                </div>
+              </details>
+            ) : null}
+          </details>
+        )
+      })}
+    </div>
   )
 }
 
@@ -2088,7 +2597,7 @@ function toApiDefinition(item: ApiCatalogItem, domainId: string, domainName: str
     methodSpecified: item.methodSpecified,
     label: humanizeHandler(item.handler),
     pathTemplate: item.path,
-    description: `Detected from ${item.controller}.${item.handler}.`,
+    description: `${item.controller}.${item.handler}에서 감지했습니다.`,
     requestType: item.requestType,
     requiresProductId: item.requiresPathVariable,
     controller: item.controller,
@@ -2100,36 +2609,93 @@ function toApiDefinition(item: ApiCatalogItem, domainId: string, domainName: str
   }
 }
 
-function buildProjectFacts(structure: ProjectStructure) {
+function buildProjectMetrics(structure: ProjectStructure) {
   const controllerCount = structure.domains.reduce((sum, domain) => sum + domain.controllers.length, 0)
   const endpointCount = structure.domains.reduce((sum, domain) => sum + domain.endpoints.length, 0)
-  const layerNames = structure.layers
-    .map((layer) => layer.name)
-    .filter((name) => ['Controller', 'Service', 'UseCase', 'Repository', 'Store', 'Cache', 'Gateway', 'Client'].includes(name))
-    .slice(0, 5)
+  const infrastructureCount = new Set(structure.domains.flatMap((domain) => domain.infrastructure)).size
 
   return [
-    { label: 'Status', value: structure.analysisStatus.toLowerCase() },
-    { label: 'Backend', value: structure.framework },
-    { label: 'Domains', value: `${structure.domains.length} domains / ${endpointCount} APIs` },
-    { label: 'Controllers', value: `${controllerCount} detected` },
-    { label: 'Source root', value: structure.sourceRoot || 'not detected' },
-    { label: 'Infra path', value: structure.infrastructure.join(' / ') || 'not detected' },
-    { label: 'Layers', value: layerNames.join(' / ') || 'not detected' },
+    { id: 'domains', label: '도메인', value: `${structure.domains.length}`, detail: '업무 영역' },
+    { id: 'apis', label: 'API', value: `${endpointCount}`, detail: 'REST endpoint' },
+    { id: 'controllers', label: 'Controller', value: `${controllerCount}`, detail: '요청 진입점' },
+    { id: 'infrastructure', label: '인프라', value: `${infrastructureCount}`, detail: 'DB · Cache · Client' },
   ]
 }
 
-function getDomainDisplayMode(domain: ProjectDomain): DomainDisplayMode {
-  const hasIntegrationBoundary = domain.layers.some((layer) => layer.name === 'Gateway' || layer.name === 'Client')
-  if (hasIntegrationBoundary) {
-    return {
-      label: 'Integration-focused',
-      detail: 'This map is highlighting outbound integration boundaries from static analysis.',
-      tone: 'integration',
-    }
+function buildDomainStructurePath(groups: LayerGroup[], infrastructure: string[]): DomainStructureStep[] {
+  const flowGroups = groups.filter((group) =>
+    ['entry', 'business', 'data', 'integration'].includes(group.id) && group.classes.length > 0,
+  )
+  const steps: DomainStructureStep[] = flowGroups.map((group) => ({
+    id: group.id,
+    label: group.label,
+    value: summarizeClassNames(group.classes),
+    detail: `${group.classes.length}개 클래스 · ${group.description}`,
+    tone: group.id as DomainStructureStep['tone'],
+  }))
+
+  if (infrastructure.length > 0) {
+    steps.push({
+      id: 'infrastructure',
+      label: '인프라',
+      value: infrastructure.join(' · '),
+      detail: `${infrastructure.length}개 실행 경계`,
+      tone: 'infrastructure',
+    })
   }
 
-  const runtimeReadySample = domain.endpoints.some((endpoint) =>
+  return steps
+}
+
+function summarizeClassNames(classes: string[]) {
+  if (classes.length <= 2) return classes.join(' · ')
+  return `${classes.slice(0, 2).join(' · ')} 외 ${classes.length - 2}개`
+}
+
+function buildCommonProjectLayers(structure: ProjectStructure): ProjectLayer[] {
+  const domainClasses = new Set(
+    structure.domains.flatMap((domain) => domain.layers.flatMap((layer) => layer.classes)),
+  )
+
+  return structure.layers
+    .map((layer) => ({
+      ...layer,
+      classes: layer.classes.filter((className) => !domainClasses.has(className)),
+    }))
+    .filter((layer) => layer.classes.length > 0)
+}
+
+function groupProjectLayers(layers: ProjectLayer[]): LayerGroup[] {
+  const definitions: Array<Omit<LayerGroup, 'layerNames' | 'classes'>> = [
+    { id: 'entry', label: '진입점', description: 'Controller' },
+    { id: 'business', label: '비즈니스', description: 'UseCase · Service' },
+    { id: 'data', label: '데이터', description: 'Repository · Store · Cache' },
+    { id: 'integration', label: '외부 연동', description: 'Gateway · Client' },
+    { id: 'model', label: '모델·응답', description: 'Domain · DTO' },
+    { id: 'support', label: '공통 지원', description: 'Application · Error Handling' },
+  ]
+
+  return definitions.map((definition) => {
+    const matchingLayers = layers.filter((layer) => getLayerGroupId(layer.name) === definition.id)
+    return {
+      ...definition,
+      layerNames: matchingLayers.map((layer) => layer.name),
+      classes: [...new Set(matchingLayers.flatMap((layer) => layer.classes))].sort(),
+    }
+  })
+}
+
+function getLayerGroupId(layerName: string): LayerGroup['id'] {
+  if (layerName === 'Controller') return 'entry'
+  if (layerName === 'UseCase' || layerName === 'Service') return 'business'
+  if (layerName === 'Repository' || layerName === 'Store' || layerName === 'Cache') return 'data'
+  if (layerName === 'Gateway' || layerName === 'Client') return 'integration'
+  if (layerName === 'Domain' || layerName === 'DTO') return 'model'
+  return 'support'
+}
+
+function getDomainDisplayMode(domain: ProjectDomain, isSampleProject = true): DomainDisplayMode {
+  const runtimeReadySample = isSampleProject && domain.endpoints.some((endpoint) =>
     isStackFlowRuntimeApi({
       id: endpoint.id,
       method: endpoint.method,
@@ -2150,13 +2716,37 @@ function getDomainDisplayMode(domain: ProjectDomain): DomainDisplayMode {
 
   if (runtimeReadySample) {
     return {
-      label: 'Runtime-ready sample',
-      detail: 'This sample domain can produce a live runtime trace in the Trace view.',
+      label: '요청·Trace 가능',
+      detail: '이 샘플 도메인은 실제 API 요청과 Runtime Trace를 지원합니다.',
       tone: 'runtime',
     }
   }
 
+  const domainKey = domain.name.replaceAll(/\s+/g, '').toLowerCase()
+  const hasIntegrationBoundary = domain.layers.some((layer) =>
+    (layer.name === 'Gateway' || layer.name === 'Client')
+    && layer.classes.some((className) => className.toLowerCase().includes(domainKey)),
+  )
+  if (hasIntegrationBoundary) {
+    return {
+      label: '외부 연동 구조',
+      detail: '정적 분석에서 감지한 Gateway와 Client 경계를 표시합니다.',
+      tone: 'integration',
+    }
+  }
+
   return null
+}
+
+function getDomainDescription(domain: ProjectDomain, isSampleProject = true) {
+  const displayMode = getDomainDisplayMode(domain, isSampleProject)
+  if (displayMode?.tone === 'runtime') {
+    return `${domain.name} API의 실제 요청 경로와 cache·data 흐름을 확인합니다.`
+  }
+  if (displayMode?.tone === 'integration') {
+    return `${domain.name} API와 Gateway·Client 외부 연동 경계를 확인합니다.`
+  }
+  return `${domain.name} 도메인에서 감지한 API와 layer 구조를 확인합니다.`
 }
 
 function buildEstimatedFlow(api: ApiDefinition, domain: ProjectDomain): EstimatedFlowStep[] {
@@ -2166,15 +2756,15 @@ function buildEstimatedFlow(api: ApiDefinition, domain: ProjectDomain): Estimate
       id: 'client',
       layer: 'Client',
       label: 'Client',
-      detail: 'Request source before Spring handles it.',
-      source: 'fixed runtime boundary',
+      detail: 'Spring이 처리하기 전의 요청 시작 지점입니다.',
+      source: '고정 실행 경계',
     },
     {
       id: 'controller',
       layer: 'Controller',
       label: api.controller,
-      detail: `${api.handler} receives ${getApiMethodLabel(api)} ${api.pathTemplate}.`,
-      source: 'detected handler',
+      detail: `${api.handler}가 ${getApiMethodLabel(api)} ${api.pathTemplate} 요청을 받습니다.`,
+      source: '감지된 handler',
     },
   ]
 
@@ -2191,9 +2781,9 @@ function buildEstimatedFlow(api: ApiDefinition, domain: ProjectDomain): Estimate
       layer: serviceLikeLayer,
       label: serviceClass ?? serviceLikeLayer,
       detail: serviceLikeLayer === 'UseCase'
-        ? 'Request-level business flow is likely coordinated here.'
-        : 'Business rules are likely coordinated here.',
-      source: serviceClass ? 'detected class' : 'estimated layer',
+        ? '요청 단위 business flow를 조율하는 지점으로 예상합니다.'
+        : 'business rule을 조율하는 지점으로 예상합니다.',
+      source: serviceClass ? '감지된 class' : '예상 layer',
     })
   }
 
@@ -2203,8 +2793,8 @@ function buildEstimatedFlow(api: ApiDefinition, domain: ProjectDomain): Estimate
       id: 'cache-read',
       layer: 'Cache',
       label: cacheClass ?? 'Redis',
-      detail: 'Cache lookup is expected for detail-style reads.',
-      source: cacheClass ? 'detected cache class' : 'inferred infrastructure',
+      detail: '상세 조회 요청에서 cache 확인이 예상됩니다.',
+      source: cacheClass ? '감지된 cache class' : '추론한 infrastructure',
     })
   }
 
@@ -2215,8 +2805,8 @@ function buildEstimatedFlow(api: ApiDefinition, domain: ProjectDomain): Estimate
       id: 'data-access',
       layer,
       label: dataClass ?? layer,
-      detail: 'Data access boundary inferred from layer naming.',
-      source: dataClass ? 'detected class' : 'estimated layer',
+      detail: 'layer 이름을 기준으로 data access 경계를 예상합니다.',
+      source: dataClass ? '감지된 class' : '예상 layer',
     })
   }
 
@@ -2227,18 +2817,23 @@ function buildEstimatedFlow(api: ApiDefinition, domain: ProjectDomain): Estimate
       id: layer.toLowerCase(),
       layer,
       label: integrationClass ?? layer,
-      detail: 'External integration boundary inferred from class naming.',
-      source: integrationClass ? 'detected class' : 'estimated layer',
+      detail: 'class 이름을 기준으로 외부 연동 경계를 예상합니다.',
+      source: integrationClass ? '감지된 class' : '예상 layer',
     })
   }
 
-  if (domain.infrastructure.includes('MySQL')) {
+  const databaseInfrastructure = domain.infrastructure.includes('PostgreSQL')
+    ? 'PostgreSQL'
+    : domain.infrastructure.includes('MySQL')
+      ? 'MySQL'
+      : null
+  if (databaseInfrastructure) {
     flow.push({
-      id: 'mysql',
+      id: databaseInfrastructure.toLowerCase(),
       layer: 'Database',
-      label: 'MySQL',
-      detail: 'Persistence dependency inferred from repository/store classes.',
-      source: 'inferred infrastructure',
+      label: databaseInfrastructure,
+      detail: 'Repository 또는 Store class에서 persistence 의존성을 추론했습니다.',
+      source: '추론한 infrastructure',
     })
   }
 
@@ -2248,8 +2843,8 @@ function buildEstimatedFlow(api: ApiDefinition, domain: ProjectDomain): Estimate
       id: 'cache-write',
       layer: 'Cache write',
       label: cacheClass ? `${cacheClass}.save` : 'Redis Save',
-      detail: 'Cache write is expected after data refresh.',
-      source: cacheClass ? 'detected cache class' : 'inferred infrastructure',
+      detail: 'data 갱신 이후 cache 저장이 예상됩니다.',
+      source: cacheClass ? '감지된 cache class' : '추론한 infrastructure',
     })
   }
 
@@ -2257,10 +2852,48 @@ function buildEstimatedFlow(api: ApiDefinition, domain: ProjectDomain): Estimate
     id: 'response',
     layer: 'Response',
     label: 'HTTP Response',
-    detail: 'Final HTTP response leaves the application.',
-    source: 'fixed runtime boundary',
+    detail: '최종 HTTP 응답이 application을 벗어납니다.',
+    source: '고정 실행 경계',
   })
   return flow
+}
+
+function compareEstimatedAndActualFlow(estimatedFlow: EstimatedFlowStep[], events: TraceEvent[]) {
+  const expectedSteps = estimatedFlow.filter((step) => step.layer !== 'Client' && step.layer !== 'Response')
+  const expected = expectedSteps.map((step) => ({
+    id: step.id,
+    label: step.label,
+    matched: events.some((event) => matchesEstimatedStep(step, event)),
+  }))
+  const actual = events.map((event) => ({
+    id: event.spanId ?? event.eventId,
+    label: event.eventType,
+    expected: expectedSteps.some((step) => matchesEstimatedStep(step, event)),
+  }))
+
+  return { expected, actual }
+}
+
+function matchesEstimatedStep(step: EstimatedFlowStep, event: TraceEvent) {
+  const componentMatches: Record<string, TraceEvent['component'][]> = {
+    Controller: ['CONTROLLER'],
+    Service: ['SERVICE', 'INTERNAL'],
+    UseCase: ['SERVICE', 'INTERNAL'],
+    Repository: ['REPOSITORY', 'DATABASE'],
+    Store: ['REPOSITORY', 'DATABASE'],
+    Cache: ['REDIS'],
+    'Cache write': ['REDIS'],
+    Database: ['DATABASE', 'MYSQL', 'POSTGRESQL'],
+    Gateway: ['GATEWAY', 'HTTP_CLIENT'],
+  }
+  const normalizedLabel = step.label.toLowerCase()
+  const eventEvidence = [event.eventType, event.metadata['code.namespace'], event.metadata['code.function.name']]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+
+  return (componentMatches[step.layer] ?? []).includes(event.component)
+    || (normalizedLabel.length > 2 && eventEvidence.includes(normalizedLabel))
 }
 
 function pickLayerClass(domain: ProjectDomain, layerName: string, api: ApiDefinition) {
@@ -2313,7 +2946,14 @@ function humanizeHandler(handler: string) {
     .replace(/^./, (first) => first.toUpperCase())
 }
 
-function createPlaceholderTrace(traceId: string, method: string, endpoint: string, scenario: string): TraceDetail {
+function createPlaceholderTrace(
+  traceId: string,
+  method: string,
+  endpoint: string,
+  scenario: string,
+  source: TraceDetail['source'] = 'SAMPLE',
+  serviceName: string | null = 'stackflow-sample',
+): TraceDetail {
   const now = new Date().toISOString()
   return {
     traceId,
@@ -2326,6 +2966,8 @@ function createPlaceholderTrace(traceId: string, method: string, endpoint: strin
     httpStatus: 0,
     resultStatus: 'SUCCESS',
     events: [],
+    source,
+    serviceName,
   }
 }
 
@@ -2341,27 +2983,27 @@ async function fetchTraceWithRetry(traceId: string) {
     await new Promise((resolve) => window.setTimeout(resolve, 220))
   }
 
-  throw new Error('Trace detail could not be loaded.')
+  throw new Error('Trace 상세 정보를 불러오지 못했습니다.')
 }
 
 function buildRequestMessage(resultStatus: EventStatus, payload: ProductPayload) {
   if (payload.errorMessage) {
-    return `${resultStatus}: ${payload.errorMessage}`
+    return `${EVENT_STATUS_LABEL[resultStatus]}: ${payload.errorMessage}`
   }
 
   if (payload.cacheStatus) {
-    return `${resultStatus}: product flow captured with cache ${payload.cacheStatus}.`
+    return `${EVENT_STATUS_LABEL[resultStatus]}: cache ${payload.cacheStatus}를 포함한 상품 흐름을 수집했습니다.`
   }
 
-  return `${resultStatus}: request captured successfully.`
+  return `${EVENT_STATUS_LABEL[resultStatus]}: 요청 흐름을 수집했습니다.`
 }
 
 function buildExternalRequestMessage(response: ExternalRequestResponse) {
   if (response.errorMessage) {
-    return `ERROR: ${response.errorMessage}`
+    return `실패: ${response.errorMessage}`
   }
 
-  return `${response.resultStatus}: ${response.method} ${response.targetUrl} returned HTTP ${response.httpStatus} in ${response.durationMs}ms.`
+  return `${response.method} ${response.targetUrl} · HTTP ${response.httpStatus} · ${response.durationMs}ms`
 }
 
 function createRequestEntry(key: string, value: string, enabled: boolean): ExternalRequestEntry {
@@ -2423,6 +3065,18 @@ function formatResponseBody(responseBody: string) {
 
   try {
     return JSON.stringify(JSON.parse(responseBody), null, 2)
+  } catch {
+    return responseBody
+  }
+}
+
+function parseResponseBody(responseBody: string): unknown {
+  if (!responseBody) {
+    return null
+  }
+
+  try {
+    return JSON.parse(responseBody)
   } catch {
     return responseBody
   }
