@@ -61,4 +61,9 @@ public class ProductService {
 	public void triggerDatabaseError() {
 		productRepositoryService.triggerDatabaseError();
 	}
+
+	public void triggerDatabaseTimeout(long productId) {
+		productRepositoryService.findById(productId);
+		productRepositoryService.triggerDatabaseTimeout();
+	}
 }

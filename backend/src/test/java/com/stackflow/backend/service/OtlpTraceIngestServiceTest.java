@@ -28,11 +28,13 @@ class OtlpTraceIngestServiceTest {
 		TraceService traceService = new TraceService(new TraceStreamService());
 		ExternalTraceService externalTraceService = new ExternalTraceService(traceService);
 		OtlpTraceIngestService ingestService = new OtlpTraceIngestService(externalTraceService);
-		String traceId = "0123456789abcdef0123456789abcdef";
+		ExternalTraceService.TraceCaptureContext capture = externalTraceService.startCapture("GET", "/orders");
+		String traceId = capture.traceId();
 		String serverSpanId = "0123456789abcdef";
 		String serviceSpanId = "fedcba9876543210";
 		long startNanos = Instant.now().toEpochMilli() * 1_000_000L;
 		try {
+			externalTraceService.recordHttpResponse(traceId, 200, 20);
 			Span serverSpan = Span.newBuilder()
 				.setTraceId(bytes(traceId))
 				.setSpanId(bytes(serverSpanId))
@@ -77,6 +79,72 @@ class OtlpTraceIngestServiceTest {
 				serviceSpanId.equals(event.spanId()) && serverSpanId.equals(event.parentSpanId())));
 			assertTrue(trace.events().stream().anyMatch(event -> event.component().name().equals("SERVICE")));
 			assertFalse(trace.events().stream().anyMatch(event -> event.metadata().containsKey("db.statement")));
+		} finally {
+			externalTraceService.shutdown();
+		}
+	}
+
+	@Test
+	void ignoresSpansForTraceIdsThatStackFlowDidNotStart() {
+		TraceService traceService = new TraceService(new TraceStreamService());
+		ExternalTraceService externalTraceService = new ExternalTraceService(traceService);
+		OtlpTraceIngestService ingestService = new OtlpTraceIngestService(externalTraceService);
+		String unknownTraceId = "0123456789abcdef0123456789abcdef";
+		long startNanos = Instant.now().toEpochMilli() * 1_000_000L;
+		try {
+			ExportTraceServiceRequest request = ExportTraceServiceRequest.newBuilder()
+				.addResourceSpans(ResourceSpans.newBuilder()
+					.addScopeSpans(ScopeSpans.newBuilder().addSpans(span(
+						unknownTraceId, "0123456789abcdef", null, "GET /unknown",
+						Span.SpanKind.SPAN_KIND_SERVER, startNanos, 4
+					))))
+				.build();
+
+			assertEquals(0, ingestService.ingest(request));
+			assertTrue(traceService.getRecentTraces().isEmpty());
+		} finally {
+			externalTraceService.shutdown();
+		}
+	}
+
+	@Test
+	void readsLegacySemanticKeysAndErrorTypeWithoutLeakingSensitiveMetadata() throws Exception {
+		TraceService traceService = new TraceService(new TraceStreamService());
+		ExternalTraceService externalTraceService = new ExternalTraceService(traceService);
+		OtlpTraceIngestService ingestService = new OtlpTraceIngestService(externalTraceService);
+		ExternalTraceService.TraceCaptureContext capture = externalTraceService.startCapture("GET", "/legacy");
+		long startNanos = Instant.now().toEpochMilli() * 1_000_000L;
+		try {
+			externalTraceService.recordHttpResponse(capture.traceId(), 504, 1_200);
+			Span serverSpan = Span.newBuilder(span(
+				capture.traceId(), "5123456789abcdef", null, "GET /legacy",
+				Span.SpanKind.SPAN_KIND_SERVER, startNanos, 1_200
+			))
+				.addAttributes(attribute("http.method", "GET"))
+				.addAttributes(attribute("http.status_code", "504"))
+				.addAttributes(attribute("http.target", "/legacy?secret=value"))
+				.addAttributes(attribute("error.type", "java.sql.SQLTimeoutException"))
+				.addAttributes(attribute("http.request.header.authorization", "Bearer private"))
+				.addAttributes(attribute("db.user", "private-user"))
+				.addAttributes(attribute("db.connection_string", "postgresql://private-host/database"))
+				.setStatus(Status.newBuilder().setCode(Status.StatusCode.STATUS_CODE_ERROR).setMessage("query timed out"))
+				.build();
+			ExportTraceServiceRequest request = ExportTraceServiceRequest.newBuilder()
+				.addResourceSpans(ResourceSpans.newBuilder()
+					.addScopeSpans(ScopeSpans.newBuilder().addSpans(serverSpan)))
+				.build();
+
+			assertEquals(1, ingestService.ingest(request));
+			Thread.sleep(900);
+
+			Trace trace = traceService.getTrace(capture.traceId());
+			assertEquals(EventStatus.TIMEOUT, trace.resultStatus());
+			assertEquals("java.sql.SQLTimeoutException", trace.events().getFirst().errorType());
+			assertEquals("GET", trace.events().getFirst().metadata().get("http.method"));
+			assertEquals("/legacy", trace.events().getFirst().metadata().get("http.target"));
+			assertFalse(trace.events().getFirst().metadata().containsKey("http.request.header.authorization"));
+			assertFalse(trace.events().getFirst().metadata().containsKey("db.user"));
+			assertFalse(trace.events().getFirst().metadata().containsKey("db.connection_string"));
 		} finally {
 			externalTraceService.shutdown();
 		}

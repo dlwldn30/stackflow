@@ -42,4 +42,10 @@ public class ProductController {
 	public void triggerDatabaseError() {
 		productService.triggerDatabaseError();
 	}
+
+	@GetMapping("/{productId}/database-timeout")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public void triggerDatabaseTimeout(@PathVariable long productId) {
+		productService.triggerDatabaseTimeout(productId);
+	}
 }

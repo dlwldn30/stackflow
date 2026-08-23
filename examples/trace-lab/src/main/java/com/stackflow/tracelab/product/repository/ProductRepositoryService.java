@@ -4,6 +4,7 @@ import com.stackflow.tracelab.product.domain.Product;
 import com.stackflow.tracelab.product.service.ProductNotFoundException;
 import java.util.List;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.StatementCallback;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -28,5 +29,13 @@ public class ProductRepositoryService {
 
 	public void triggerDatabaseError() {
 		jdbcTemplate.queryForObject("select count(*) from trace_lab_missing_table", Long.class);
+	}
+
+	public void triggerDatabaseTimeout() {
+		jdbcTemplate.execute((StatementCallback<Void>) statement -> {
+			statement.setQueryTimeout(1);
+			statement.execute("select pg_sleep(2)");
+			return null;
+		});
 	}
 }

@@ -70,10 +70,10 @@ public class ExternalTraceService {
 		if (events.isEmpty()) {
 			return;
 		}
-		TraceAccumulator accumulator = accumulators.computeIfAbsent(
-			traceId,
-			ignored -> new TraceAccumulator(traceId, null, inferMethod(events), inferEndpoint(events), events.get(0).startedAt())
-		);
+		TraceAccumulator accumulator = accumulators.get(traceId);
+		if (accumulator == null) {
+			return;
+		}
 		List<TraceEvent> accepted = new ArrayList<>();
 		synchronized (accumulator) {
 			accumulator.serviceName = serviceName;
@@ -91,6 +91,10 @@ public class ExternalTraceService {
 		if (hasServerSpan(accumulator)) {
 			scheduler.schedule(() -> finalizeIfQuiet(traceId), COMPLETION_DEBOUNCE_MS, TimeUnit.MILLISECONDS);
 		}
+	}
+
+	public boolean isCaptureActive(String traceId) {
+		return accumulators.containsKey(traceId);
 	}
 
 	public TraceCollectionStatus getStatus(String traceId) {
@@ -169,22 +173,6 @@ public class ExternalTraceService {
 		synchronized (accumulator) {
 			return accumulator.events.values().stream().anyMatch(event -> "SERVER".equals(event.spanKind()));
 		}
-	}
-
-	private static String inferMethod(List<TraceEvent> events) {
-		return events.stream()
-			.map(event -> event.metadata().get("http.request.method"))
-			.filter(value -> value != null && !value.isBlank())
-			.findFirst()
-			.orElse("UNKNOWN");
-	}
-
-	private static String inferEndpoint(List<TraceEvent> events) {
-		return events.stream()
-			.map(event -> event.metadata().get("http.route"))
-			.filter(value -> value != null && !value.isBlank())
-			.findFirst()
-			.orElse(events.get(0).eventType());
 	}
 
 	@PreDestroy

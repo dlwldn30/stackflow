@@ -101,6 +101,23 @@ class TraceLabIntegrationTest {
 
 	@Test
 	@Order(4)
+	void actualPostgresqlQueryTimeoutReturnsHttp504() throws Exception {
+		long startedAt = System.nanoTime();
+		HttpRequest request = HttpRequest.newBuilder()
+			.uri(URI.create("http://localhost:" + serverPort + "/lab/products/1001/database-timeout"))
+			.GET()
+			.build();
+
+		HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+		long durationMs = (System.nanoTime() - startedAt) / 1_000_000;
+
+		assertThat(response.statusCode()).isEqualTo(504);
+		assertThat(response.body()).contains("\"code\":\"DATABASE_TIMEOUT\"");
+		assertThat(durationMs).isBetween(700L, 5_000L);
+	}
+
+	@Test
+	@Order(5)
 	void fallsBackToPostgresqlWhenRedisStops() {
 		REDIS.getDockerClient().stopContainerCmd(REDIS.getContainerId()).exec();
 

@@ -30,8 +30,14 @@ public class OtlpTraceIngestService {
 	private static final Set<String> BLOCKED_ATTRIBUTE_PARTS = Set.of(
 		"header", "cookie", "query", "body", "statement", "authorization", "token", "password", "secret"
 	);
+	private static final Set<String> ALLOWED_ATTRIBUTE_KEYS = Set.of(
+		"http.request.method", "http.method", "http.response.status_code", "http.status_code", "http.route", "http.target",
+		"url.path", "url.scheme", "server.address", "server.port", "network.protocol.name", "network.protocol.version",
+		"net.peer.name", "net.peer.port", "db.system.name", "db.system", "db.operation.name", "db.operation",
+		"db.namespace", "db.name", "db.collection.name", "db.sql.table", "error.type"
+	);
 	private static final List<String> ALLOWED_ATTRIBUTE_PREFIXES = List.of(
-		"code.", "http.", "url.", "server.", "network.", "db.", "rpc.", "exception.", "otel."
+		"code.", "rpc.", "otel."
 	);
 
 	private final ExternalTraceService externalTraceService;
@@ -50,6 +56,10 @@ public class OtlpTraceIngestService {
 					if (span.getTraceId().isEmpty() || span.getSpanId().isEmpty()) {
 						continue;
 					}
+					String traceId = hex(span.getTraceId());
+					if (!externalTraceService.isCaptureActive(traceId)) {
+						continue;
+					}
 					TraceEvent event = toTraceEvent(serviceName, span);
 					eventsByTrace.computeIfAbsent(event.traceId(), ignored -> new ArrayList<>()).add(event);
 					acceptedSpanCount++;
@@ -62,8 +72,8 @@ public class OtlpTraceIngestService {
 
 	private TraceEvent toTraceEvent(String serviceName, Span span) {
 		Map<String, String> metadata = sanitizeAttributes(span.getAttributesList());
-		String exceptionType = null;
-		String exceptionMessage = null;
+		String exceptionType = metadata.get("error.type");
+		String exceptionMessage = span.getStatus().getMessage().isBlank() ? null : truncate(span.getStatus().getMessage());
 		for (Span.Event event : span.getEventsList()) {
 			Map<String, String> eventAttributes = toAttributeMap(event.getAttributesList());
 			if (exceptionType == null) {
@@ -98,7 +108,7 @@ public class OtlpTraceIngestService {
 	private ComponentType classifyComponent(Span span, Map<String, String> attributes) {
 		String dbSystem = first(attributes, "db.system.name", "db.system").toLowerCase(Locale.ROOT);
 		String spanName = span.getName().toLowerCase(Locale.ROOT);
-		String codeNamespace = first(attributes, "code.namespace", "code.function.name").toLowerCase(Locale.ROOT);
+		String codeNamespace = first(attributes, "code.namespace", "code.function.name", "code.function").toLowerCase(Locale.ROOT);
 		String combined = spanName + " " + codeNamespace;
 		if (dbSystem.contains("redis") || combined.contains("redis") || combined.contains("cacheservice")) {
 			return ComponentType.REDIS;
@@ -131,7 +141,7 @@ public class OtlpTraceIngestService {
 			if (sanitized.size() >= MAX_ATTRIBUTES || !isAllowedAttribute(attribute.getKey())) {
 				continue;
 			}
-			sanitized.put(attribute.getKey(), truncate(toStringValue(attribute.getValue())));
+			sanitized.put(attribute.getKey(), sanitizeValue(attribute.getKey(), toStringValue(attribute.getValue())));
 		}
 		return Map.copyOf(sanitized);
 	}
@@ -151,7 +161,17 @@ public class OtlpTraceIngestService {
 		if (BLOCKED_ATTRIBUTE_PARTS.stream().anyMatch(lower::contains)) {
 			return false;
 		}
-		return ALLOWED_ATTRIBUTE_PREFIXES.stream().anyMatch(lower::startsWith);
+		return ALLOWED_ATTRIBUTE_KEYS.contains(lower)
+			|| ALLOWED_ATTRIBUTE_PREFIXES.stream().anyMatch(lower::startsWith);
+	}
+
+	private String sanitizeValue(String key, String value) {
+		String sanitized = value;
+		if (key.equalsIgnoreCase("http.target")) {
+			int queryIndex = sanitized.indexOf('?');
+			sanitized = queryIndex >= 0 ? sanitized.substring(0, queryIndex) : sanitized;
+		}
+		return truncate(sanitized);
 	}
 
 	private String readServiceName(Resource resource) {
