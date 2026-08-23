@@ -19,6 +19,16 @@ import {
   Trash2,
 } from 'lucide-react'
 import './App.css'
+import {
+  analyzeProject,
+  createInstrumentationProfile,
+  createTraceSession,
+  executeExternalRequest,
+  getProjectStructure,
+  getRecentTraces,
+  getTrace,
+  selectProjectFolder,
+} from './api/stackflow'
 import { EvidenceProgress } from './components/EvidenceProgress'
 import { StatusBadge } from './components/StatusBadge'
 import { WorkflowTabs } from './components/WorkflowTabs'
@@ -48,7 +58,6 @@ import type {
   TraceCollectionStatus,
   TraceCollectionStatusEvent,
   TraceEvent,
-  TraceSessionResponse,
   TraceStartedEvent,
   TraceSummary,
   TraceTerminalEvent,
@@ -586,12 +595,7 @@ function App() {
 
   async function loadApiCatalog() {
     try {
-      const response = await fetch('/api/project/structure')
-      if (!response.ok) {
-        throw new Error('프로젝트 구조를 불러오지 못했습니다.')
-      }
-
-      const structure = (await response.json()) as ProjectStructure
+      const structure = await getProjectStructure()
       const analyzedCatalog = flattenProjectApis(structure)
       applyProjectStructure(structure, analyzedCatalog, structure.analysisMessage, 'sample')
     } catch {
@@ -624,16 +628,7 @@ function App() {
     const nextAnalysisTarget = requestedPath.trim() === '' ? 'sample' : 'external'
 
     try {
-      const response = await fetch('/api/project/structure/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectPath: requestedPath }),
-      })
-      if (!response.ok) {
-        throw new Error('프로젝트 분석 요청에 실패했습니다.')
-      }
-
-      const structure = (await response.json()) as ProjectStructure
+      const structure = await analyzeProject(requestedPath)
       const analyzedCatalog = flattenProjectApis(structure)
       applyProjectStructure(structure, analyzedCatalog, structure.analysisMessage, nextAnalysisTarget)
       setAnalysisState(structure.analysisStatus === 'FAILED' ? 'error' : 'idle')
@@ -649,17 +644,7 @@ function App() {
     setFolderPickerMessage('폴더 선택창을 여는 중입니다...')
 
     try {
-      const response = await fetch('/api/project/folder/select', { method: 'POST' })
-      if (!response.ok) {
-        throw new Error('폴더 선택 요청에 실패했습니다.')
-      }
-
-      const selection = (await response.json()) as {
-        supported: boolean
-        selected: boolean
-        projectPath: string | null
-        message: string
-      }
+      const selection = await selectProjectFolder()
       if (!selection.supported) {
         setFolderPickerState('error')
         setFolderPickerMessage(selection.message)
@@ -730,20 +715,11 @@ function App() {
     setProfileState('loading')
     setProfileMessage('분석된 클래스와 public method로 Agent 실행 설정을 만들고 있습니다...')
     try {
-      const response = await fetch('/api/instrumentation/profile', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectPath: projectPath.trim(),
-          collectorBaseUrl: collectorBaseUrl.trim(),
-          agentPath: agentPath.trim(),
-        }),
+      const profile = await createInstrumentationProfile({
+        projectPath: projectPath.trim(),
+        collectorBaseUrl: collectorBaseUrl.trim(),
+        agentPath: agentPath.trim(),
       })
-      if (!response.ok) {
-        throw new Error('실행 Trace 설정을 생성하지 못했습니다.')
-      }
-
-      const profile = (await response.json()) as InstrumentationProfile
       setInstrumentationProfile(profile)
       setProfileState('idle')
       setProfileMessage('명령을 터미널에서 실행해 대상 앱을 Agent와 함께 재시작하세요.')
@@ -791,15 +767,12 @@ function App() {
   }
 
   async function loadRecentTraces() {
-    const response = await fetch('/api/traces')
-    if (!response.ok) {
-      return
+    try {
+      const traces = await getRecentTraces()
+      startTransition(() => setRecentTraces(traces))
+    } catch {
+      // Recent history is optional while the backend is starting.
     }
-
-    const traces = (await response.json()) as TraceSummary[]
-    startTransition(() => {
-      setRecentTraces(traces)
-    })
   }
 
   async function runRequest() {
@@ -840,12 +813,7 @@ function App() {
     setExternalResponse(null)
 
     try {
-      const sessionResponse = await fetch('/api/traces/session', { method: 'POST' })
-      if (!sessionResponse.ok) {
-        throw new Error('Trace 세션을 만들지 못했습니다.')
-      }
-
-      const session = (await sessionResponse.json()) as TraceSessionResponse
+      const session = await createTraceSession()
       const traceId = session.traceId
       const endpoint = selectedApi.buildPath(productId)
 
@@ -992,24 +960,15 @@ function App() {
     setRequestMessage(`${selectedApiMethodLabel} ${externalTargetPreview} 요청 중...`)
 
     try {
-      const response = await fetch('/api/external/request', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          targetBaseUrl: normalizedTargetBaseUrl,
-          method: requestMethod,
-          path: externalPath,
-          queryParams: toEnabledEntries(queryParams),
-          headers: toEnabledEntries(requestHeaders),
-          requestBody: nextRequestBody || null,
-          captureTrace,
-        }),
+      const payload = await executeExternalRequest({
+        targetBaseUrl: normalizedTargetBaseUrl,
+        method: requestMethod,
+        path: externalPath,
+        queryParams: toEnabledEntries(queryParams),
+        headers: toEnabledEntries(requestHeaders),
+        requestBody: nextRequestBody || null,
+        captureTrace,
       })
-      if (!response.ok) {
-        throw new Error('외부 API 요청 프록시가 실패했습니다.')
-      }
-
-      const payload = (await response.json()) as ExternalRequestResponse
       startTransition(() => {
         setExternalResponse(payload)
         setLastResponseBody(parseResponseBody(payload.responseBody))
@@ -2975,9 +2934,10 @@ async function fetchTraceWithRetry(traceId: string) {
   const attempts = 5
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const response = await fetch(`/api/traces/${traceId}`)
-    if (response.ok) {
-      return (await response.json()) as TraceDetail
+    try {
+      return await getTrace(traceId)
+    } catch {
+      // The final stream event can arrive just before the trace is stored.
     }
 
     await new Promise((resolve) => window.setTimeout(resolve, 220))
