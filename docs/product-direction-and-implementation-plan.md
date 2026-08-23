@@ -261,24 +261,35 @@ Reason:
 - Calling an external API is useful, but it is still not enough for internal node-level tracing.
 - Backend proxy is safer for the MVP user flow than direct browser `fetch`, because many local Spring Boot apps will not have CORS configured for the Vite dev server.
 
-## Phase 5. Design Spring Boot Instrumentation
+## Phase 5. OpenTelemetry External Runtime Trace
 
 Scope:
 
-- Make real external project runtime tracing possible.
+- Turn static analysis into an instrumentation profile for a local external Spring Boot application.
+- Trace one Spring Boot JVM with the OpenTelemetry Java Agent and OTLP HTTP/protobuf.
+- Keep the target project's source and Gradle/Maven files unchanged.
 
-Possible approaches:
+Implementation:
 
-- StackFlow Spring Boot starter dependency.
-- Servlet filter for traceId propagation.
-- AOP around Controller, Service, Repository methods.
-- Optional Redis/JDBC wrappers.
-- Push trace events to StackFlow server over HTTP or SSE-compatible event ingestion.
+- Generate `OTEL_INSTRUMENTATION_METHODS_INCLUDE` from analyzed Controller, Service, UseCase, Repository, Store, Cache, Gateway, and Client public methods.
+- Generate Gradle, Maven, and executable JAR launch commands that attach `opentelemetry-javaagent.jar`.
+- Receive standard OTLP traces through `POST /v1/traces`.
+- Inject a StackFlow-owned W3C `traceparent` when `POST /api/external/request` runs with trace capture enabled.
+- Join received spans by trace ID and build the actual graph from `spanId -> parentSpanId`.
+- Keep sample traces on the existing fixed graph and use a dynamic graph only for `source=OPENTELEMETRY`.
+- Distinguish HTTP execution failure from `TRACE_COLLECTION_TIMEOUT` when no spans arrive for 15 seconds.
 
 Reason:
 
-- This is required if StackFlow should show real internal flow for arbitrary Spring Boot projects.
-- It should be a separate MVP phase because it changes the integration model.
+- An HTTP response proves only that an endpoint ran. Agent spans provide actual Controller, method, JDBC, Redis, and HTTP client boundaries without modifying the target source.
+- OpenTelemetry Trace Context and OTLP provide a standard integration boundary without AI inference or a StackFlow-specific starter.
+
+Limits:
+
+- First support is local development and one Spring Boot JVM.
+- The target JVM must be restarted with the Agent; dynamic attach is not supported.
+- Distributed services, authentication, persistence, sampling controls, and production APM operation remain later phases.
+- See `docs/external-runtime-tracing-design.md` for the executable contract and metadata policy.
 
 ## Implementation Rules Going Forward
 
