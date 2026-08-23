@@ -2,7 +2,9 @@ package com.stackflow.backend.controller;
 
 import com.stackflow.backend.dto.ApiCatalogItemResponse;
 import com.stackflow.backend.dto.ProjectAnalyzeRequest;
+import com.stackflow.backend.dto.ProjectFolderSelectionResponse;
 import com.stackflow.backend.dto.ProjectStructureResponse;
+import com.stackflow.backend.service.LocalProjectFolderPickerService;
 import com.stackflow.backend.service.SpringApiCatalogService;
 import java.util.List;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -16,9 +18,14 @@ import org.springframework.web.bind.annotation.RestController;
 public class ProjectAnalysisController {
 
 	private final SpringApiCatalogService springApiCatalogService;
+	private final LocalProjectFolderPickerService localProjectFolderPickerService;
 
-	public ProjectAnalysisController(SpringApiCatalogService springApiCatalogService) {
+	public ProjectAnalysisController(
+		SpringApiCatalogService springApiCatalogService,
+		LocalProjectFolderPickerService localProjectFolderPickerService
+	) {
 		this.springApiCatalogService = springApiCatalogService;
+		this.localProjectFolderPickerService = localProjectFolderPickerService;
 	}
 
 	@GetMapping("/apis")
@@ -34,5 +41,10 @@ public class ProjectAnalysisController {
 	@PostMapping("/structure/analyze")
 	public ProjectStructureResponse analyzeProjectStructure(@RequestBody ProjectAnalyzeRequest request) {
 		return springApiCatalogService.getProjectStructure(request.projectPath());
+	}
+
+	@PostMapping("/folder/select")
+	public ProjectFolderSelectionResponse selectProjectFolder() {
+		return localProjectFolderPickerService.selectProjectFolder();
 	}
 }

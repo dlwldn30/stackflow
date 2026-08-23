@@ -1,13 +1,19 @@
 package com.stackflow.backend.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.stackflow.backend.dto.ExternalRequestEntry;
 import com.stackflow.backend.dto.ExternalRequestPayload;
 import com.stackflow.backend.dto.ExternalRequestResponse;
 import java.net.http.HttpClient;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
+import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 
 class ExternalRequestServiceTest {
@@ -98,5 +104,41 @@ class ExternalRequestServiceTest {
 			"http://93.184.216.34/api/products",
 			restrictedExternalRequestService.buildTargetUri("http://93.184.216.34", "/api/products").toString()
 		);
+	}
+
+	@Test
+	void injectsStackFlowTraceparentWhenTraceCaptureIsEnabled() throws Exception {
+		AtomicReference<String> receivedTraceparent = new AtomicReference<>();
+		HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/orders", exchange -> {
+			receivedTraceparent.set(exchange.getRequestHeaders().getFirst("traceparent"));
+			byte[] body = "ok".getBytes(StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(200, body.length);
+			exchange.getResponseBody().write(body);
+			exchange.close();
+		});
+		server.start();
+		ExternalTraceService traceCaptureService = new ExternalTraceService(new TraceService(new TraceStreamService()));
+		ExternalRequestService service = new ExternalRequestService(HttpClient.newHttpClient(), true, traceCaptureService);
+		try {
+			ExternalRequestResponse response = service.execute(new ExternalRequestPayload(
+				"http://127.0.0.1:" + server.getAddress().getPort(),
+				"GET",
+				"/orders",
+				List.of(),
+				List.of(new ExternalRequestEntry("traceparent", "00-invalid-invalid-01", true)),
+				null,
+				true
+			));
+
+			assertEquals("PENDING", response.traceCollectionStatus().name());
+			assertNotNull(response.traceId());
+			assertEquals(32, response.traceId().length());
+			assertTrue(receivedTraceparent.get().matches("00-[0-9a-f]{32}-[0-9a-f]{16}-01"));
+			assertTrue(receivedTraceparent.get().contains(response.traceId()));
+		} finally {
+			traceCaptureService.shutdown();
+			server.stop(0);
+		}
 	}
 }

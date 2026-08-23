@@ -35,6 +35,15 @@ public class TraceService {
 
 	public Trace completeTrace(TraceSession session, int httpStatus, EventStatus resultStatus) {
 		Trace trace = session.complete(httpStatus, resultStatus);
+		storeTrace(trace);
+		return trace;
+	}
+
+	public void storeExternalTrace(Trace trace) {
+		storeTrace(trace);
+	}
+
+	private void storeTrace(Trace trace) {
 		traces.put(trace.traceId(), trace);
 		order.remove(trace.traceId());
 		order.addFirst(trace.traceId());
@@ -44,12 +53,27 @@ public class TraceService {
 				traces.remove(expired);
 			}
 		}
-		if (resultStatus == EventStatus.ERROR || resultStatus == EventStatus.TIMEOUT) {
+		if (trace.resultStatus() == EventStatus.ERROR || trace.resultStatus() == EventStatus.TIMEOUT) {
 			traceStreamService.publishTraceFailed(trace);
 		} else {
 			traceStreamService.publishTraceCompleted(trace);
 		}
-		return trace;
+	}
+
+	public void publishExternalTraceStarted(String traceId, String method, String endpoint) {
+		traceStreamService.publishTraceStarted(traceId, method, endpoint, "external-opentelemetry");
+	}
+
+	public void publishExternalTraceEvent(com.stackflow.backend.domain.TraceEvent event) {
+		traceStreamService.publishTraceEvent(event);
+	}
+
+	public void publishCollectionStatus(
+		String traceId,
+		com.stackflow.backend.domain.TraceCollectionStatus status,
+		String message
+	) {
+		traceStreamService.publishTraceCollectionStatus(traceId, status, message);
 	}
 
 	public void publishTraceStarted(TraceSession session) {

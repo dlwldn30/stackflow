@@ -13,6 +13,35 @@ public record Trace(
 	long durationMs,
 	int httpStatus,
 	EventStatus resultStatus,
-	List<TraceEvent> events
+	List<TraceEvent> events,
+	TraceSource source,
+	String serviceName
 ) {
+	public Trace(
+		String traceId,
+		String method,
+		String endpoint,
+		String scenario,
+		Instant startedAt,
+		Instant endedAt,
+		long durationMs,
+		int httpStatus,
+		EventStatus resultStatus,
+		List<TraceEvent> events
+	) {
+		this(
+			traceId,
+			method,
+			endpoint,
+			scenario,
+			startedAt,
+			endedAt,
+			durationMs,
+			httpStatus,
+			resultStatus,
+			events,
+			TraceSource.SAMPLE,
+			"stackflow-sample"
+		);
+	}
 }
