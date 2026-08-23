@@ -24,4 +24,24 @@ describe('stackflow API client', () => {
 
     await expect(getProjectStructure()).rejects.toThrow('프로젝트 구조를 불러오지 못했습니다.')
   })
+
+  it('keeps the UI usable when an older backend omits analysis coverage', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        projectName: 'legacy',
+        sourceRoot: 'src/main/java',
+        domains: [{ controllers: [{ name: 'OrderController' }], endpoints: [{ id: 'orders' }] }],
+      }),
+    }))
+
+    const project = await getProjectStructure()
+
+    expect(project.analysisCoverage).toMatchObject({
+      sourceRoots: ['src/main/java'],
+      detectedControllers: 1,
+      detectedEndpoints: 1,
+    })
+    expect(project.analysisCoverage.warnings[0]).toContain('backend')
+  })
 })

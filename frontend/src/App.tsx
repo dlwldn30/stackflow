@@ -31,8 +31,10 @@ import {
 } from './api/stackflow'
 import { EvidenceProgress } from './components/EvidenceProgress'
 import { StatusBadge } from './components/StatusBadge'
+import { TraceWaterfall } from './components/TraceWaterfall'
 import { WorkflowTabs } from './components/WorkflowTabs'
 import { buildGraph, getNodeDetail } from './lib/graph'
+import { buildWaterfall, getPrimaryFailureEvent } from './lib/waterfall'
 import {
   EVENT_STATUS_LABEL,
   PROJECT_STATUS_LABEL,
@@ -66,39 +68,9 @@ import type {
 const SCENARIOS = [
   { value: 'normal', label: '정상 요청' },
   { value: 'redis-down', label: 'Redis 연결 실패' },
-  { value: 'db-timeout', label: 'DB 시간 초과' },
+  { value: 'db-timeout', label: '모의 DB 오류' },
   { value: 'service-error', label: 'Service 오류' },
 ] as const
-
-const FAILURE_COMPONENT_PRIORITY: TraceEvent['component'][] = [
-  'MYSQL',
-  'POSTGRESQL',
-  'DATABASE',
-  'REDIS',
-  'HTTP_CLIENT',
-  'GATEWAY',
-  'REPOSITORY',
-  'SERVICE',
-  'CONTROLLER',
-  'INTERNAL',
-  'RESPONSE',
-  'CLIENT',
-]
-
-function getPrimaryFailureEvent(trace: TraceDetail | null): TraceEvent | null {
-  const failedEvents = trace?.events.filter((event) =>
-    event.status === 'ERROR' || event.status === 'TIMEOUT',
-  ) ?? []
-
-  for (const component of FAILURE_COMPONENT_PRIORITY) {
-    const event = failedEvents.find((candidate) =>
-      candidate.component === component && Boolean(candidate.errorType || candidate.errorMessage),
-    )
-    if (event) return event
-  }
-
-  return failedEvents.find((event) => event.component !== 'RESPONSE') ?? failedEvents[0] ?? null
-}
 
 function matchesTraceEndpoint(api: ApiDefinition, trace: TraceDetail) {
   if (api.methodSpecified && api.method !== trace.method) {
@@ -466,6 +438,7 @@ function App() {
   const [traceDetail, setTraceDetail] = useState<TraceDetail | null>(null)
   const [recentTraces, setRecentTraces] = useState<TraceSummary[]>([])
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [traceViewTab, setTraceViewTab] = useState<'timeline' | 'graph' | 'events'>('timeline')
   const [requestState, setRequestState] = useState<'idle' | 'loading' | 'error'>('idle')
   const [streamStatus, setStreamStatus] = useState<StreamStatus>('idle')
   const [requestMessage, setRequestMessage] = useState<string>('API를 선택하고 요청을 실행하세요.')
@@ -482,7 +455,11 @@ function App() {
   const flowInstanceRef = useRef<ReactFlowInstance | null>(null)
 
   const graph = buildGraph(traceDetail)
-  const primaryFailureEvent = getPrimaryFailureEvent(traceDetail)
+  const waterfall = buildWaterfall(traceDetail?.events ?? [])
+  const orderedTraceEvents = [...(traceDetail?.events ?? [])].sort((left, right) =>
+    Date.parse(left.startedAt) - Date.parse(right.startedAt),
+  )
+  const primaryFailureEvent = getPrimaryFailureEvent(traceDetail?.events ?? [])
   const primaryFailureNodeId = primaryFailureEvent?.spanId ?? primaryFailureEvent?.component ?? null
   const selectedNode = getNodeDetail(
     graph.states,
@@ -530,9 +507,9 @@ function App() {
     : externalRunnable
       ? externalTraceReady ? '요청 후 Trace 확인' : '외부 API 요청'
       : '정적 분석만 가능'
-  const traceDisplayStatus = traceDetail?.source === 'OPENTELEMETRY'
+  const traceDisplayStatus = traceDetail?.source === 'OPENTELEMETRY' && streamStatus !== 'idle'
     ? TRACE_COLLECTION_STATUS_LABEL[traceCollectionStatus]
-    : streamStatus === 'idle' && traceDetail
+    : traceDetail
       ? EVENT_STATUS_LABEL[traceDetail.resultStatus]
       : STREAM_STATUS_LABEL[streamStatus]
   const traceDisplayTone = streamStatus === 'idle' && traceDetail
@@ -872,7 +849,7 @@ function App() {
 
       startTransition(() => {
         setTraceDetail(finalTrace)
-        const failureEvent = getPrimaryFailureEvent(finalTrace)
+        const failureEvent = getPrimaryFailureEvent(finalTrace.events)
         setSelectedNodeId(
           failureEvent?.spanId
             ?? failureEvent?.component
@@ -1157,7 +1134,7 @@ function App() {
         void fetchTraceWithRetry(payload.traceId).then((detail) => {
           if (activeRunIdRef.current !== runId) return
           setTraceDetail(detail)
-          const failureEvent = getPrimaryFailureEvent(detail)
+          const failureEvent = getPrimaryFailureEvent(detail.events)
           setSelectedNodeId(
             failureEvent?.spanId
               ?? failureEvent?.component
@@ -2008,7 +1985,7 @@ function App() {
                 </span>
                 <span>
                   <strong>Endpoint</strong>
-                  {selectedApiMethodLabel} {selectedApi.pathTemplate}
+                  {traceDetail.method} {traceDetail.endpoint}
                 </span>
                 <span>
                   <strong>확인 목표</strong>
@@ -2031,6 +2008,28 @@ function App() {
                 </section>
               ) : null}
 
+              <div className="trace-view-tabs" role="tablist" aria-label="Trace 보기 방식">
+                <button type="button" role="tab" aria-selected={traceViewTab === 'timeline'} className={traceViewTab === 'timeline' ? 'is-active' : ''} onClick={() => setTraceViewTab('timeline')}>
+                  타임라인
+                </button>
+                <button type="button" role="tab" aria-selected={traceViewTab === 'graph'} className={traceViewTab === 'graph' ? 'is-active' : ''} onClick={() => setTraceViewTab('graph')}>
+                  그래프
+                </button>
+                <button type="button" role="tab" aria-selected={traceViewTab === 'events'} className={traceViewTab === 'events' ? 'is-active' : ''} onClick={() => setTraceViewTab('events')}>
+                  이벤트 <span>{traceDetail.events.length}</span>
+                </button>
+              </div>
+
+              {traceViewTab === 'timeline' ? (
+                <TraceWaterfall
+                  model={waterfall}
+                  selectedSpanId={selectedNode?.id ?? null}
+                  onSelectSpan={setSelectedNodeId}
+                />
+              ) : null}
+
+              {traceViewTab === 'graph' ? (
+                <>
               {traceComparison ? (
                 <section className="trace-comparison" aria-label="예상 흐름과 실제 Trace 비교">
                   <div>
@@ -2118,6 +2117,36 @@ function App() {
                   <Background gap={20} size={1} />
                 </ReactFlow>
               </div>
+                </>
+              ) : null}
+
+              {traceViewTab === 'events' ? (
+                <section className="trace-event-table" aria-label="시간순 Trace 이벤트">
+                  <header>
+                    <span>시작</span>
+                    <span>Span</span>
+                    <span>구성 요소</span>
+                    <span>소요 시간</span>
+                    <span>상태</span>
+                  </header>
+                  {orderedTraceEvents.map((event) => (
+                    <button
+                      key={event.eventId}
+                      type="button"
+                      className={selectedNode?.id === (event.spanId ?? event.component) ? 'is-selected' : ''}
+                      onClick={() => setSelectedNodeId(event.spanId ?? event.component)}
+                    >
+                      <span>{new Date(event.startedAt).toLocaleTimeString('ko-KR', { hour12: false, fractionalSecondDigits: 3 })}</span>
+                      <strong>{event.eventType}</strong>
+                      <span>{event.component}</span>
+                      <span>{event.durationMs}ms</span>
+                      <StatusBadge tone={event.status === 'SUCCESS' ? 'success' : event.status === 'WARNING' ? 'warning' : 'error'}>
+                        {EVENT_STATUS_LABEL[event.status]}
+                      </StatusBadge>
+                    </button>
+                  ))}
+                </section>
+              ) : null}
                 </>
               )}
             </div>

@@ -2850,6 +2850,321 @@ summary:focus-visible {
   background: #fbfcfd;
 }
 
+.trace-view-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 12px;
+  border-bottom: 1px solid var(--color-line);
+}
+
+.trace-view-tabs button {
+  position: relative;
+  min-height: 38px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--color-muted);
+  padding: 0 14px;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.trace-view-tabs button::after {
+  position: absolute;
+  right: 10px;
+  bottom: -1px;
+  left: 10px;
+  height: 2px;
+  background: transparent;
+  content: '';
+}
+
+.trace-view-tabs button.is-active {
+  color: var(--color-action);
+}
+
+.trace-view-tabs button.is-active::after {
+  background: var(--color-action);
+}
+
+.trace-view-tabs button span {
+  margin-left: 4px;
+  color: #7c8795;
+  font: 650 0.62rem/1 var(--font-mono);
+}
+
+.waterfall {
+  min-width: 0;
+  margin-top: 12px;
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+  background: var(--color-surface);
+  overflow: auto;
+}
+
+.waterfall__head,
+.waterfall-scale,
+.waterfall-rows {
+  min-width: 720px;
+}
+
+.waterfall__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  border-bottom: 1px solid var(--color-line);
+  padding: 13px 14px;
+}
+
+.waterfall__head > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.waterfall__head > div:first-child > strong {
+  font-size: 0.86rem;
+}
+
+.waterfall__head > div:first-child > small {
+  color: var(--color-muted);
+  font-size: 0.62rem;
+}
+
+.waterfall-bottlenecks {
+  display: flex;
+  gap: 5px;
+}
+
+.waterfall-bottlenecks button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 5px;
+  min-width: 105px;
+  max-width: 160px;
+  border: 1px solid var(--color-line);
+  border-radius: 5px;
+  background: #f8fafc;
+  color: var(--color-ink);
+  padding: 7px;
+  text-align: left;
+}
+
+.waterfall-bottlenecks button > span {
+  grid-row: 1 / 3;
+  color: var(--color-warning);
+  font: 750 0.66rem/1.2 var(--font-mono);
+}
+
+.waterfall-bottlenecks button > strong {
+  overflow: hidden;
+  font-size: 0.63rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.waterfall-bottlenecks button > small {
+  color: var(--color-muted);
+  font-size: 0.57rem;
+}
+
+.waterfall-scale {
+  display: grid;
+  grid-template-columns: 220px repeat(5, minmax(0, 1fr)) 72px;
+  border-bottom: 1px solid var(--color-line);
+  background: #f8fafc;
+  color: #7c8795;
+  font: 500 0.57rem/1 var(--font-mono);
+}
+
+.waterfall-scale span {
+  padding: 7px 0;
+  text-align: center;
+}
+
+.waterfall-scale span:first-child {
+  grid-column: 2;
+  text-align: left;
+}
+
+.waterfall-scale span:last-child {
+  text-align: right;
+}
+
+.waterfall-rows {
+  display: grid;
+}
+
+.waterfall-row {
+  display: grid;
+  grid-template-columns: 220px minmax(360px, 1fr) 72px;
+  min-height: 45px;
+  border: 0;
+  border-bottom: 1px solid #e9edf2;
+  border-radius: 0;
+  background: var(--color-surface);
+  color: var(--color-ink);
+  padding: 0;
+  text-align: left;
+}
+
+.waterfall-row:last-child {
+  border-bottom: 0;
+}
+
+.waterfall-row:hover,
+.waterfall-row.is-selected {
+  background: #f3f7ff;
+}
+
+.waterfall-row.is-selected {
+  box-shadow: inset 3px 0 0 var(--color-action);
+}
+
+.waterfall-row__name {
+  display: grid;
+  align-content: center;
+  min-width: 0;
+  border-right: 1px solid var(--color-line);
+  padding-right: 8px;
+}
+
+.waterfall-row__name strong {
+  overflow: hidden;
+  font: 650 0.66rem/1.3 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.waterfall-row__name small {
+  color: var(--color-muted);
+  font-size: 0.57rem;
+}
+
+.waterfall-row__track {
+  position: relative;
+  display: block;
+  min-width: 0;
+  border-right: 1px solid var(--color-line);
+}
+
+.waterfall-row__bar {
+  position: absolute;
+  top: 11px;
+  min-width: 4px;
+  height: 22px;
+  border: 1px solid #87a9e8;
+  border-radius: 3px;
+  background: #dbe8ff;
+}
+
+.waterfall-row__bar.is-compact {
+  min-width: 3px;
+  border-radius: 2px;
+}
+
+.waterfall-row__bar > span {
+  display: block;
+  overflow: hidden;
+  padding: 4px 5px;
+  color: #174ea6;
+  font: 650 0.58rem/1 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.waterfall-row--error .waterfall-row__bar,
+.waterfall-row--timeout .waterfall-row__bar {
+  border-color: #e8a39d;
+  background: #fee4e2;
+}
+
+.waterfall-row--error .waterfall-row__bar > span,
+.waterfall-row--timeout .waterfall-row__bar > span {
+  color: #9f261e;
+}
+
+.waterfall-row--warning .waterfall-row__bar {
+  border-color: #e8c477;
+  background: #fff3d6;
+}
+
+.waterfall-row__exclusive {
+  display: grid;
+  place-content: center;
+  color: var(--color-muted);
+  text-align: center;
+}
+
+.waterfall-row__exclusive b {
+  color: var(--color-warning);
+  font: 750 0.56rem/1 var(--font-mono);
+}
+
+.waterfall-row__exclusive strong {
+  color: var(--color-ink);
+  font: 700 0.64rem/1.2 var(--font-mono);
+}
+
+.waterfall-row__exclusive small {
+  font-size: 0.54rem;
+}
+
+.trace-event-table {
+  min-width: 0;
+  margin-top: 12px;
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+  overflow: auto;
+}
+
+.trace-event-table > header,
+.trace-event-table > button {
+  display: grid;
+  grid-template-columns: 90px minmax(220px, 1fr) 100px 72px 72px;
+  align-items: center;
+  min-width: 650px;
+}
+
+.trace-event-table > header {
+  border-bottom: 1px solid var(--color-line);
+  background: #f8fafc;
+  color: var(--color-muted);
+  padding: 8px 10px;
+  font-size: 0.6rem;
+  font-weight: 700;
+}
+
+.trace-event-table > button {
+  width: 100%;
+  min-height: 42px;
+  border: 0;
+  border-bottom: 1px solid #e9edf2;
+  border-radius: 0;
+  background: var(--color-surface);
+  color: var(--color-muted);
+  padding: 7px 10px;
+  text-align: left;
+}
+
+.trace-event-table > button:hover,
+.trace-event-table > button.is-selected {
+  background: #f3f7ff;
+}
+
+.trace-event-table > button > strong {
+  overflow: hidden;
+  color: var(--color-ink);
+  font: 650 0.66rem/1.3 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-event-table > button > span {
+  font: 500 0.6rem/1.3 var(--font-mono);
+}
+
 .graph-lanes {
   position: absolute;
   inset: 0;
