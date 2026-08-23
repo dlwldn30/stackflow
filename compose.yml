@@ -1,0 +1,98 @@
+name: stackflow-demo
+
+services:
+  backend:
+    build:
+      context: ./backend
+    environment:
+      STACKFLOW_ALLOW_PRIVATE_TARGETS: "true"
+    ports:
+      - "127.0.0.1:18080:18080"
+    volumes:
+      - ./examples/trace-lab:/workspace/trace-lab:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:18080/api/project/structure"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_DEFAULT_PROJECT_PATH: /workspace/trace-lab
+        VITE_DEFAULT_TARGET_BASE_URL: http://trace-lab:8091
+        VITE_DEMO_TRACE_READY: "true"
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:5173:80"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1/"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  trace-lab:
+    build:
+      context: ./examples/trace-lab
+    depends_on:
+      backend:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      TRACE_LAB_DB_URL: jdbc:postgresql://postgres:5432/trace_lab
+      TRACE_LAB_DB_USER: trace_lab
+      TRACE_LAB_DB_PASSWORD: ""
+      TRACE_LAB_REDIS_HOST: redis
+      TRACE_LAB_REDIS_PORT: "6379"
+      OTEL_SERVICE_NAME: trace-lab
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://backend:18080
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
+      OTEL_INSTRUMENTATION_METHODS_INCLUDE: com.stackflow.tracelab.product.controller.ProductController[getProduct,getProducts,evictProductCache,triggerDatabaseError,triggerDatabaseTimeout];com.stackflow.tracelab.product.service.ProductService[getProduct,getProducts,evictProductCache,triggerDatabaseError,triggerDatabaseTimeout];com.stackflow.tracelab.product.repository.ProductRepositoryService[findById,findAll,triggerDatabaseError,triggerDatabaseTimeout];com.stackflow.tracelab.product.cache.ProductCacheService[findById,save,evict]
+    ports:
+      - "127.0.0.1:8091:8091"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8091/lab/products"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: trace_lab
+      POSTGRES_USER: trace_lab
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "127.0.0.1:15432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trace_lab -d trace_lab"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - trace-lab-postgres:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:16379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - trace-lab-redis:/data
+
+volumes:
+  trace-lab-postgres:
+  trace-lab-redis:
