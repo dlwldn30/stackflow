@@ -2,7 +2,9 @@ package com.stackflow.backend.service;
 
 import com.stackflow.backend.domain.EventStatus;
 import com.stackflow.backend.domain.Trace;
+import com.stackflow.backend.domain.TraceCollectionStatus;
 import com.stackflow.backend.domain.TraceEvent;
+import com.stackflow.backend.dto.TraceCollectionStatusEventResponse;
 import com.stackflow.backend.dto.TraceStartedEventResponse;
 import com.stackflow.backend.dto.TraceTerminalEventResponse;
 import java.io.IOException;
@@ -10,7 +12,10 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.CopyOnWriteArrayList;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -21,10 +26,12 @@ public class TraceStreamService {
 
 	private final Map<String, List<SseEmitter>> emitters = new ConcurrentHashMap<>();
 	private final Map<String, List<TraceStreamMessage>> streamHistory = new ConcurrentHashMap<>();
+	private final Set<String> closedTraceIds = ConcurrentHashMap.newKeySet();
+	private final ConcurrentLinkedDeque<String> historyOrder = new ConcurrentLinkedDeque<>();
 
 	public SseEmitter createEmitter(String traceId) {
 		SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
-		emitters.computeIfAbsent(traceId, ignored -> new ArrayList<>()).add(emitter);
+		emitters.computeIfAbsent(traceId, ignored -> new CopyOnWriteArrayList<>()).add(emitter);
 
 		emitter.onCompletion(() -> removeEmitter(traceId, emitter));
 		emitter.onTimeout(() -> {
@@ -43,6 +50,10 @@ public class TraceStreamService {
 			)
 		));
 		replayHistory(traceId, emitter);
+		if (closedTraceIds.contains(traceId)) {
+			removeEmitter(traceId, emitter);
+			emitter.complete();
+		}
 		return emitter;
 	}
 
@@ -56,6 +67,21 @@ public class TraceStreamService {
 
 	public void publishTraceEvent(TraceEvent traceEvent) {
 		publish(traceEvent.traceId(), "trace_event", traceEvent);
+	}
+
+	public void publishTraceCollectionStatus(
+		String traceId,
+		TraceCollectionStatus status,
+		String message
+	) {
+		publish(
+			traceId,
+			"trace_collection_status",
+			new TraceCollectionStatusEventResponse(traceId, status, message, Instant.now())
+		);
+		if (status == TraceCollectionStatus.TIMED_OUT) {
+			completeTraceStream(traceId);
+		}
 	}
 
 	public void publishTraceCompleted(Trace trace) {
@@ -111,7 +137,7 @@ public class TraceStreamService {
 
 	private void publish(String traceId, String eventName, Object payload) {
 		TraceStreamMessage message = new TraceStreamMessage(eventName, payload);
-		streamHistory.computeIfAbsent(traceId, ignored -> new ArrayList<>()).add(message);
+		streamHistory.computeIfAbsent(traceId, ignored -> new CopyOnWriteArrayList<>()).add(message);
 		List<SseEmitter> activeEmitters = emitters.get(traceId);
 		if (activeEmitters == null) {
 			return;
@@ -139,6 +165,16 @@ public class TraceStreamService {
 	}
 
 	private void completeTraceStream(String traceId) {
+		closedTraceIds.add(traceId);
+		historyOrder.remove(traceId);
+		historyOrder.addFirst(traceId);
+		while (historyOrder.size() > 25) {
+			String expired = historyOrder.pollLast();
+			if (expired != null) {
+				closedTraceIds.remove(expired);
+				streamHistory.remove(expired);
+			}
+		}
 		List<SseEmitter> activeEmitters = emitters.remove(traceId);
 		if (activeEmitters != null) {
 			activeEmitters.forEach(SseEmitter::complete);

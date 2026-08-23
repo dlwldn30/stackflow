@@ -25,6 +25,19 @@ class SpringMappingParserTest {
 	}
 
 	@Test
+	void parsesShortcutMappingWithMultiplePositionalPaths() {
+		List<SpringMappingParser.MappingAnnotation> mappings = parser.parse("""
+			@GetMapping({"/products", "/products/search"})
+			""");
+
+		assertEquals(2, mappings.size());
+		assertTrue(mappings.stream().allMatch(mapping -> mapping.method().equals("GET")));
+		assertTrue(mappings.stream().allMatch(SpringMappingParser.MappingAnnotation::methodSpecified));
+		assertEquals("/products", mappings.get(0).path());
+		assertEquals("/products/search", mappings.get(1).path());
+	}
+
+	@Test
 	void collectsMultilineAnnotationBlock() {
 		List<String> lines = List.of(
 			"\t@GetMapping(",
@@ -72,6 +85,27 @@ class SpringMappingParserTest {
 		assertEquals("POST", mappings.get(1).method());
 		assertTrue(mappings.stream().allMatch(SpringMappingParser.MappingAnnotation::methodSpecified));
 		assertTrue(mappings.stream().allMatch(mapping -> mapping.path().equals("/orders/{orderId}")));
+	}
+
+	@Test
+	void parsesRequestMappingWithMultipleMethodsAndPaths() {
+		List<SpringMappingParser.MappingAnnotation> mappings = parser.parse("""
+			@RequestMapping(
+				path = {"/orders", "/orders/search"},
+				method = {RequestMethod.GET, RequestMethod.POST}
+			)
+			""");
+
+		assertEquals(4, mappings.size());
+		assertEquals("GET", mappings.get(0).method());
+		assertEquals("/orders", mappings.get(0).path());
+		assertEquals("GET", mappings.get(1).method());
+		assertEquals("/orders/search", mappings.get(1).path());
+		assertEquals("POST", mappings.get(2).method());
+		assertEquals("/orders", mappings.get(2).path());
+		assertEquals("POST", mappings.get(3).method());
+		assertEquals("/orders/search", mappings.get(3).path());
+		assertTrue(mappings.stream().allMatch(SpringMappingParser.MappingAnnotation::methodSpecified));
 	}
 
 	@Test

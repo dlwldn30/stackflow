@@ -10,11 +10,12 @@ StackFlow is not a production APM replacement yet. The current MVP focuses on lo
 
 - `Project`: read a Spring Boot project and summarize domains, controllers, layers, infrastructure, and API count.
 - `Request`: select an API, configure a target request, send it, and inspect the HTTP response.
-- `Trace`: run the bundled StackFlow sample APIs with SSE and inspect actual runtime events in a graph.
+- `Trace`: inspect bundled sample events or actual OpenTelemetry spans from an Agent-enabled external Spring Boot JVM.
 
 Current request modes:
 
 - `Runtime Trace`: available for the bundled runtime-ready sample APIs.
+- `External Runtime Trace`: available after generating an instrumentation profile and restarting the target app with the OpenTelemetry Java Agent.
 - `Run target`: available for external targets only when the analyzed endpoint has an explicit HTTP method.
 - `Analyze only`: used for integration-focused sample flows or analyzed endpoints detected without an explicit HTTP method.
 
@@ -31,10 +32,10 @@ Current request modes:
 - External request editor for query parameters, headers, and JSON body.
 - JSON body validation before sending external `POST`, `PUT`, or `PATCH` requests.
 - External response panel with request evidence and response evidence.
+- OpenTelemetry Java Agent launch profile generation for Gradle, Maven, and executable JAR projects.
+- W3C `traceparent` correlation, OTLP HTTP/protobuf ingestion, and dynamic parent-child span graphs.
 
-## Important Limitation
-
-External project analysis and external API execution do not mean StackFlow can trace that external app internally.
+## External Runtime Trace Boundary
 
 For external Spring Boot projects, StackFlow currently shows:
 
@@ -43,7 +44,9 @@ For external Spring Boot projects, StackFlow currently shows:
 - HTTP request and response evidence.
 - Endpoints detected from method-level `@RequestMapping` even when `RequestMethod` is omitted.
 
-It does not yet show actual external `Controller -> Service -> Repository` runtime events. That requires a future Spring Boot starter, agent, or instrumentation layer inside the target app.
+After an instrumentation profile is generated, StackFlow can show actual Agent spans for the external JVM. The target app must be restarted with the generated command. Source files and build files are not modified.
+
+The first supported boundary is one local Spring Boot JVM. Dynamic attach, multi-service distributed tracing, authentication, durable storage, and production APM operation are not included.
 
 If a detected endpoint does not declare an explicit HTTP method, StackFlow keeps it visible in the catalog but marks it as `Analyze only`. That endpoint cannot be executed or traced until the controller mapping becomes explicit.
 
@@ -55,6 +58,9 @@ backend/
 
 frontend/
   Vite React app, Project/Request/Trace UI, React Flow graph
+
+examples/trace-lab/
+  External Spring Boot app with PostgreSQL and Redis failure scenarios
 
 docs/
   Product direction, implementation plan, development convention, and analysis convention
@@ -74,31 +80,15 @@ cd /Users/jiwoo/Desktop/stackflow/backend
 Default backend URL:
 
 ```text
-http://localhost:8080
-```
-
-If port `8080` is already in use, run the backend on `8091`:
-
-```bash
-cd /Users/jiwoo/Desktop/stackflow/backend
-./gradlew bootRun --args='--server.port=8091'
+http://localhost:18080
 ```
 
 ### Frontend
-
-If the backend is running on `8080`:
 
 ```bash
 cd /Users/jiwoo/Desktop/stackflow/frontend
 npm install
 npm run dev
-```
-
-If the backend is running on `8091`:
-
-```bash
-cd /Users/jiwoo/Desktop/stackflow/frontend
-VITE_API_TARGET=http://localhost:8091 npm run dev
 ```
 
 Frontend URL:
@@ -117,15 +107,13 @@ Use this view to understand a Spring Boot project structure.
 
 - Leave the project path empty to load the bundled StackFlow sample project.
 - Enter a Spring Boot project root path to analyze an external local project.
-- Use `Browse folder` to preview a local folder selection in the browser.
-- Browser mode cannot reliably read the selected folder's absolute path, so paste the root path into the path field to run backend analysis.
+- Use `폴더 선택` to open the native macOS folder picker and fill the absolute project path.
+- You can also paste an absolute project root path directly into the path field.
 - Example path:
 
 ```text
 /Users/jiwoo/Desktop/stackflow/backend
 ```
-
-Future desktop packaging with Tauri or Electron can replace this limitation with a native folder picker that returns the absolute project path directly.
 
 ### 2. Request
 
@@ -147,10 +135,33 @@ http://localhost:8091
 
 Use this view to inspect actual runtime events.
 
-- Runtime trace is currently supported for the bundled StackFlow sample APIs.
+- Runtime trace is supported for bundled sample APIs and Agent-enabled external Spring Boot apps.
 - Integration-focused sample domains stay analysis-only by design.
-- External projects are disabled in Trace view until instrumentation exists.
+- For an external project, generate `실행 Trace 설정`, download the official Java Agent, and run the generated command from the target project root.
+- Send an API request with Trace capture enabled; StackFlow injects `traceparent` and waits up to 15 seconds for OTLP spans.
 - The graph highlights success, warning, error, timeout, and idle nodes.
+
+External setup flow:
+
+```text
+1. Analyze an absolute external project path.
+2. In Project, set the Java Agent path and StackFlow collector URL.
+3. Generate the launch command.
+4. Restart the target app with that command.
+5. In Request, enter the target base URL and send an API request.
+6. Inspect the actual span tree in Trace.
+```
+
+## Redis And PostgreSQL Trace Lab
+
+Use [examples/trace-lab/README.md](examples/trace-lab/README.md) to verify an external Spring Boot trace end to end. The lab provides four flows:
+
+- Redis miss, PostgreSQL lookup, then Redis save.
+- Redis hit without a PostgreSQL query.
+- Redis connection failure with PostgreSQL fallback.
+- Deliberate PostgreSQL query failure with HTTP 500.
+
+Its Docker Compose file runs only PostgreSQL and Redis. The Spring Boot app runs with the Java Agent command generated by StackFlow.
 
 ## Sample Runtime Scenarios
 
@@ -168,7 +179,9 @@ Backend APIs:
 ```text
 GET  /api/project/structure
 POST /api/project/structure/analyze
+POST /api/instrumentation/profile
 POST /api/external/request
+POST /v1/traces
 POST /api/traces/session
 GET  /api/traces/{traceId}/stream
 GET  /api/traces
@@ -214,3 +227,4 @@ Commit: feat: ✨ 외부 API request editor 지원
 - [Product direction and implementation plan](docs/product-direction-and-implementation-plan.md)
 - [Development convention](docs/development-convention.md)
 - [StackFlow analysis convention](docs/stackflow-analysis-convention.md)
+- [External Spring Boot runtime tracing design](docs/external-runtime-tracing-design.md)

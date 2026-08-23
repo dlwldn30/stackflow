@@ -62,6 +62,8 @@ class SpringApiCatalogServiceTest {
 		assertFalse(catalog.stream().anyMatch(item -> item.controller().equals("TraceController")));
 		assertFalse(catalog.stream().anyMatch(item -> item.path().startsWith("/api/traces")));
 		assertFalse(catalog.stream().anyMatch(item -> item.controller().equals("ApiExceptionHandler")));
+		assertFalse(catalog.stream().anyMatch(item -> item.controller().equals("InstrumentationController")));
+		assertFalse(catalog.stream().anyMatch(item -> item.controller().equals("OtlpTraceIngestController")));
 	}
 
 	@Test
@@ -69,6 +71,10 @@ class SpringApiCatalogServiceTest {
 		ProjectStructureResponse structure = springApiCatalogService.getProjectStructure();
 		ProjectDomainResponse productDomain = structure.domains().stream()
 			.filter(domain -> domain.id().equals("product"))
+			.findFirst()
+			.orElseThrow();
+		ProjectDomainResponse paymentDomain = structure.domains().stream()
+			.filter(domain -> domain.id().equals("payment"))
 			.findFirst()
 			.orElseThrow();
 
@@ -88,7 +94,20 @@ class SpringApiCatalogServiceTest {
 		assertTrue(productDomain.layers().stream().anyMatch(layer -> layer.name().equals("Service")));
 		assertTrue(productDomain.layers().stream().anyMatch(layer -> layer.name().equals("Repository")));
 		assertTrue(productDomain.layers().stream().allMatch(layer -> !layer.evidence().isBlank()));
-		assertTrue(structure.domains().stream().anyMatch(domain -> domain.id().equals("payment")));
+		assertFalse(productDomain.layers().stream()
+			.flatMap(layer -> layer.classes().stream())
+			.anyMatch(className -> className.startsWith("Payment") || className.startsWith("Trace") || className.startsWith("ApiCatalog")));
+		assertTrue(paymentDomain.layers().stream()
+			.anyMatch(layer -> layer.name().equals("UseCase") && layer.classes().contains("PaymentUseCase")));
+		assertTrue(paymentDomain.layers().stream()
+			.anyMatch(layer -> layer.name().equals("Gateway") && layer.classes().contains("PaymentGateway")));
+		assertTrue(paymentDomain.layers().stream()
+			.anyMatch(layer -> layer.name().equals("Client") && layer.classes().contains("PaymentClient")));
+		assertFalse(paymentDomain.layers().stream()
+			.flatMap(layer -> layer.classes().stream())
+			.anyMatch(className -> className.startsWith("Product")));
+		assertTrue(structure.layers().stream()
+			.anyMatch(layer -> layer.classes().contains("ApiCatalogItemResponse")));
 	}
 
 	@Test
@@ -256,7 +275,45 @@ class SpringApiCatalogServiceTest {
 	}
 
 	@Test
-	void groupsPackageSiblingClassesIntoControllerDomain(@TempDir Path projectRoot) throws IOException {
+	void detectsRedisAndPostgresqlInfrastructureFromProjectEvidence(@TempDir Path projectRoot) throws IOException {
+		Files.writeString(projectRoot.resolve("build.gradle"), """
+			dependencies {
+				implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+				runtimeOnly 'org.postgresql:postgresql'
+			}
+			""");
+		Path sourceRoot = projectRoot.resolve("src/main/java/com/example/product");
+		Files.createDirectories(sourceRoot);
+		Files.writeString(sourceRoot.resolve("ProductController.java"), """
+			package com.example.product;
+			import org.springframework.web.bind.annotation.GetMapping;
+			import org.springframework.web.bind.annotation.RestController;
+			@RestController
+			public class ProductController {
+				@GetMapping("/lab/products")
+				public String listProducts() { return "ok"; }
+			}
+			""");
+		Files.writeString(sourceRoot.resolve("ProductRepository.java"), """
+			package com.example.product;
+			public interface ProductRepository { }
+			""");
+		Files.writeString(sourceRoot.resolve("ProductCacheService.java"), """
+			package com.example.product;
+			public class ProductCacheService { }
+			""");
+
+		ProjectStructureResponse structure = springApiCatalogService.getProjectStructure(projectRoot.toString());
+
+		assertEquals(ProjectAnalysisStatus.SUCCESS, structure.analysisStatus());
+		assertTrue(structure.infrastructure().contains("Redis"));
+		assertTrue(structure.infrastructure().contains("PostgreSQL"));
+		assertTrue(structure.infrastructureDetails().stream()
+			.anyMatch(item -> item.name().equals("PostgreSQL") && item.detectedBy().equals("project-config-and-class-name")));
+	}
+
+	@Test
+	void leavesAmbiguousPackageSiblingClassesAtProjectScope(@TempDir Path projectRoot) throws IOException {
 		Files.writeString(projectRoot.resolve("build.gradle"), "plugins { id 'org.springframework.boot' version '4.1.0' }");
 		Path reportControllerRoot = projectRoot.resolve("src/main/java/com/example/board/controller");
 		Path boardRepositoryRoot = projectRoot.resolve("src/main/java/com/example/board/repository");
@@ -312,13 +369,65 @@ class SpringApiCatalogServiceTest {
 			.orElseThrow();
 
 		assertEquals(ProjectAnalysisStatus.SUCCESS, structure.analysisStatus());
-		assertTrue(reportDomain.layers().stream()
+		assertFalse(reportDomain.layers().stream()
 			.anyMatch(layer -> layer.name().equals("Repository") && layer.classes().contains("PostRepository")));
 		assertFalse(reportDomain.layers().stream()
 			.anyMatch(layer -> layer.name().equals("Controller") && layer.classes().contains("AuditController")));
 		assertFalse(reportDomain.layers().stream()
 			.anyMatch(layer -> layer.name().equals("Repository") && layer.classes().contains("UserRepository")));
-		assertTrue(reportDomain.infrastructure().contains("Persistence"));
+		assertFalse(reportDomain.infrastructure().contains("Persistence"));
+		assertTrue(structure.layers().stream()
+			.anyMatch(layer -> layer.name().equals("Repository") && layer.classes().contains("PostRepository")));
+	}
+
+	@Test
+	void groupsClassesFromExplicitDomainPackageSegment(@TempDir Path projectRoot) throws IOException {
+		Files.writeString(projectRoot.resolve("build.gradle"), "plugins { id 'org.springframework.boot' version '4.1.0' }");
+		Path controllerRoot = projectRoot.resolve("src/main/java/com/example/order/controller");
+		Path applicationRoot = projectRoot.resolve("src/main/java/com/example/order/application");
+		Path sharedRoot = projectRoot.resolve("src/main/java/com/example/shared/client");
+		Files.createDirectories(controllerRoot);
+		Files.createDirectories(applicationRoot);
+		Files.createDirectories(sharedRoot);
+		Files.writeString(controllerRoot.resolve("OrderController.java"), """
+			package com.example.order.controller;
+
+			import org.springframework.web.bind.annotation.GetMapping;
+			import org.springframework.web.bind.annotation.RestController;
+
+			@RestController
+			public class OrderController {
+				@GetMapping("/orders")
+				public String listOrders() {
+					return "ok";
+				}
+			}
+			""");
+		Files.writeString(applicationRoot.resolve("CheckoutService.java"), """
+			package com.example.order.application;
+
+			public class CheckoutService {
+			}
+			""");
+		Files.writeString(sharedRoot.resolve("SharedClient.java"), """
+			package com.example.shared.client;
+
+			public class SharedClient {
+			}
+			""");
+
+		ProjectStructureResponse structure = springApiCatalogService.getProjectStructure(projectRoot.toString());
+		ProjectDomainResponse orderDomain = structure.domains().stream()
+			.filter(domain -> domain.id().equals("order"))
+			.findFirst()
+			.orElseThrow();
+
+		assertTrue(orderDomain.layers().stream()
+			.anyMatch(layer -> layer.name().equals("Service") && layer.classes().contains("CheckoutService")));
+		assertFalse(orderDomain.layers().stream()
+			.anyMatch(layer -> layer.classes().contains("SharedClient")));
+		assertTrue(structure.layers().stream()
+			.anyMatch(layer -> layer.classes().contains("SharedClient")));
 	}
 
 	@Test
@@ -493,6 +602,56 @@ class SpringApiCatalogServiceTest {
 		assertTrue(routes.contains("GET /api/orders/{orderId}"));
 		assertTrue(routes.contains("POST /api/orders/{orderId}"));
 		assertTrue(orderDomain.endpoints().stream().allMatch(ApiCatalogItemResponse::methodSpecified));
+	}
+
+	@Test
+	void detectsEachPathFromMappingPathArray(@TempDir Path projectRoot) throws IOException {
+		Files.writeString(projectRoot.resolve("build.gradle"), "plugins { id 'org.springframework.boot' version '4.1.0' }");
+		Path sourceRoot = projectRoot.resolve("src/main/java/com/example/order");
+		Files.createDirectories(sourceRoot);
+		Files.writeString(sourceRoot.resolve("OrderController.java"), """
+			package com.example.order;
+
+			import org.springframework.web.bind.annotation.GetMapping;
+			import org.springframework.web.bind.annotation.RequestMapping;
+			import org.springframework.web.bind.annotation.RequestMethod;
+			import org.springframework.web.bind.annotation.RestController;
+
+			@RestController
+			@RequestMapping("/api/orders")
+			public class OrderController {
+				@GetMapping({"/list", "/search"})
+				public String listOrders() {
+					return "ok";
+				}
+
+				@RequestMapping(
+					path = {"/bulk", "/batch"},
+					method = {RequestMethod.POST, RequestMethod.PATCH}
+				)
+				public String handleBulkOrders() {
+					return "ok";
+				}
+			}
+			""");
+
+		ProjectStructureResponse structure = springApiCatalogService.getProjectStructure(projectRoot.toString());
+		ProjectDomainResponse orderDomain = structure.domains().stream()
+			.filter(domain -> domain.id().equals("order"))
+			.findFirst()
+			.orElseThrow();
+		Set<String> routes = orderDomain.endpoints().stream()
+			.map(item -> item.method() + " " + item.path())
+			.collect(Collectors.toSet());
+
+		assertEquals(ProjectAnalysisStatus.SUCCESS, structure.analysisStatus());
+		assertEquals(6, orderDomain.endpoints().size());
+		assertTrue(routes.contains("GET /api/orders/list"));
+		assertTrue(routes.contains("GET /api/orders/search"));
+		assertTrue(routes.contains("POST /api/orders/bulk"));
+		assertTrue(routes.contains("POST /api/orders/batch"));
+		assertTrue(routes.contains("PATCH /api/orders/bulk"));
+		assertTrue(routes.contains("PATCH /api/orders/batch"));
 	}
 
 	@Test

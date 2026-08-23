@@ -2,6 +2,7 @@ package com.stackflow.backend.service;
 
 import com.stackflow.backend.dto.ExternalRequestPayload;
 import com.stackflow.backend.dto.ExternalRequestResponse;
+import com.stackflow.backend.domain.TraceCollectionStatus;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.URI;
@@ -16,6 +17,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -30,37 +32,54 @@ public class ExternalRequestService {
 		"content-length",
 		"expect",
 		"host",
+		"traceparent",
+		"tracestate",
 		"upgrade",
 		"transfer-encoding"
 	);
 
 	private final HttpClient httpClient;
 	private final boolean allowPrivateTargets;
+	private final ExternalTraceService externalTraceService;
 
-	public ExternalRequestService() {
+	@Autowired
+	public ExternalRequestService(ExternalTraceService externalTraceService) {
 		this(HttpClient.newBuilder()
 				.connectTimeout(CONNECT_TIMEOUT)
 				.build(),
-			resolveAllowPrivateTargets());
+			resolveAllowPrivateTargets(),
+			externalTraceService);
 	}
 
 	ExternalRequestService(HttpClient httpClient) {
-		this(httpClient, resolveAllowPrivateTargets());
+		this(httpClient, resolveAllowPrivateTargets(), null);
 	}
 
 	ExternalRequestService(HttpClient httpClient, boolean allowPrivateTargets) {
+		this(httpClient, allowPrivateTargets, null);
+	}
+
+	ExternalRequestService(HttpClient httpClient, boolean allowPrivateTargets, ExternalTraceService externalTraceService) {
 		this.httpClient = httpClient;
 		this.allowPrivateTargets = allowPrivateTargets;
+		this.externalTraceService = externalTraceService;
 	}
 
 	public ExternalRequestResponse execute(ExternalRequestPayload payload) {
 		Instant startedAt = Instant.now();
+		ExternalTraceService.TraceCaptureContext traceContext = null;
 		try {
 			String method = normalizeMethod(payload.method());
 			URI targetUri = buildTargetUri(payload.targetBaseUrl(), payload.path(), payload.queryParams());
-			HttpRequest request = buildRequest(targetUri, method, payload.headers(), payload.requestBody());
+			traceContext = payload.captureTrace() && externalTraceService != null
+				? externalTraceService.startCapture(method, targetUri.getPath())
+				: null;
+			HttpRequest request = buildRequest(targetUri, method, payload.headers(), payload.requestBody(), traceContext);
 			HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 			long durationMs = Duration.between(startedAt, Instant.now()).toMillis();
+			if (traceContext != null) {
+				externalTraceService.recordHttpResponse(traceContext.traceId(), response.statusCode(), durationMs);
+			}
 			return new ExternalRequestResponse(
 				method,
 				targetUri.toString(),
@@ -69,7 +88,9 @@ public class ExternalRequestService {
 				response.statusCode() >= 200 && response.statusCode() < 400 ? "SUCCESS" : "ERROR",
 				response.headers().firstValue("content-type").orElse(""),
 				response.body(),
-				null
+				null,
+				traceContext == null ? null : traceContext.traceId(),
+				traceContext == null ? TraceCollectionStatus.DISABLED : TraceCollectionStatus.PENDING
 			);
 		}
 		catch (IllegalArgumentException | IOException | InterruptedException ex) {
@@ -77,6 +98,9 @@ public class ExternalRequestService {
 				Thread.currentThread().interrupt();
 			}
 			long durationMs = Duration.between(startedAt, Instant.now()).toMillis();
+			if (traceContext != null) {
+				externalTraceService.recordHttpResponse(traceContext.traceId(), 0, durationMs);
+			}
 			return new ExternalRequestResponse(
 				safeMethod(payload.method()),
 				safeTargetUrl(payload.targetBaseUrl(), payload.path()),
@@ -85,7 +109,9 @@ public class ExternalRequestService {
 				"ERROR",
 				"",
 				"",
-				ex.getMessage()
+				ex.getMessage(),
+				traceContext == null ? null : traceContext.traceId(),
+				traceContext == null ? TraceCollectionStatus.DISABLED : TraceCollectionStatus.PENDING
 			);
 		}
 	}
@@ -119,7 +145,8 @@ public class ExternalRequestService {
 		URI targetUri,
 		String method,
 		List<com.stackflow.backend.dto.ExternalRequestEntry> headers,
-		String requestBody
+		String requestBody,
+		ExternalTraceService.TraceCaptureContext traceContext
 	) {
 		HttpRequest.BodyPublisher bodyPublisher = shouldUseBody(method, requestBody)
 			? HttpRequest.BodyPublishers.ofString(requestBody)
@@ -131,6 +158,9 @@ public class ExternalRequestService {
 			.method(method, bodyPublisher);
 
 		addHeaders(builder, headers);
+		if (traceContext != null) {
+			builder.header("traceparent", traceContext.traceparent());
+		}
 
 		if (shouldUseBody(method, requestBody)) {
 			builder.header("Content-Type", "application/json");

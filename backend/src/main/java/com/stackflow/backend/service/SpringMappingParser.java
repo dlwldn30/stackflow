@@ -9,7 +9,10 @@ import java.util.regex.Pattern;
 final class SpringMappingParser {
 
 	private static final Pattern NAMED_MAPPING_PATH_PATTERN = Pattern.compile("(?:value|path)\\s*=\\s*\"([^\"]*)\"");
+	private static final Pattern NAMED_MAPPING_PATH_ARRAY_PATTERN = Pattern.compile("(?:value|path)\\s*=\\s*\\{([^}]*)}");
 	private static final Pattern POSITIONAL_MAPPING_PATH_PATTERN = Pattern.compile("^\\s*\"([^\"]*)\"");
+	private static final Pattern POSITIONAL_MAPPING_PATH_ARRAY_PATTERN = Pattern.compile("^\\s*\\{([^}]*)}");
+	private static final Pattern QUOTED_STRING_PATTERN = Pattern.compile("\"([^\"]*)\"");
 	private static final Pattern REQUEST_METHOD_PATTERN = Pattern.compile("RequestMethod\\.(GET|POST|PUT|DELETE|PATCH)");
 
 	boolean startsMappingAnnotation(String line) {
@@ -65,18 +68,42 @@ final class SpringMappingParser {
 	}
 
 	Optional<String> extractPath(String annotationBlock) {
+		return extractPaths(annotationBlock).stream().findFirst();
+	}
+
+	private List<String> extractPaths(String annotationBlock) {
+		Matcher namedPathArrayMatcher = NAMED_MAPPING_PATH_ARRAY_PATTERN.matcher(annotationBlock);
+		if (namedPathArrayMatcher.find()) {
+			return extractQuotedStrings(namedPathArrayMatcher.group(1));
+		}
+
 		Matcher namedPathMatcher = NAMED_MAPPING_PATH_PATTERN.matcher(annotationBlock);
 		if (namedPathMatcher.find()) {
-			return Optional.of(namedPathMatcher.group(1));
+			return List.of(namedPathMatcher.group(1));
 		}
 
 		return extractAnnotationArguments(annotationBlock)
-			.flatMap(arguments -> {
+			.map(arguments -> {
+				Matcher positionalPathArrayMatcher = POSITIONAL_MAPPING_PATH_ARRAY_PATTERN.matcher(arguments);
+				if (positionalPathArrayMatcher.find()) {
+					return extractQuotedStrings(positionalPathArrayMatcher.group(1));
+				}
+
 				Matcher positionalPathMatcher = POSITIONAL_MAPPING_PATH_PATTERN.matcher(arguments);
 				return positionalPathMatcher.find()
-					? Optional.of(positionalPathMatcher.group(1))
-					: Optional.empty();
-			});
+					? List.of(positionalPathMatcher.group(1))
+					: List.<String>of();
+			})
+			.orElse(List.of());
+	}
+
+	private List<String> extractQuotedStrings(String value) {
+		Matcher matcher = QUOTED_STRING_PATTERN.matcher(value);
+		List<String> values = new ArrayList<>();
+		while (matcher.find()) {
+			values.add(matcher.group(1));
+		}
+		return List.copyOf(values);
 	}
 
 	private Optional<String> extractAnnotationArguments(String annotationBlock) {
@@ -93,7 +120,9 @@ final class SpringMappingParser {
 			return List.of();
 		}
 
-		return List.of(new MappingAnnotation(method, true, extractPath(annotationBlock).orElse("")));
+		return extractPathsOrRoot(annotationBlock).stream()
+			.map(path -> new MappingAnnotation(method, true, path))
+			.toList();
 	}
 
 	private List<MappingAnnotation> parseRequestMapping(String annotationBlock) {
@@ -103,15 +132,24 @@ final class SpringMappingParser {
 
 		Matcher methodMatcher = REQUEST_METHOD_PATTERN.matcher(annotationBlock);
 		List<MappingAnnotation> mappings = new ArrayList<>();
-		String path = extractPath(annotationBlock).orElse("");
+		List<String> paths = extractPathsOrRoot(annotationBlock);
 		while (methodMatcher.find()) {
-			mappings.add(new MappingAnnotation(methodMatcher.group(1), true, path));
+			for (String path : paths) {
+				mappings.add(new MappingAnnotation(methodMatcher.group(1), true, path));
+			}
 		}
 
 		if (mappings.isEmpty()) {
-			return List.of(new MappingAnnotation("UNSPECIFIED", false, path));
+			return paths.stream()
+				.map(path -> new MappingAnnotation("UNSPECIFIED", false, path))
+				.toList();
 		}
 		return List.copyOf(mappings);
+	}
+
+	private List<String> extractPathsOrRoot(String annotationBlock) {
+		List<String> paths = extractPaths(annotationBlock);
+		return paths.isEmpty() ? List.of("") : paths;
 	}
 
 	private int countChar(String value, char target) {

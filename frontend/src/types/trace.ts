@@ -2,6 +2,8 @@ export type EventStatus = 'SUCCESS' | 'WARNING' | 'ERROR' | 'TIMEOUT' | 'SKIPPED
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH'
 export type ApiMethod = HttpMethod | 'UNSPECIFIED'
+export type TraceSource = 'SAMPLE' | 'OPENTELEMETRY'
+export type TraceCollectionStatus = 'DISABLED' | 'PENDING' | 'COLLECTING' | 'COMPLETED' | 'TIMED_OUT'
 
 export type ComponentType =
   | 'CLIENT'
@@ -10,7 +12,12 @@ export type ComponentType =
   | 'REDIS'
   | 'REPOSITORY'
   | 'MYSQL'
+  | 'POSTGRESQL'
   | 'RESPONSE'
+  | 'GATEWAY'
+  | 'HTTP_CLIENT'
+  | 'DATABASE'
+  | 'INTERNAL'
 
 export interface TraceEvent {
   eventId: string
@@ -24,6 +31,10 @@ export interface TraceEvent {
   errorType: string | null
   errorMessage: string | null
   metadata: Record<string, string>
+  spanId: string | null
+  parentSpanId: string | null
+  serviceName: string | null
+  spanKind: string | null
 }
 
 export interface TraceDetail {
@@ -37,6 +48,8 @@ export interface TraceDetail {
   httpStatus: number
   resultStatus: EventStatus
   events: TraceEvent[]
+  source: TraceSource
+  serviceName: string | null
 }
 
 export interface TraceSummary {
@@ -69,6 +82,28 @@ export interface ExternalRequestResponse {
   contentType: string
   responseBody: string
   errorMessage: string | null
+  traceId: string | null
+  traceCollectionStatus: TraceCollectionStatus
+}
+
+export interface TraceCollectionStatusEvent {
+  traceId: string
+  status: TraceCollectionStatus
+  message: string
+  timestamp: string
+}
+
+export interface InstrumentationProfile {
+  projectName: string
+  serviceName: string
+  buildTool: string
+  collectorEndpoint: string
+  agentPath: string
+  instrumentedClasses: string[]
+  instrumentedMethodCount: number
+  methodsInclude: string
+  environment: Record<string, string>
+  commands: Record<string, string>
 }
 
 export interface TraceStartedEvent {

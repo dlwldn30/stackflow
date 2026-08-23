@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -232,7 +233,9 @@ public class SpringApiCatalogService {
 	private boolean isInternalController(String controller) {
 		return controller.equals("TraceController")
 			|| controller.equals("ProjectAnalysisController")
-			|| controller.equals("ExternalRequestController");
+			|| controller.equals("ExternalRequestController")
+			|| controller.equals("InstrumentationController")
+			|| controller.equals("OtlpTraceIngestController");
 	}
 
 	private boolean isRestControllerAnnotation(String line) {
@@ -409,6 +412,7 @@ public class SpringApiCatalogService {
 			|| endpoints.stream().anyMatch(item -> item.path().toLowerCase(Locale.ROOT).contains("cache"));
 		boolean hasPersistence = classes.stream().anyMatch(item -> item.name().contains("Repository") || item.name().contains("Store"));
 		boolean hasRedisEvidence = projectMetadataContains(projectRoot, "redis", "spring.data.redis", "lettuce", "jedis");
+		boolean hasPostgresqlEvidence = projectMetadataContains(projectRoot, "postgresql", "jdbc:postgresql", "org.postgresql");
 		boolean hasMysqlEvidence = projectMetadataContains(projectRoot, "mysql", "mariadb", "jdbc:mysql");
 
 		if (hasCache) {
@@ -430,8 +434,8 @@ public class SpringApiCatalogService {
 				.findFirst()
 				.orElse("Repository or store classes were detected.");
 			infrastructure.add(new ProjectEvidenceItemResponse(
-				hasMysqlEvidence ? "MySQL" : "Persistence",
-				hasMysqlEvidence ? "project-config-and-class-name" : "class-name",
+				hasPostgresqlEvidence ? "PostgreSQL" : hasMysqlEvidence ? "MySQL" : "Persistence",
+				hasPostgresqlEvidence || hasMysqlEvidence ? "project-config-and-class-name" : "class-name",
 				evidence
 			));
 		}
@@ -497,12 +501,8 @@ public class SpringApiCatalogService {
 		Set<String> domainControllerNames = controllers.stream()
 			.map(ControllerScan::controller)
 			.collect(Collectors.toSet());
-		List<String> controllerPackageRoots = controllers.stream()
-			.map(controller -> toDomainPackageRoot(controller.packageName()))
-			.distinct()
-			.toList();
 		List<ClassMetadata> domainClasses = classes.stream()
-			.filter(item -> belongsToDomain(domainKey, domainControllerNames, controllerPackageRoots, item))
+			.filter(item -> belongsToDomain(domainKey, domainControllerNames, item))
 			.toList();
 		List<ProjectEvidenceItemResponse> domainInfrastructureDetails = detectInfrastructureDetails(projectRoot, domainClasses, domainEndpoints);
 
@@ -544,27 +544,27 @@ public class SpringApiCatalogService {
 	private boolean belongsToDomain(
 		String domainKey,
 		Set<String> domainControllerNames,
-		List<String> packageRoots,
 		ClassMetadata item
 	) {
-		if (toDomainKey(item.name()).equals(domainKey)) {
-			return true;
+		if (item.layerType().equals("Controller")) {
+			return domainControllerNames.contains(item.name());
 		}
-		if (!belongsToAnyPackageRoot(item.packageName(), packageRoots)) {
+		return classNameMatchesDomain(item.name(), domainKey)
+			|| packageContainsDomainSegment(item.packageName(), domainKey);
+	}
+
+	private boolean classNameMatchesDomain(String className, String domainKey) {
+		if (!className.regionMatches(true, 0, domainKey, 0, domainKey.length())) {
 			return false;
 		}
-		return !item.layerType().equals("Controller") || domainControllerNames.contains(item.name());
+		return className.length() == domainKey.length()
+			|| Character.isUpperCase(className.charAt(domainKey.length()))
+			|| Character.isDigit(className.charAt(domainKey.length()));
 	}
 
-	private String toDomainPackageRoot(String packageName) {
-		if (packageName.endsWith(".controller")) {
-			return packageName.substring(0, packageName.length() - ".controller".length());
-		}
-		return packageName;
-	}
-
-	private boolean belongsToAnyPackageRoot(String packageName, List<String> packageRoots) {
-		return packageRoots.stream().anyMatch(root -> packageName.equals(root) || packageName.startsWith(root + "."));
+	private boolean packageContainsDomainSegment(String packageName, String domainKey) {
+		return Arrays.stream(packageName.split("\\."))
+			.anyMatch(segment -> segment.equalsIgnoreCase(domainKey));
 	}
 
 	private String humanizeDomain(String domainKey) {

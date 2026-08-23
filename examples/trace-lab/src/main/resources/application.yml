@@ -1,0 +1,19 @@
+spring:
+  application:
+    name: trace-lab
+  datasource:
+    url: ${TRACE_LAB_DB_URL:jdbc:postgresql://localhost:15432/trace_lab}
+    username: ${TRACE_LAB_DB_USER:trace_lab}
+    password: ${TRACE_LAB_DB_PASSWORD:}
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    open-in-view: false
+  data:
+    redis:
+      host: ${TRACE_LAB_REDIS_HOST:localhost}
+      port: ${TRACE_LAB_REDIS_PORT:16379}
+      timeout: 1s
+
+server:
+  port: ${PORT:8091}

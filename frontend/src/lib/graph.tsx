@@ -19,7 +19,12 @@ const LABELS: Record<ComponentType, string> = {
   REDIS: 'Redis',
   REPOSITORY: 'Repository',
   MYSQL: 'MySQL',
+  POSTGRESQL: 'PostgreSQL',
   RESPONSE: 'Response',
+  GATEWAY: 'Gateway',
+  HTTP_CLIENT: 'HTTP Client',
+  DATABASE: 'Database',
+  INTERNAL: 'Internal',
 }
 
 const BADGES: Record<ComponentType, string> = {
@@ -29,17 +34,27 @@ const BADGES: Record<ComponentType, string> = {
   REDIS: 'RDS',
   REPOSITORY: 'REP',
   MYSQL: 'SQL',
+  POSTGRESQL: 'PG',
   RESPONSE: 'RES',
+  GATEWAY: 'GTW',
+  HTTP_CLIENT: 'HTTP',
+  DATABASE: 'DB',
+  INTERNAL: 'INT',
 }
 
 const DESCRIPTIONS: Record<ComponentType, string> = {
-  CLIENT: 'Request source',
-  CONTROLLER: 'HTTP entry',
+  CLIENT: '요청 시작',
+  CONTROLLER: 'HTTP 진입점',
   SERVICE: 'Business rule',
-  REDIS: 'Cache branch',
+  REDIS: 'Cache 분기',
   REPOSITORY: 'Data access',
   MYSQL: 'Persistence',
-  RESPONSE: 'Final result',
+  POSTGRESQL: 'PostgreSQL 호출',
+  RESPONSE: '최종 응답',
+  GATEWAY: '외부 연동 경계',
+  HTTP_CLIENT: '외부 HTTP 호출',
+  DATABASE: '데이터베이스 호출',
+  INTERNAL: '계측된 메서드',
 }
 
 const POSITIONS: Record<ComponentType, { x: number; y: number }> = {
@@ -49,7 +64,12 @@ const POSITIONS: Record<ComponentType, { x: number; y: number }> = {
   REDIS: { x: 490, y: 72 },
   REPOSITORY: { x: 490, y: 306 },
   MYSQL: { x: 755, y: 306 },
+  POSTGRESQL: { x: 755, y: 306 },
   RESPONSE: { x: 1000, y: 190 },
+  GATEWAY: { x: 755, y: 72 },
+  HTTP_CLIENT: { x: 1000, y: 72 },
+  DATABASE: { x: 755, y: 306 },
+  INTERNAL: { x: 490, y: 190 },
 }
 
 const BASE_EDGES = [
@@ -72,6 +92,10 @@ export function buildGraph(trace: TraceDetail | null): {
   edges: Edge[]
   states: GraphNodeState[]
 } {
+  if (trace?.source === 'OPENTELEMETRY') {
+    return buildSpanGraph(trace.events)
+  }
+
   const orderedEvents = sortEventsByStartTime(trace?.events ?? [])
   const states = COMPONENT_ORDER.map((component) =>
     createNodeState(component, orderedEvents.filter((event) => event.component === component)),
@@ -95,7 +119,7 @@ export function buildGraph(trace: TraceDetail | null): {
           <span className="flow-node__title">{state.label}</span>
           <span className="flow-node__description">{DESCRIPTIONS[state.component]}</span>
           <span className="flow-node__meta">
-            {state.active ? `${state.durationMs}ms · ${state.visits.length} event${state.visits.length === 1 ? '' : 's'}` : 'not visited'}
+            {state.active ? `${state.durationMs}ms · 이벤트 ${state.visits.length}개` : '호출되지 않음'}
           </span>
         </div>
       ),
@@ -122,11 +146,99 @@ export function buildGraph(trace: TraceDetail | null): {
         type: MarkerType.ArrowClosed,
         width: active ? 18 : 14,
         height: active ? 18 : 14,
-        color: active ? '#37f2d0' : '#59708d',
+        color: active ? '#1f7a55' : '#9aa6b5',
       },
       zIndex: active ? 8 : 1,
       interactionWidth: 24,
     }
+  })
+
+  return { nodes, edges, states }
+}
+
+function buildSpanGraph(events: TraceEvent[]): {
+  nodes: Node[]
+  edges: Edge[]
+  states: GraphNodeState[]
+} {
+  const spanEvents = sortEventsByStartTime(events).filter((event) => event.spanId)
+  const eventsBySpanId = new Map(spanEvents.map((event) => [event.spanId as string, event]))
+  const depthCache = new Map<string, number>()
+
+  const getDepth = (spanId: string, visited = new Set<string>()): number => {
+    const cached = depthCache.get(spanId)
+    if (cached !== undefined) return cached
+    if (visited.has(spanId)) return 0
+
+    const event = eventsBySpanId.get(spanId)
+    const parentId = event?.parentSpanId
+    const depth = parentId && eventsBySpanId.has(parentId)
+      ? getDepth(parentId, new Set(visited).add(spanId)) + 1
+      : 0
+    depthCache.set(spanId, depth)
+    return depth
+  }
+
+  const rowByDepth = new Map<number, number>()
+  const states = spanEvents.map((event) => ({
+    id: event.spanId as string,
+    component: event.component,
+    label: event.eventType,
+    status: event.status,
+    durationMs: event.durationMs,
+    active: true,
+    visits: [event],
+  } satisfies GraphNodeState))
+
+  const nodes: Node[] = states.map((state) => {
+    const event = state.visits[0]
+    const depth = getDepth(state.id)
+    const row = rowByDepth.get(depth) ?? 0
+    rowByDepth.set(depth, row + 1)
+    return {
+      id: state.id,
+      position: { x: depth * 270, y: row * 160 },
+      data: {
+        label: (
+          <div className="flow-node__body">
+            <div className="flow-node__topline">
+              <span className="flow-node__badge">{BADGES[state.component]}</span>
+              <span className="flow-node__status-dot" />
+            </div>
+            <span className="flow-node__kicker">{event.spanKind ?? state.component}</span>
+            <span className="flow-node__title">{state.label}</span>
+            <span className="flow-node__description">{event.serviceName ?? DESCRIPTIONS[state.component]}</span>
+            <span className="flow-node__meta">{state.durationMs}ms</span>
+          </div>
+        ),
+      },
+      className: `flow-node flow-node--${state.status.toLowerCase()} is-active`,
+      draggable: false,
+      selectable: true,
+    }
+  })
+
+  const edges: Edge[] = spanEvents.flatMap((event) => {
+    if (!event.spanId || !event.parentSpanId || !eventsBySpanId.has(event.parentSpanId)) {
+      return []
+    }
+    const failed = event.status === 'ERROR' || event.status === 'TIMEOUT'
+    return [{
+      id: `${event.parentSpanId}-${event.spanId}`,
+      source: event.parentSpanId,
+      target: event.spanId,
+      type: 'smoothstep',
+      animated: false,
+      className: 'flow-edge is-active',
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        width: 18,
+        height: 18,
+        color: failed ? '#b42318' : '#1f7a55',
+      },
+      zIndex: 8,
+      interactionWidth: 24,
+    }]
   })
 
   return { nodes, edges, states }
