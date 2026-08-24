@@ -26,11 +26,18 @@ public class TraceService {
 	}
 
 	public TraceSessionResponse createTraceSession() {
-		return new TraceSessionResponse(UUID.randomUUID().toString());
+		String traceId = UUID.randomUUID().toString();
+		traceStreamService.registerPendingTrace(traceId);
+		return new TraceSessionResponse(traceId);
 	}
 
 	public TraceSession startTrace(String traceId, String method, String endpoint, String scenario) {
+		traceStreamService.activateTrace(traceId);
 		return new TraceSession(traceId, method, endpoint, scenario, traceStreamService::publishTraceEvent);
+	}
+
+	public void registerExternalTrace(String traceId) {
+		traceStreamService.registerActiveTrace(traceId);
 	}
 
 	public Trace completeTrace(TraceSession session, int httpStatus, EventStatus resultStatus) {

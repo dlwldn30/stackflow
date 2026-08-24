@@ -2582,6 +2582,38 @@ summary:focus-visible {
   font-weight: 700;
 }
 
+.instrumentation-connection {
+  display: grid;
+  gap: 4px;
+  border-left: 3px solid #d69a19;
+  background: #fff8e7;
+  padding: 9px 10px;
+  color: #6f4a00;
+  font-size: 0.68rem;
+}
+
+.instrumentation-connection--received {
+  border-left-color: var(--color-spring);
+  background: #eef8f3;
+  color: var(--color-spring);
+}
+
+.instrumentation-connection--error {
+  border-left-color: var(--color-error);
+  background: #fff1f0;
+  color: var(--color-error);
+}
+
+.instrumentation-connection p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.instrumentation-connection button {
+  justify-self: start;
+  margin-top: 4px;
+}
+
 .instrumentation-profile {
   display: grid;
   min-width: 0;

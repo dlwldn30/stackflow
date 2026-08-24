@@ -48,6 +48,7 @@ public class ExternalTraceService {
 			endpoint,
 			Instant.now()
 		);
+		traceService.registerExternalTrace(traceId);
 		accumulators.put(traceId, accumulator);
 		traceService.publishExternalTraceStarted(traceId, method, endpoint);
 		traceService.publishCollectionStatus(traceId, TraceCollectionStatus.PENDING, "OpenTelemetry span을 기다리고 있습니다.");

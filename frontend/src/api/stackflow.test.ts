@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { analyzeProject, getProjectStructure } from './stackflow'
+import { analyzeProject, getInstrumentationProfileStatus, getProjectStructure } from './stackflow'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -43,5 +43,20 @@ describe('stackflow API client', () => {
       detectedEndpoints: 1,
     })
     expect(project.analysisCoverage.warnings[0]).toContain('backend')
+  })
+
+  it('loads an instrumentation profile status by encoded id', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ connectionStatus: 'PROFILE_GENERATED' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await getInstrumentationProfileStatus('profile/id')
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/instrumentation/profiles/profile%2Fid/status',
+      undefined,
+    )
   })
 })

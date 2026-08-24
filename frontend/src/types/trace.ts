@@ -93,6 +93,22 @@ export interface TraceCollectionStatusEvent {
   timestamp: string
 }
 
+export interface TraceStreamTimeoutEvent {
+  traceId: string
+  timestamp: string
+  message: string
+}
+
+export type InstrumentationConnectionStatus = 'PROFILE_GENERATED' | 'SPAN_RECEIVED'
+
+export interface InstrumentationProfileStatus {
+  profileId: string
+  connectionStatus: InstrumentationConnectionStatus
+  serviceName: string
+  createdAt: string
+  lastSeenAt: string | null
+}
+
 export interface InstrumentationProfile {
   projectName: string
   serviceName: string
@@ -104,6 +120,10 @@ export interface InstrumentationProfile {
   methodsInclude: string
   environment: Record<string, string>
   commands: Record<string, string>
+  profileId: string
+  connectionStatus: InstrumentationConnectionStatus
+  createdAt: string
+  lastSeenAt: string | null
 }
 
 export interface TraceStartedEvent {
