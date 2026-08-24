@@ -362,12 +362,14 @@
 
 @media (max-width: 1220px) {
   .workspace--runtime .right-panel {
+    grid-column: 2;
     grid-template-columns: 1fr;
   }
 }
 
 @media (min-width: 1221px) and (max-width: 1320px) {
   .workspace--runtime .right-panel {
+    grid-column: 2;
     grid-template-columns: 1fr;
   }
 
@@ -378,6 +380,7 @@
 
 @media (max-width: 980px) {
   .workspace--runtime .right-panel {
+    grid-column: 1;
     grid-row: 3;
   }
 

@@ -3317,6 +3317,10 @@ summary:focus-visible {
   stroke-width: 2.5;
 }
 
+.flow-edge.is-active.is-failed path {
+  stroke: var(--color-error);
+}
+
 .react-flow__controls {
   overflow: hidden;
   border: 1px solid var(--color-line) !important;
