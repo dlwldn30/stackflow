@@ -56,12 +56,54 @@ describe('Trace workspace presentation', () => {
       id: 'postgres', component: 'POSTGRESQL', label: 'SELECT product', status: 'TIMEOUT',
       durationMs: 25, active: true, visits: [failureEvent],
     }
-    render(<TraceInspector trace={detail} selectedNode={selectedNode} selectedEvent={failureEvent} formattedResponseBody={'{"status":504}'} />)
+    render(
+      <TraceInspector
+        trace={detail}
+        selectedNode={selectedNode}
+        selectedEvent={failureEvent}
+        primaryFailureEvent={failureEvent}
+        primaryFailureLabel="SELECT product"
+        formattedResponseBody={'{"status":504}'}
+        onInspectPrimaryFailure={vi.fn()}
+      />,
+    )
     expect(screen.getByRole('heading', { name: 'SELECT product' })).toBeInTheDocument()
     expect(screen.getByText('SQLTimeoutException')).toBeInTheDocument()
     expect(screen.getByText('postgresql')).toBeInTheDocument()
     expect(screen.getByText('전체 metadata').closest('details')).not.toHaveAttribute('open')
     expect(screen.getByText('응답 JSON').closest('details')).not.toHaveAttribute('open')
+  })
+
+  it('distinguishes a propagated parent error from the actual failure span', () => {
+    const onInspectPrimaryFailure = vi.fn()
+    const controllerEvent = {
+      ...failureEvent,
+      eventId: 'controller',
+      spanId: 'controller',
+      parentSpanId: null,
+      component: 'CONTROLLER' as const,
+      eventType: 'ProductController.getProduct',
+    }
+    const selectedNode: GraphNodeState = {
+      id: 'controller', component: 'CONTROLLER', label: 'ProductController.getProduct', status: 'TIMEOUT',
+      durationMs: 25, active: true, visits: [controllerEvent],
+    }
+
+    render(
+      <TraceInspector
+        trace={detail}
+        selectedNode={selectedNode}
+        selectedEvent={controllerEvent}
+        primaryFailureEvent={failureEvent}
+        primaryFailureLabel="ProductService.lookupProduct"
+        formattedResponseBody={null}
+        onInspectPrimaryFailure={onInspectPrimaryFailure}
+      />,
+    )
+
+    expect(screen.getByText('상위로 전파된 오류')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '실제 시작 지점 ProductService.lookupProduct 확인' }))
+    expect(onInspectPrimaryFailure).toHaveBeenCalledOnce()
   })
 
   it('uses the component id when a sample Waterfall event has no span id', () => {

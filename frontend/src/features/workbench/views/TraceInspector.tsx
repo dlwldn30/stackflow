@@ -7,12 +7,31 @@ interface TraceInspectorProps {
   trace: TraceDetail | null
   selectedNode: GraphNodeState | null
   selectedEvent: TraceEvent | null
+  primaryFailureEvent: TraceEvent | null
+  primaryFailureLabel: string | null
   formattedResponseBody: string | null
+  onInspectPrimaryFailure: () => void
 }
 
-export function TraceInspector({ trace, selectedNode, selectedEvent, formattedResponseBody }: TraceInspectorProps) {
+export function TraceInspector({
+  trace,
+  selectedNode,
+  selectedEvent,
+  primaryFailureEvent,
+  primaryFailureLabel,
+  formattedResponseBody,
+  onInspectPrimaryFailure,
+}: TraceInspectorProps) {
   const keyMetadata = getKeyMetadata(selectedEvent?.metadata ?? {})
   const allMetadata = Object.entries(selectedEvent?.metadata ?? {})
+  const selectedEventId = selectedEvent?.spanId ?? selectedEvent?.component
+  const primaryFailureId = primaryFailureEvent?.spanId ?? primaryFailureEvent?.component
+  const isPropagatedError = Boolean(
+    selectedEvent
+      && primaryFailureEvent
+      && selectedEventId !== primaryFailureId
+      && (selectedEvent.errorType || selectedEvent.errorMessage),
+  )
 
   return (
     <div className="panel-card inspector-workbench trace-inspector">
@@ -41,9 +60,20 @@ export function TraceInspector({ trace, selectedNode, selectedEvent, formattedRe
 
           {(selectedEvent.errorType || selectedEvent.errorMessage) ? (
             <section className="trace-inspector-error">
-              <span>오류 정보</span>
+              <span>{isPropagatedError ? '상위로 전파된 오류' : '원인 오류'}</span>
               <strong>{selectedEvent.errorType ?? EVENT_STATUS_LABEL[selectedEvent.status]}</strong>
               <p>{selectedEvent.errorMessage ?? '상세 오류 메시지가 수집되지 않았습니다.'}</p>
+              {isPropagatedError && primaryFailureEvent ? (
+                <button
+                  type="button"
+                  aria-label={`실제 시작 지점 ${primaryFailureLabel ?? primaryFailureEvent.eventType} 확인`}
+                  onClick={onInspectPrimaryFailure}
+                >
+                  <small>실제 시작 지점</small>
+                  <strong>{primaryFailureLabel ?? primaryFailureEvent.eventType}</strong>
+                  <span>{primaryFailureEvent.errorType ?? EVENT_STATUS_LABEL[primaryFailureEvent.status]}</span>
+                </button>
+              ) : null}
             </section>
           ) : null}
 

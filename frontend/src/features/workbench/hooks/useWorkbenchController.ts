@@ -63,7 +63,8 @@ export function useWorkbenchController() {
   const selectedNode = getNodeDetail(graph.states, selectedNodeId)
     ?? getNodeDetail(graph.states, defaultInspectionNodeId)
   const inspectorEvent = getInspectorEvent(selectedNode)
-  const primaryFailureLabel = graph.states.find((state) => state.id === primaryFailureNodeId)?.label
+  const primaryFailureLabel = primaryFailureEvent?.eventType
+    ?? graph.states.find((state) => state.id === primaryFailureNodeId)?.label
     ?? primaryFailureEvent?.component
     ?? null
   const traceOutcome = traceDetail ? getTraceOutcome(traceDetail, primaryFailureEvent) : null

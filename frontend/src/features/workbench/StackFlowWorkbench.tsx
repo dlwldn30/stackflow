@@ -905,7 +905,10 @@ export function StackFlowWorkbench() {
               trace={traceDetail}
               selectedNode={selectedNode}
               selectedEvent={inspectorEvent}
+              primaryFailureEvent={primaryFailureEvent}
+              primaryFailureLabel={primaryFailureLabel}
               formattedResponseBody={formattedResponseBody}
+              onInspectPrimaryFailure={() => setSelectedNodeId(primaryFailureNodeId)}
             />
           </TraceView>
         </aside>
