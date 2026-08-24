@@ -2,6 +2,7 @@ package com.stackflow.backend.service;
 
 import com.stackflow.backend.dto.InstrumentationProfileRequest;
 import com.stackflow.backend.dto.InstrumentationProfileResponse;
+import com.stackflow.backend.dto.InstrumentationProfileStatusResponse;
 import com.stackflow.backend.dto.ProjectStructureResponse;
 import java.io.IOException;
 import java.net.URI;
@@ -35,9 +36,14 @@ public class SpringInstrumentationProfileService {
 	private static final String DEFAULT_AGENT_PATH = "~/.stackflow/agents/opentelemetry-javaagent.jar";
 
 	private final SpringApiCatalogService catalogService;
+	private final InstrumentationProfileRegistry profileRegistry;
 
-	public SpringInstrumentationProfileService(SpringApiCatalogService catalogService) {
+	public SpringInstrumentationProfileService(
+		SpringApiCatalogService catalogService,
+		InstrumentationProfileRegistry profileRegistry
+	) {
 		this.catalogService = catalogService;
+		this.profileRegistry = profileRegistry;
 	}
 
 	public InstrumentationProfileResponse createProfile(InstrumentationProfileRequest request) {
@@ -61,7 +67,13 @@ public class SpringInstrumentationProfileService {
 			.orElse("");
 		String serviceName = toServiceName(structure.projectName());
 		String buildTool = detectBuildTool(projectRoot);
-		Map<String, String> environment = buildEnvironment(serviceName, collectorBaseUrl, methodsInclude);
+		InstrumentationProfileStatusResponse profileStatus = profileRegistry.register(serviceName);
+		Map<String, String> environment = buildEnvironment(
+			serviceName,
+			collectorBaseUrl,
+			methodsInclude,
+			profileStatus.profileId()
+		);
 		Map<String, String> commands = buildCommands(agentPath, environment);
 
 		return new InstrumentationProfileResponse(
@@ -74,7 +86,11 @@ public class SpringInstrumentationProfileService {
 			instrumentedClasses.stream().mapToInt(item -> item.methods().size()).sum(),
 			methodsInclude,
 			environment,
-			commands
+			commands,
+			profileStatus.profileId(),
+			profileStatus.connectionStatus(),
+			profileStatus.createdAt(),
+			profileStatus.lastSeenAt()
 		);
 	}
 
@@ -127,7 +143,12 @@ public class SpringInstrumentationProfileService {
 		}
 	}
 
-	private Map<String, String> buildEnvironment(String serviceName, String collectorBaseUrl, String methodsInclude) {
+	private Map<String, String> buildEnvironment(
+		String serviceName,
+		String collectorBaseUrl,
+		String methodsInclude,
+		String profileId
+	) {
 		Map<String, String> environment = new LinkedHashMap<>();
 		environment.put("OTEL_SERVICE_NAME", serviceName);
 		environment.put("OTEL_TRACES_EXPORTER", "otlp");
@@ -136,6 +157,7 @@ public class SpringInstrumentationProfileService {
 		environment.put("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf");
 		environment.put("OTEL_EXPORTER_OTLP_ENDPOINT", collectorBaseUrl);
 		environment.put("OTEL_BSP_SCHEDULE_DELAY", "500");
+		environment.put("OTEL_RESOURCE_ATTRIBUTES", "stackflow.profile.id=" + profileId);
 		if (!methodsInclude.isBlank()) {
 			environment.put("OTEL_INSTRUMENTATION_METHODS_INCLUDE", methodsInclude);
 		}

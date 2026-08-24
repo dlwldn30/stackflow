@@ -29,12 +29,14 @@ import {
   getTrace,
   selectProjectFolder,
 } from './api/stackflow'
+import { connectTraceStream } from './api/traceStream'
 import { EvidenceProgress } from './components/EvidenceProgress'
 import { StatusBadge } from './components/StatusBadge'
 import { TraceWaterfall } from './components/TraceWaterfall'
 import { WorkflowTabs } from './components/WorkflowTabs'
 import { buildGraph, getNodeDetail } from './lib/graph'
 import { buildWaterfall, getPrimaryFailureEvent } from './lib/waterfall'
+import { useInstrumentationStatus } from './hooks/useInstrumentationStatus'
 import {
   EVENT_STATUS_LABEL,
   PROJECT_STATUS_LABEL,
@@ -58,11 +60,8 @@ import type {
   ProjectStructure,
   TraceDetail,
   TraceCollectionStatus,
-  TraceCollectionStatusEvent,
   TraceEvent,
-  TraceStartedEvent,
   TraceSummary,
-  TraceTerminalEvent,
 } from './types/trace'
 
 const SCENARIOS = [
@@ -450,6 +449,7 @@ function App() {
   const [profileState, setProfileState] = useState<'idle' | 'loading' | 'error'>('idle')
   const [profileMessage, setProfileMessage] = useState('Agent 경로와 수집 주소를 확인한 뒤 실행 명령을 생성하세요.')
   const [traceCollectionStatus, setTraceCollectionStatus] = useState<TraceCollectionStatus>('DISABLED')
+  const instrumentationStatus = useInstrumentationStatus(instrumentationProfile)
   const activeStreamRef = useRef<EventSource | null>(null)
   const activeRunIdRef = useRef(0)
   const flowInstanceRef = useRef<ReactFlowInstance | null>(null)
@@ -499,7 +499,9 @@ function App() {
   const hasIntegrationBoundary = selectedDomainDisplayMode?.tone === 'integration'
   const demoTraceReady = import.meta.env.VITE_DEMO_TRACE_READY === 'true'
     && projectPath.trim() === import.meta.env.VITE_DEFAULT_PROJECT_PATH
-  const externalTraceReady = analysisTarget === 'external' && (demoTraceReady || Boolean(instrumentationProfile))
+  const externalTraceConfigured = analysisTarget === 'external' && (demoTraceReady || Boolean(instrumentationProfile))
+  const externalTraceVerified = analysisTarget === 'external'
+    && (demoTraceReady || instrumentationStatus.status?.connectionStatus === 'SPAN_RECEIVED')
   const instrumentationCommand = instrumentationProfile
     ? instrumentationProfile.commands[instrumentationProfile.buildTool.toLowerCase()]
       ?? instrumentationProfile.commands.jar
@@ -507,9 +509,15 @@ function App() {
   const runtimeModeLabel = runtimeSupported
     ? '요청·Trace 가능'
     : externalRunnable
-      ? externalTraceReady ? '요청 후 Trace 확인' : '외부 API 요청'
+      ? externalTraceVerified
+        ? '요청 후 Trace 확인'
+        : externalTraceConfigured
+          ? 'Trace 설정됨 · 확인 전'
+          : '외부 API 요청'
       : '정적 분석만 가능'
-  const traceDisplayStatus = traceDetail?.source === 'OPENTELEMETRY' && streamStatus !== 'idle'
+  const traceDisplayStatus = streamStatus === 'connection_timeout'
+    ? STREAM_STATUS_LABEL[streamStatus]
+    : traceDetail?.source === 'OPENTELEMETRY' && streamStatus !== 'idle'
     ? TRACE_COLLECTION_STATUS_LABEL[traceCollectionStatus]
     : traceDetail
       ? EVENT_STATUS_LABEL[traceDetail.resultStatus]
@@ -522,9 +530,11 @@ function App() {
         : 'error'
     : streamStatus === 'completed'
       ? 'success'
-      : streamStatus === 'error'
-        ? 'error'
-        : streamStatus === 'idle'
+    : streamStatus === 'error'
+      ? 'error'
+      : streamStatus === 'connection_timeout'
+        ? 'warning'
+      : streamStatus === 'idle'
           ? 'neutral'
           : 'info'
   const currentResultStatus = externalResponse?.resultStatus ?? traceDetail?.resultStatus ?? 'IDLE'
@@ -917,7 +927,7 @@ function App() {
       return
     }
 
-    const captureTrace = externalTraceReady
+    const captureTrace = externalTraceConfigured
     const runId = activeRunIdRef.current + 1
     activeRunIdRef.current = runId
     closeActiveStream()
@@ -1005,54 +1015,11 @@ function App() {
   }
 
   async function openTraceStream(traceId: string, runId: number) {
-    let terminalReceived = false
-
-    return await new Promise<EventSource>((resolve, reject) => {
-      const stream = new EventSource(`/api/traces/${traceId}/stream`)
-      let opened = false
-      let resolved = false
-      const fallbackTimer = window.setTimeout(() => {
-        if (!resolved && stream.readyState !== EventSource.CLOSED) {
-          resolved = true
-          opened = true
-          resolve(stream)
-        }
-      }, 1500)
-
-      const finalizeResolve = () => {
-        if (resolved) {
-          return
-        }
-
-        resolved = true
-        opened = true
-        window.clearTimeout(fallbackTimer)
-        resolve(stream)
-      }
-
-      const finalizeReject = (error: Error) => {
-        if (resolved) {
-          return
-        }
-
-        resolved = true
-        window.clearTimeout(fallbackTimer)
-        reject(error)
-      }
-
-      const onOpen = () => {
-        finalizeResolve()
-      }
-
-      const onReady = () => {
-        finalizeResolve()
-      }
-
-      const onStarted = (rawEvent: MessageEvent<string>) => {
+    return connectTraceStream(traceId, {
+      onStarted: (payload) => {
         if (activeRunIdRef.current !== runId) {
           return
         }
-        const payload = JSON.parse(rawEvent.data) as TraceStartedEvent
         startTransition(() => {
           setStreamStatus('streaming')
           setTraceDetail((current) => {
@@ -1070,13 +1037,11 @@ function App() {
           })
           setRequestMessage('실행 이벤트를 수집하고 있습니다...')
         })
-      }
-
-      const onTraceEvent = (rawEvent: MessageEvent<string>) => {
+      },
+      onTraceEvent: (payload) => {
         if (activeRunIdRef.current !== runId) {
           return
         }
-        const payload = JSON.parse(rawEvent.data) as TraceEvent
         startTransition(() => {
           setTraceDetail((current) => {
             if (!current || current.traceId !== payload.traceId) {
@@ -1093,13 +1058,11 @@ function App() {
           })
           setSelectedNodeId(payload.spanId ?? payload.component)
         })
-      }
-
-      const onCollectionStatus = (rawEvent: MessageEvent<string>) => {
+      },
+      onCollectionStatus: (payload) => {
         if (activeRunIdRef.current !== runId) {
           return
         }
-        const payload = JSON.parse(rawEvent.data) as TraceCollectionStatusEvent
         setTraceCollectionStatus(payload.status)
         if (payload.status === 'PENDING') {
           setStreamStatus('connecting')
@@ -1108,18 +1071,14 @@ function App() {
         } else if (payload.status === 'COMPLETED') {
           setStreamStatus('completed')
         } else if (payload.status === 'TIMED_OUT') {
-          terminalReceived = true
           setStreamStatus('error')
         }
         setRequestMessage(payload.message)
-      }
-
-      const onTerminal = (rawEvent: MessageEvent<string>, nextStatus: 'completed' | 'error') => {
-        terminalReceived = true
+      },
+      onTerminal: (payload, nextStatus) => {
         if (activeRunIdRef.current !== runId) {
           return
         }
-        const payload = JSON.parse(rawEvent.data) as TraceTerminalEvent
         startTransition(() => {
           setStreamStatus(nextStatus)
           setTraceDetail((current) => {
@@ -1154,36 +1113,25 @@ function App() {
           )
           void loadRecentTraces()
         }).catch(() => undefined)
-      }
-
-      const onError = () => {
-        stream.close()
-        if (terminalReceived) {
-          return
-        }
-
+      },
+      onConnectionTimeout: (payload) => {
         if (activeRunIdRef.current !== runId) {
           return
         }
-
-        if (!opened) {
-          finalizeReject(new Error('실시간 연결을 열지 못했습니다.'))
+        startTransition(() => {
+          setStreamStatus('connection_timeout')
+          setRequestMessage(`${payload.message} Trace 수집 시간 초과와는 별개입니다.`)
+        })
+      },
+      onDisconnected: () => {
+        if (activeRunIdRef.current !== runId) {
           return
         }
-
         startTransition(() => {
           setStreamStatus('error')
+          setRequestMessage('실시간 연결이 종료되었습니다. 요청 결과는 최근 Trace에서 다시 확인하세요.')
         })
-      }
-
-      stream.addEventListener('open', onOpen as EventListener)
-      stream.addEventListener('stream_ready', onReady as EventListener)
-      stream.addEventListener('trace_started', onStarted as EventListener)
-      stream.addEventListener('trace_event', onTraceEvent as EventListener)
-      stream.addEventListener('trace_collection_status', onCollectionStatus as EventListener)
-      stream.addEventListener('trace_completed', ((event: Event) => onTerminal(event as MessageEvent<string>, 'completed')) as EventListener)
-      stream.addEventListener('trace_failed', ((event: Event) => onTerminal(event as MessageEvent<string>, 'error')) as EventListener)
-      stream.addEventListener('error', onError as EventListener)
+      },
     })
   }
 
@@ -1456,12 +1404,20 @@ function App() {
               <div className="setup-step__head">
                 <Send size={18} aria-hidden="true" />
                 <div>
-                  <strong>{runtimeSupported || externalTraceReady ? 'API 요청과 Trace 실행' : '외부 API 요청'}</strong>
+                  <strong>
+                    {runtimeSupported || externalTraceVerified
+                      ? 'API 요청과 Trace 실행'
+                      : externalTraceConfigured
+                        ? 'API 요청으로 Agent 확인'
+                        : '외부 API 요청'}
+                  </strong>
                   <small>
                     {runtimeSupported
                       ? '실시간 연결을 연 뒤 선택한 API를 실행합니다.'
-                      : externalTraceReady
+                      : externalTraceVerified
                         ? '요청에 traceparent를 넣고 Java Agent가 보낸 실제 span을 수집합니다.'
+                        : externalTraceConfigured
+                          ? '요청에 traceparent를 넣고 최초 span이 도착하는지 확인합니다.'
                         : 'StackFlow backend proxy를 통해 선택한 endpoint를 호출합니다.'}
                   </small>
                 </div>
@@ -1644,7 +1600,11 @@ function App() {
                     : runtimeSupported
                       ? '요청 보내고 Trace 보기'
                     : externalRunnable
-                        ? externalTraceReady ? '요청 보내고 Trace 보기' : '외부 API 요청'
+                        ? externalTraceVerified
+                          ? '요청 보내고 Trace 보기'
+                          : externalTraceConfigured
+                            ? '요청 보내고 Agent 확인'
+                            : '외부 API 요청'
                         : '정적 분석만 가능'}
                 </button>
                 <p className="request-message">{requestMessage}</p>
@@ -1922,8 +1882,10 @@ function App() {
                     ? '이 API는 요청 후 실제 Trace를 확인할 수 있습니다.'
                     : !selectedApi.methodSpecified
                       ? 'Handler mapping에 HTTP method가 없어 정적 분석만 제공합니다.'
-                      : externalRunnable && externalTraceReady
+                      : externalRunnable && externalTraceVerified
                         ? '외부 요청에 Trace Context를 연결해 실제 span을 수집합니다.'
+                        : externalRunnable && externalTraceConfigured
+                          ? '외부 요청을 보내 Agent의 최초 span 수신을 확인합니다.'
                         : externalRunnable
                           ? '실행 명령을 생성하고 Agent로 대상 앱을 재시작하세요.'
                       : hasIntegrationBoundary
@@ -1935,8 +1897,10 @@ function App() {
                     ? '왼쪽 요청 설정에서 API를 실행하면 Trace 탭으로 이동합니다.'
                     : !selectedApi.methodSpecified
                       ? 'StackFlow는 HTTP method를 임의로 추측하지 않습니다. 소스에서 method를 확인하세요.'
-                      : externalRunnable && externalTraceReady
+                      : externalRunnable && externalTraceVerified
                         ? '요청 시 traceparent를 강제로 주입하고 같은 trace ID의 OTLP span을 기다립니다.'
+                        : externalRunnable && externalTraceConfigured
+                          ? '실행 명령으로 앱을 재시작했다면 이 요청이 Agent 확인 요청이 됩니다.'
                         : externalRunnable
                           ? '프로젝트 구조 탭의 실행 Trace 설정에서 재실행 명령을 만들 수 있습니다.'
                       : hasIntegrationBoundary
@@ -1960,7 +1924,7 @@ function App() {
                       ? `${traceDetail.method} ${traceDetail.endpoint} · HTTP ${traceDetail.httpStatus || '-'}`
                       : runtimeSupported
                         ? `${selectedApiMethodLabel} ${selectedApi.pathTemplate} 요청을 실행하면 실제 흐름이 표시됩니다.`
-                        : externalTraceReady
+                        : externalTraceConfigured
                           ? `${selectedApiMethodLabel} ${selectedApi.pathTemplate} 요청 후 실제 OpenTelemetry span을 표시합니다.`
                         : !selectedApi.methodSpecified
                           ? 'HTTP method가 명시되지 않아 정적 분석만 가능합니다.'
@@ -2186,14 +2150,22 @@ function App() {
                       <strong>실행 Trace 설정</strong>
                       <small>Java Agent 재실행 명령</small>
                     </span>
-                    <StatusBadge tone={demoTraceReady || instrumentationProfile ? 'success' : profileState === 'error' ? 'error' : 'neutral'}>
-                      {demoTraceReady ? 'Agent 연결됨' : instrumentationProfile ? '명령 생성 완료' : 'Agent 설정 필요'}
+                    <StatusBadge tone={demoTraceReady || externalTraceVerified ? 'success' : profileState === 'error' || instrumentationStatus.state === 'error' ? 'error' : instrumentationProfile ? 'warning' : 'neutral'}>
+                      {demoTraceReady
+                        ? '데모 Trace 설정됨'
+                        : instrumentationStatus.state === 'error'
+                          ? '상태 확인 실패'
+                          : externalTraceVerified
+                            ? 'Span 수신 확인'
+                            : instrumentationProfile
+                              ? 'Agent 확인 전'
+                              : '실행 Trace 설정 필요'}
                     </StatusBadge>
                   </summary>
                   <div className="instrumentation-setup">
                     {demoTraceReady ? (
                       <p className="instrumentation-setup__intro">
-                        Docker 데모가 Java Agent와 OTLP 수집 주소를 연결했습니다. API 요청을 보내면 실제 span을 바로 수집합니다.
+                        Docker 데모에 Java Agent와 OTLP 수집 주소가 설정되어 있습니다. API 요청으로 실제 span 수신을 확인합니다.
                       </p>
                     ) : (
                       <>
@@ -2218,6 +2190,23 @@ function App() {
                           </a>
                         </div>
                         <p className={profileState === 'error' ? 'external-error' : 'empty-copy'}>{profileMessage}</p>
+                        {instrumentationProfile ? (
+                          <div className={`instrumentation-connection instrumentation-connection--${instrumentationStatus.state}`}>
+                            <strong>
+                              {instrumentationStatus.state === 'received' ? 'Agent span 수신 확인' : instrumentationStatus.state === 'error' ? '상태를 확인하지 못했습니다' : 'Agent 확인 전'}
+                            </strong>
+                            <p>
+                              {instrumentationStatus.state === 'received'
+                                ? `${instrumentationStatus.status?.serviceName ?? instrumentationProfile.serviceName} · 마지막 수신 ${formatProfileLastSeen(instrumentationStatus.status?.lastSeenAt)}`
+                                : instrumentationStatus.state === 'error'
+                                  ? '상태 조회가 중단됐습니다. backend와 profile 만료 여부를 확인하세요.'
+                                  : '명령을 실행해 앱을 재시작한 뒤 API 요청 화면에서 요청을 보내세요.'}
+                            </p>
+                            {instrumentationStatus.state === 'error' ? (
+                              <button type="button" onClick={instrumentationStatus.retry}>다시 확인</button>
+                            ) : null}
+                          </div>
+                        ) : null}
                       </>
                     )}
                     {instrumentationProfile && instrumentationCommand ? (
@@ -2327,8 +2316,8 @@ function App() {
                 </article>
                 <article>
                   <span>실행 가능 범위</span>
-                  <strong>{runtimeSupported || externalTraceReady ? '실제 Trace 가능' : !selectedApi.methodSpecified ? '정적 분석만 가능' : externalRunnable ? 'Agent 설정 필요' : hasIntegrationBoundary ? '외부 연동 구조만 표시' : '정적 분석만 가능'}</strong>
-                  <p>{runtimeSupported ? '요청을 실행하면 Trace 탭에서 실제 흐름을 확인할 수 있습니다.' : externalTraceReady ? 'traceparent와 OTLP로 외부 앱의 실제 span을 연결합니다.' : !selectedApi.methodSpecified ? 'Controller method에 HTTP verb가 명시되지 않았습니다.' : externalRunnable ? '프로젝트 구조에서 실행 명령을 생성하고 대상 앱을 재시작하세요.' : hasIntegrationBoundary ? '이 샘플 API는 연동 계층을 정적으로 설명합니다.' : '이 API는 현재 정적 분석만 제공합니다.'}</p>
+                  <strong>{runtimeSupported || externalTraceVerified ? '실제 Trace 가능' : externalTraceConfigured ? 'Agent 확인 전' : !selectedApi.methodSpecified ? '정적 분석만 가능' : externalRunnable ? 'Agent 설정 필요' : hasIntegrationBoundary ? '외부 연동 구조만 표시' : '정적 분석만 가능'}</strong>
+                  <p>{runtimeSupported ? '요청을 실행하면 Trace 탭에서 실제 흐름을 확인할 수 있습니다.' : externalTraceVerified ? 'Agent span 수신 이력이 있으며 traceparent로 실제 흐름을 연결합니다.' : externalTraceConfigured ? '앱을 Agent로 재시작한 뒤 이 API를 요청하면 최초 span 수신을 확인합니다.' : !selectedApi.methodSpecified ? 'Controller method에 HTTP verb가 명시되지 않았습니다.' : externalRunnable ? '프로젝트 구조에서 실행 명령을 생성하고 대상 앱을 재시작하세요.' : hasIntegrationBoundary ? '이 샘플 API는 연동 계층을 정적으로 설명합니다.' : '이 API는 현재 정적 분석만 제공합니다.'}</p>
                 </article>
               </div>
               {externalRunnable ? (
@@ -3053,6 +3042,14 @@ function buildExternalRequestMessage(response: ExternalRequestResponse) {
   }
 
   return `${response.method} ${response.targetUrl} · HTTP ${response.httpStatus} · ${response.durationMs}ms`
+}
+
+function formatProfileLastSeen(lastSeenAt: string | null | undefined) {
+  if (!lastSeenAt) return '확인되지 않음'
+  return new Intl.DateTimeFormat('ko-KR', {
+    dateStyle: 'short',
+    timeStyle: 'medium',
+  }).format(new Date(lastSeenAt))
 }
 
 function createRequestEntry(key: string, value: string, enabled: boolean): ExternalRequestEntry {

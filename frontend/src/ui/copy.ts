@@ -1,7 +1,7 @@
 import type { EventStatus, ProjectAnalysisStatus, TraceCollectionStatus } from '../types/trace'
 
 export type ViewMode = 'project' | 'api' | 'runtime'
-export type StreamStatus = 'idle' | 'connecting' | 'streaming' | 'completed' | 'error'
+export type StreamStatus = 'idle' | 'connecting' | 'streaming' | 'completed' | 'connection_timeout' | 'error'
 
 export const VIEW_COPY: Record<ViewMode, { label: string; description: string }> = {
   project: {
@@ -38,6 +38,7 @@ export const STREAM_STATUS_LABEL: Record<StreamStatus, string> = {
   connecting: '연결 중',
   streaming: '수집 중',
   completed: '완료',
+  connection_timeout: '연결 시간 초과',
   error: '실패',
 }
 

@@ -2,6 +2,7 @@ import type {
   ExternalRequestResponse,
   AnalysisCoverage,
   InstrumentationProfile,
+  InstrumentationProfileStatus,
   ProjectStructure,
   TraceDetail,
   TraceSessionResponse,
@@ -48,6 +49,13 @@ export const createInstrumentationProfile = (payload: {
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(payload),
 }, '실행 Trace 설정을 생성하지 못했습니다.')
+
+export const getInstrumentationProfileStatus = (profileId: string) =>
+  requestJson<InstrumentationProfileStatus>(
+    `/api/instrumentation/profiles/${encodeURIComponent(profileId)}/status`,
+    undefined,
+    'Agent 상태를 확인하지 못했습니다.',
+  )
 
 export const getRecentTraces = () =>
   requestJson<TraceSummary[]>('/api/traces', undefined, '최근 Trace를 불러오지 못했습니다.')

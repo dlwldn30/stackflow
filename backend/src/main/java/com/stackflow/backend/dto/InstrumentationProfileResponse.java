@@ -1,5 +1,7 @@
 package com.stackflow.backend.dto;
 
+import com.stackflow.backend.domain.InstrumentationConnectionStatus;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -13,6 +15,10 @@ public record InstrumentationProfileResponse(
 	int instrumentedMethodCount,
 	String methodsInclude,
 	Map<String, String> environment,
-	Map<String, String> commands
+	Map<String, String> commands,
+	String profileId,
+	InstrumentationConnectionStatus connectionStatus,
+	Instant createdAt,
+	Instant lastSeenAt
 ) {
 }

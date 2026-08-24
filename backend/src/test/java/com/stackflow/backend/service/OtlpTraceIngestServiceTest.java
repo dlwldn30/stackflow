@@ -9,6 +9,7 @@ import com.stackflow.backend.domain.ComponentType;
 import com.stackflow.backend.domain.EventStatus;
 import com.stackflow.backend.domain.Trace;
 import com.stackflow.backend.domain.TraceSource;
+import com.stackflow.backend.domain.InstrumentationConnectionStatus;
 import io.opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest;
 import io.opentelemetry.proto.common.v1.AnyValue;
 import io.opentelemetry.proto.common.v1.KeyValue;
@@ -27,7 +28,7 @@ class OtlpTraceIngestServiceTest {
 	void convertsOtlpSpansIntoParentChildRuntimeTrace() throws Exception {
 		TraceService traceService = new TraceService(new TraceStreamService());
 		ExternalTraceService externalTraceService = new ExternalTraceService(traceService);
-		OtlpTraceIngestService ingestService = new OtlpTraceIngestService(externalTraceService);
+		OtlpTraceIngestService ingestService = new OtlpTraceIngestService(externalTraceService, new InstrumentationProfileRegistry());
 		ExternalTraceService.TraceCaptureContext capture = externalTraceService.startCapture("GET", "/orders");
 		String traceId = capture.traceId();
 		String serverSpanId = "0123456789abcdef";
@@ -88,7 +89,7 @@ class OtlpTraceIngestServiceTest {
 	void ignoresSpansForTraceIdsThatStackFlowDidNotStart() {
 		TraceService traceService = new TraceService(new TraceStreamService());
 		ExternalTraceService externalTraceService = new ExternalTraceService(traceService);
-		OtlpTraceIngestService ingestService = new OtlpTraceIngestService(externalTraceService);
+		OtlpTraceIngestService ingestService = new OtlpTraceIngestService(externalTraceService, new InstrumentationProfileRegistry());
 		String unknownTraceId = "0123456789abcdef0123456789abcdef";
 		long startNanos = Instant.now().toEpochMilli() * 1_000_000L;
 		try {
@@ -111,7 +112,7 @@ class OtlpTraceIngestServiceTest {
 	void readsLegacySemanticKeysAndErrorTypeWithoutLeakingSensitiveMetadata() throws Exception {
 		TraceService traceService = new TraceService(new TraceStreamService());
 		ExternalTraceService externalTraceService = new ExternalTraceService(traceService);
-		OtlpTraceIngestService ingestService = new OtlpTraceIngestService(externalTraceService);
+		OtlpTraceIngestService ingestService = new OtlpTraceIngestService(externalTraceService, new InstrumentationProfileRegistry());
 		ExternalTraceService.TraceCaptureContext capture = externalTraceService.startCapture("GET", "/legacy");
 		long startNanos = Instant.now().toEpochMilli() * 1_000_000L;
 		try {
@@ -154,7 +155,7 @@ class OtlpTraceIngestServiceTest {
 	void classifiesPostgresqlAndRedisDatabaseSpans() throws Exception {
 		TraceService traceService = new TraceService(new TraceStreamService());
 		ExternalTraceService externalTraceService = new ExternalTraceService(traceService);
-		OtlpTraceIngestService ingestService = new OtlpTraceIngestService(externalTraceService);
+		OtlpTraceIngestService ingestService = new OtlpTraceIngestService(externalTraceService, new InstrumentationProfileRegistry());
 		ExternalTraceService.TraceCaptureContext capture = externalTraceService.startCapture("GET", "/lab/products/1001");
 		String traceId = capture.traceId();
 		String serverSpanId = "1123456789abcdef";
@@ -199,6 +200,88 @@ class OtlpTraceIngestServiceTest {
 				event.component() == ComponentType.POSTGRESQL
 					&& "SELECT".equals(event.metadata().get("db.operation.name"))
 					&& !event.metadata().containsKey("db.statement")));
+		} finally {
+			externalTraceService.shutdown();
+		}
+	}
+
+	@Test
+	void marksKnownProfileAsSeenWithoutStoringUntrackedTrace() {
+		TraceService traceService = new TraceService(new TraceStreamService());
+		ExternalTraceService externalTraceService = new ExternalTraceService(traceService);
+		InstrumentationProfileRegistry profileRegistry = new InstrumentationProfileRegistry();
+		String profileId = profileRegistry.register("order-app").profileId();
+		OtlpTraceIngestService ingestService = new OtlpTraceIngestService(externalTraceService, profileRegistry);
+		String unknownTraceId = "1123456789abcdef0123456789abcdef";
+		long startNanos = Instant.now().toEpochMilli() * 1_000_000L;
+		try {
+			ExportTraceServiceRequest request = ExportTraceServiceRequest.newBuilder()
+				.addResourceSpans(ResourceSpans.newBuilder()
+					.setResource(Resource.newBuilder()
+						.addAttributes(attribute("service.name", "order-app-live"))
+						.addAttributes(attribute("stackflow.profile.id", profileId)))
+					.addScopeSpans(ScopeSpans.newBuilder().addSpans(span(
+						unknownTraceId, "1123456789abcdef", null, "GET /health",
+						Span.SpanKind.SPAN_KIND_SERVER, startNanos, 3
+					))))
+				.build();
+
+			assertEquals(0, ingestService.ingest(request));
+			var status = profileRegistry.getStatus(profileId).orElseThrow();
+			assertEquals(InstrumentationConnectionStatus.SPAN_RECEIVED, status.connectionStatus());
+			assertEquals("order-app-live", status.serviceName());
+			assertTrue(status.lastSeenAt() != null);
+			assertTrue(traceService.getRecentTraces().isEmpty());
+		} finally {
+			externalTraceService.shutdown();
+		}
+	}
+
+	@Test
+	void ignoresUnknownProfileId() {
+		TraceService traceService = new TraceService(new TraceStreamService());
+		ExternalTraceService externalTraceService = new ExternalTraceService(traceService);
+		InstrumentationProfileRegistry profileRegistry = new InstrumentationProfileRegistry();
+		OtlpTraceIngestService ingestService = new OtlpTraceIngestService(externalTraceService, profileRegistry);
+		long startNanos = Instant.now().toEpochMilli() * 1_000_000L;
+		try {
+			ExportTraceServiceRequest request = ExportTraceServiceRequest.newBuilder()
+				.addResourceSpans(ResourceSpans.newBuilder()
+					.setResource(Resource.newBuilder()
+						.addAttributes(attribute("stackflow.profile.id", "unknown-profile")))
+					.addScopeSpans(ScopeSpans.newBuilder().addSpans(span(
+						"2123456789abcdef0123456789abcdef", "2123456789abcdef", null, "GET /unknown",
+						Span.SpanKind.SPAN_KIND_SERVER, startNanos, 3
+					))))
+				.build();
+
+			assertEquals(0, ingestService.ingest(request));
+			assertTrue(profileRegistry.getStatus("unknown-profile").isEmpty());
+			assertTrue(traceService.getRecentTraces().isEmpty());
+		} finally {
+			externalTraceService.shutdown();
+		}
+	}
+
+	@Test
+	void doesNotConfirmAProfileFromAnEmptyResourceBatch() {
+		TraceService traceService = new TraceService(new TraceStreamService());
+		ExternalTraceService externalTraceService = new ExternalTraceService(traceService);
+		InstrumentationProfileRegistry profileRegistry = new InstrumentationProfileRegistry();
+		String profileId = profileRegistry.register("order-app").profileId();
+		OtlpTraceIngestService ingestService = new OtlpTraceIngestService(externalTraceService, profileRegistry);
+		try {
+			ExportTraceServiceRequest request = ExportTraceServiceRequest.newBuilder()
+				.addResourceSpans(ResourceSpans.newBuilder()
+					.setResource(Resource.newBuilder()
+						.addAttributes(attribute("stackflow.profile.id", profileId))))
+				.build();
+
+			assertEquals(0, ingestService.ingest(request));
+			assertEquals(
+				InstrumentationConnectionStatus.PROFILE_GENERATED,
+				profileRegistry.getStatus(profileId).orElseThrow().connectionStatus()
+			);
 		} finally {
 			externalTraceService.shutdown();
 		}
