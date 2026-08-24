@@ -14,8 +14,9 @@ import org.junit.jupiter.api.io.TempDir;
 
 class SpringInstrumentationProfileServiceTest {
 
+	private final InstrumentationProfileRegistry profileRegistry = new InstrumentationProfileRegistry();
 	private final SpringInstrumentationProfileService profileService =
-		new SpringInstrumentationProfileService(new SpringApiCatalogService());
+		new SpringInstrumentationProfileService(new SpringApiCatalogService(), profileRegistry);
 
 	@Test
 	void createsAgentProfileFromAnalyzedGradleProject(@TempDir Path projectRoot) throws IOException {
@@ -71,6 +72,14 @@ class SpringInstrumentationProfileServiceTest {
 		assertFalse(profile.methodsInclude().contains("internalOnly"));
 		assertTrue(profile.commands().get("gradle").contains("./gradlew bootRun"));
 		assertTrue(profile.commands().get("gradle").contains("-javaagent:/tmp/opentelemetry-javaagent.jar"));
+		assertEquals("PROFILE_GENERATED", profile.connectionStatus().name());
+		assertTrue(profile.profileId().matches("[0-9a-f-]{36}"));
+		assertEquals(
+			"stackflow.profile.id=" + profile.profileId(),
+			profile.environment().get("OTEL_RESOURCE_ATTRIBUTES")
+		);
+		assertEquals(profile.createdAt(), profileRegistry.getStatus(profile.profileId()).orElseThrow().createdAt());
+		assertEquals(null, profile.lastSeenAt());
 	}
 
 	@Test

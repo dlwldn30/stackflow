@@ -41,15 +41,27 @@ public class OtlpTraceIngestService {
 	);
 
 	private final ExternalTraceService externalTraceService;
+	private final InstrumentationProfileRegistry profileRegistry;
 
-	public OtlpTraceIngestService(ExternalTraceService externalTraceService) {
+	public OtlpTraceIngestService(
+		ExternalTraceService externalTraceService,
+		InstrumentationProfileRegistry profileRegistry
+	) {
 		this.externalTraceService = externalTraceService;
+		this.profileRegistry = profileRegistry;
 	}
 
 	public int ingest(ExportTraceServiceRequest request) {
 		int acceptedSpanCount = 0;
 		for (ResourceSpans resourceSpans : request.getResourceSpansList()) {
 			String serviceName = readServiceName(resourceSpans.getResource());
+			String profileId = readResourceAttribute(resourceSpans.getResource(), "stackflow.profile.id");
+			boolean containsValidSpan = resourceSpans.getScopeSpansList().stream()
+				.flatMap(scopeSpans -> scopeSpans.getSpansList().stream())
+				.anyMatch(span -> !span.getTraceId().isEmpty() && !span.getSpanId().isEmpty());
+			if (containsValidSpan) {
+				profileRegistry.markSpanReceived(profileId, serviceName);
+			}
 			Map<String, List<TraceEvent>> eventsByTrace = new LinkedHashMap<>();
 			for (ScopeSpans scopeSpans : resourceSpans.getScopeSpansList()) {
 				for (Span span : scopeSpans.getSpansList()) {
@@ -175,12 +187,17 @@ public class OtlpTraceIngestService {
 	}
 
 	private String readServiceName(Resource resource) {
+		String serviceName = readResourceAttribute(resource, "service.name");
+		return serviceName.isBlank() ? "external-spring-app" : serviceName;
+	}
+
+	private String readResourceAttribute(Resource resource, String key) {
 		return resource.getAttributesList().stream()
-			.filter(item -> item.getKey().equals("service.name"))
+			.filter(item -> item.getKey().equals(key))
 			.map(item -> toStringValue(item.getValue()))
 			.filter(value -> !value.isBlank())
 			.findFirst()
-			.orElse("external-spring-app");
+			.orElse("");
 	}
 
 	private String toStringValue(AnyValue value) {
