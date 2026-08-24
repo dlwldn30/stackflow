@@ -64,4 +64,19 @@ describe('getPrimaryFailureEvent', () => {
 
     expect(getPrimaryFailureEvent([controller, database])?.spanId).toBe('database')
   })
+
+  it('prefers the deepest failure before component priority', () => {
+    const database = event('database', null, 0, 100, 'POSTGRESQL', 'TIMEOUT')
+    const client = event('client', 'database', 10, 90, 'HTTP_CLIENT', 'ERROR')
+
+    expect(getPrimaryFailureEvent([database, client])?.spanId).toBe('client')
+  })
+
+  it('treats an evidenced warning as a recovered failure but ignores a normal cache miss', () => {
+    const cacheMiss = { ...event('cache-miss', 'service', 0, 2, 'REDIS', 'WARNING'), errorType: null }
+    const redisFallback = event('redis-down', 'service', 2, 4, 'REDIS', 'WARNING')
+
+    expect(getPrimaryFailureEvent([cacheMiss])).toBeNull()
+    expect(getPrimaryFailureEvent([cacheMiss, redisFallback])?.spanId).toBe('redis-down')
+  })
 })

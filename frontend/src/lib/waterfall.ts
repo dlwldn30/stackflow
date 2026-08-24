@@ -104,14 +104,49 @@ export function buildWaterfall(events: TraceEvent[]): WaterfallModel {
 }
 
 export function getPrimaryFailureEvent(traceEvents: TraceEvent[]): TraceEvent | null {
-  const failedEvents = traceEvents.filter((event) => event.status === 'ERROR' || event.status === 'TIMEOUT')
-  for (const component of FAILURE_COMPONENT_PRIORITY) {
-    const event = failedEvents.find((candidate) =>
-      candidate.component === component && Boolean(candidate.errorType || candidate.errorMessage),
-    )
-    if (event) return event
+  const failedEvents = traceEvents.filter((event) =>
+    event.status === 'ERROR'
+      || event.status === 'TIMEOUT'
+      || (event.status === 'WARNING' && Boolean(event.errorType || event.errorMessage)),
+  )
+  if (failedEvents.length === 0) return null
+
+  const nonResponseEvents = failedEvents.filter((event) => event.component !== 'RESPONSE')
+  const candidates = nonResponseEvents.length > 0 ? nonResponseEvents : failedEvents
+  const eventsBySpanId = new Map(
+    traceEvents.filter((event) => event.spanId).map((event) => [event.spanId as string, event]),
+  )
+
+  return [...candidates].sort((left, right) => {
+    const depthDifference = getSpanDepth(right, eventsBySpanId) - getSpanDepth(left, eventsBySpanId)
+    if (depthDifference !== 0) return depthDifference
+
+    const componentDifference = FAILURE_COMPONENT_PRIORITY.indexOf(left.component)
+      - FAILURE_COMPONENT_PRIORITY.indexOf(right.component)
+    if (componentDifference !== 0) return componentDifference
+
+    const evidenceDifference = Number(Boolean(right.errorType || right.errorMessage))
+      - Number(Boolean(left.errorType || left.errorMessage))
+    if (evidenceDifference !== 0) return evidenceDifference
+
+    return toMillis(left.startedAt) - toMillis(right.startedAt)
+  })[0]
+}
+
+function getSpanDepth(event: TraceEvent, eventsBySpanId: Map<string, TraceEvent>): number {
+  let depth = 0
+  let parentSpanId = event.parentSpanId
+  const visited = new Set<string>()
+
+  while (parentSpanId && !visited.has(parentSpanId)) {
+    visited.add(parentSpanId)
+    const parent = eventsBySpanId.get(parentSpanId)
+    if (!parent) break
+    depth += 1
+    parentSpanId = parent.parentSpanId
   }
-  return failedEvents.find((event) => event.component !== 'RESPONSE') ?? failedEvents[0] ?? null
+
+  return depth
 }
 
 function unionDuration(intervals: readonly (readonly [number, number])[]): number {

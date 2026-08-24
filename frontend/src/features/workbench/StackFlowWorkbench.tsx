@@ -20,7 +20,11 @@ import { RequestEvidencePanel } from './views/RequestEvidencePanel'
 import { RequestFlowPanel } from './views/RequestFlowPanel'
 import { RequestView } from './views/RequestView'
 import './views/RequestView.css'
+import { TraceHistoryPanel } from './views/TraceHistoryPanel'
+import { TraceInspector } from './views/TraceInspector'
+import { TraceOutcomeSummary } from './views/TraceOutcomeSummary'
 import { TraceView } from './views/TraceView'
+import './views/TraceView.css'
 
 export function StackFlowWorkbench() {
   const {
@@ -80,6 +84,8 @@ export function StackFlowWorkbench() {
     setSelectedNodeId,
     traceViewTab,
     setTraceViewTab,
+    traceHistoryFilter,
+    setTraceHistoryFilter,
     traceCollectionStatus,
     flowInstanceRef,
     graph,
@@ -88,9 +94,11 @@ export function StackFlowWorkbench() {
     primaryFailureEvent,
     primaryFailureNodeId,
     selectedNode,
-    activeNodeCount,
     inspectorEvent,
     primaryFailureLabel,
+    traceOutcome,
+    failurePropagationPath,
+    filteredRecentTraces,
     selectedDomain,
     hasDetectedDomains,
     hasDetectedApis,
@@ -126,7 +134,6 @@ export function StackFlowWorkbench() {
     bodyAllowed,
     selectedApiMethodLabel,
     selectedApiMethodClassName,
-    recentEvents,
     formattedResponseBody,
     formattedExternalResponseBody,
     analyzeProjectPath,
@@ -358,35 +365,14 @@ export function StackFlowWorkbench() {
           </div>
 
           <TraceView active={activeView === 'runtime'}>
-            <div className="panel-card recent-card">
-            <div className="panel-header">
-              <h2>최근 Trace</h2>
-              <span>{recentTraces.length}</span>
-            </div>
-            <div className="trace-list">
-              {recentTraces.length === 0 ? (
-                <p className="empty-copy">아직 수집된 Trace가 없습니다.</p>
-              ) : (
-                recentTraces.map((trace) => (
-                  <button
-                    key={trace.traceId}
-                    type="button"
-                    className={`trace-item${traceDetail?.traceId === trace.traceId ? ' is-selected' : ''}`}
-                    onClick={() => void selectTrace(trace.traceId)}
-                  >
-                    <div>
-                      <strong>{trace.endpoint}</strong>
-                      <span>{trace.traceId.slice(0, 8)}</span>
-                    </div>
-                    <div>
-                      <span className={`pill pill--inline pill--${trace.resultStatus.toLowerCase()}`}>{EVENT_STATUS_LABEL[trace.resultStatus]}</span>
-                      <span>{trace.durationMs}ms</span>
-                    </div>
-                  </button>
-                ))
-              )}
-            </div>
-            </div>
+            <TraceHistoryPanel
+              traces={filteredRecentTraces}
+              totalCount={recentTraces.length}
+              filter={traceHistoryFilter}
+              selectedTraceId={traceDetail?.traceId ?? null}
+              onFilterChange={setTraceHistoryFilter}
+              onSelectTrace={(traceId) => void selectTrace(traceId)}
+            />
           </TraceView>
         </aside>
 
@@ -581,39 +567,14 @@ export function StackFlowWorkbench() {
                 </div>
               ) : (
                 <>
-              <div className="graph-context" aria-label="현재 Trace 정보">
-                <span>
-                  <strong>도메인</strong>
-                  {selectedDomain.name}
-                </span>
-                <span>
-                  <strong>{traceDetail.source === 'OPENTELEMETRY' ? 'Service' : 'Controller'}</strong>
-                  {traceDetail.source === 'OPENTELEMETRY' ? traceDetail.serviceName ?? '-' : selectedApi.controller}
-                </span>
-                <span>
-                  <strong>Endpoint</strong>
-                  {traceDetail.method} {traceDetail.endpoint}
-                </span>
-                <span>
-                  <strong>확인 목표</strong>
-                  첫 실패 지점 찾기
-                </span>
-              </div>
-
-              {primaryFailureEvent ? (
-                <section className="trace-failure-summary" aria-label="첫 실패 지점">
-                  <AlertCircle size={18} aria-hidden="true" />
-                  <div>
-                    <span>첫 실패 지점</span>
-                    <strong>{primaryFailureLabel} · {primaryFailureEvent.errorType ?? EVENT_STATUS_LABEL[primaryFailureEvent.status]}</strong>
-                    <p>{primaryFailureEvent.errorMessage ?? `${primaryFailureEvent.eventType} 실행 중 실패했습니다.`}</p>
-                  </div>
-                  <button type="button" onClick={() => setSelectedNodeId(primaryFailureNodeId)}>
-                    상세 보기
-                    <ChevronRight size={15} aria-hidden="true" />
-                  </button>
-                </section>
-              ) : null}
+              <TraceOutcomeSummary
+                trace={traceDetail}
+                outcome={traceOutcome ?? 'success'}
+                failureEvent={primaryFailureEvent}
+                failureLabel={primaryFailureLabel}
+                propagationPath={failurePropagationPath}
+                onInspectFailure={() => setSelectedNodeId(primaryFailureNodeId)}
+              />
 
               <div className="trace-view-tabs" role="tablist" aria-label="Trace 보기 방식">
                 <button type="button" role="tab" aria-selected={traceViewTab === 'timeline'} className={traceViewTab === 'timeline' ? 'is-active' : ''} onClick={() => setTraceViewTab('timeline')}>
@@ -631,6 +592,7 @@ export function StackFlowWorkbench() {
                 <TraceWaterfall
                   model={waterfall}
                   selectedSpanId={selectedNode?.id ?? null}
+                  primaryFailureSpanId={primaryFailureNodeId}
                   onSelectSpan={setSelectedNodeId}
                 />
               ) : null}
@@ -939,154 +901,12 @@ export function StackFlowWorkbench() {
           </RequestView>
 
           <TraceView active={activeView === 'runtime'}>
-            <>
-              <div className="panel-card inspector-workbench">
-                <div className="panel-header">
-                  <div>
-                    <span className="section-label">실행 근거</span>
-                    <h2>{inspectorEvent ? inspectorEvent.component : 'Trace 대기'}</h2>
-                    <p>{inspectorEvent ? inspectorEvent.eventType : 'API 요청을 실행한 뒤 그래프 node를 선택하세요.'}</p>
-                  </div>
-                  <span className={`pill pill--inline pill--${(traceDetail?.resultStatus ?? 'success').toLowerCase()}`}>
-                    HTTP {traceDetail?.httpStatus || '-'}
-                  </span>
-                </div>
-
-                <div className="runtime-meter runtime-meter--compact">
-                  <span>{traceDetail ? `${traceDetail.durationMs}ms` : '0ms'}</span>
-                  <span>{activeNodeCount}개 활성 node</span>
-                </div>
-
-                <section className="inspector-section response-card">
-                  <div className="section-row">
-                    <span className="section-label">응답 JSON</span>
-                    <span>{traceDetail ? EVENT_STATUS_LABEL[traceDetail.resultStatus] : '대기'}</span>
-                  </div>
-                  {formattedResponseBody ? (
-                    <pre className="response-body">{formattedResponseBody}</pre>
-                  ) : (
-                    <p className="empty-copy">요청을 실행하면 응답 본문이 표시됩니다.</p>
-                  )}
-                </section>
-
-                <section className="inspector-section inspector-card">
-                  <div className="section-row">
-                    <span className="section-label">선택한 node 근거</span>
-                    {selectedNode ? (
-                      <span className={`pill pill--inline pill--${selectedNode.status.toLowerCase()}`}>
-                        {EVENT_STATUS_LABEL[selectedNode.status]}
-                      </span>
-                    ) : null}
-                  </div>
-                  {!selectedNode ? (
-                    <p className="empty-copy">그래프에서 확인할 실행 node를 선택하세요.</p>
-                  ) : (
-                    <div className="detail-stack">
-                      <div className="detail-summary">
-                        <strong>{selectedNode.label}</strong>
-                        <span>총 {selectedNode.durationMs}ms</span>
-                      </div>
-                      <div className="detail-grid">
-                        <div>
-                          <span>Trace ID</span>
-                          <strong>{traceDetail?.traceId ?? '-'}</strong>
-                        </div>
-                        <div>
-                          <span>호출 횟수</span>
-                          <strong>{selectedNode.visits.length}</strong>
-                        </div>
-                      </div>
-                      <div className="visit-list">
-                        {selectedNode.visits.length === 0 ? (
-                          <p className="empty-copy">현재 Trace에서 이 node는 호출되지 않았습니다.</p>
-                        ) : (
-                          selectedNode.visits.map((event) => (
-                            <article key={event.eventId} className="visit-card">
-                              <header>
-                                <strong>{event.eventType}</strong>
-                                <span className={`pill pill--inline pill--${event.status.toLowerCase()}`}>{EVENT_STATUS_LABEL[event.status]}</span>
-                              </header>
-                              <dl>
-                                <div>
-                                  <dt>소요 시간</dt>
-                                  <dd>{event.durationMs}ms</dd>
-                                </div>
-                                <div>
-                                  <dt>오류 유형</dt>
-                                  <dd>{event.errorType ?? '-'}</dd>
-                                </div>
-                                <div>
-                                  <dt>오류 메시지</dt>
-                                  <dd>{event.errorMessage ?? '-'}</dd>
-                                </div>
-                                {event.spanId ? (
-                                  <div>
-                                    <dt>Span / Parent</dt>
-                                    <dd>{event.spanId} / {event.parentSpanId ?? 'root'}</dd>
-                                  </div>
-                                ) : null}
-                                {event.serviceName ? (
-                                  <div>
-                                    <dt>Service / Kind</dt>
-                                    <dd>{event.serviceName} / {event.spanKind ?? '-'}</dd>
-                                  </div>
-                                ) : null}
-                              </dl>
-                              <div className="metadata-list">
-                                {Object.keys(event.metadata).length === 0 ? (
-                                  <span className="metadata-item">metadata 없음</span>
-                                ) : (
-                                  Object.entries(event.metadata).map(([key, value]) => (
-                                    <span key={key} className="metadata-item">
-                                      {key}: {value}
-                                    </span>
-                                  ))
-                                )}
-                              </div>
-                            </article>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </section>
-              </div>
-
-              <div className="panel-card timeline-card timeline-card--compact">
-                <div className="panel-header">
-                  <div>
-                    <h2>실행 이벤트</h2>
-                    <p>발생 시간순으로 표시합니다.</p>
-                  </div>
-                  <span>{recentEvents.length}</span>
-                </div>
-                <div className="timeline-list">
-                {recentEvents.length === 0 ? (
-                  <p className="empty-copy">아직 수집된 실행 이벤트가 없습니다.</p>
-                ) : (
-                  recentEvents.map((event, index) => (
-                    <article key={event.eventId} className="timeline-item">
-                      <div className="timeline-item__marker">
-                        <span>{index + 1}</span>
-                      </div>
-                      <div className="timeline-item__body">
-                        <header>
-                          <strong>{event.component}</strong>
-                          <span className={`pill pill--inline pill--${event.status.toLowerCase()}`}>{EVENT_STATUS_LABEL[event.status]}</span>
-                        </header>
-                        <p>{event.eventType}</p>
-                        <div className="timeline-item__meta">
-                          <span>{event.durationMs}ms</span>
-                          <span>{new Date(event.startedAt).toLocaleTimeString()}</span>
-                          <span>{event.errorType ?? '오류 없음'}</span>
-                        </div>
-                      </div>
-                    </article>
-                  ))
-                )}
-                </div>
-              </div>
-            </>
+            <TraceInspector
+              trace={traceDetail}
+              selectedNode={selectedNode}
+              selectedEvent={inspectorEvent}
+              formattedResponseBody={formattedResponseBody}
+            />
           </TraceView>
         </aside>
       </section>
