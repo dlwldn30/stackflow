@@ -11,7 +11,7 @@ import { useRequestExecution } from './useRequestExecution'
 import { useTraceRuntime } from './useTraceRuntime'
 import type { ApiDefinition, ExternalRequestSnapshot } from '../types'
 import { EMPTY_API_DEFINITION, EMPTY_DOMAIN, FALLBACK_API_CATALOG, FALLBACK_PROJECT_STRUCTURE, PROJECT_STATUS_CONTENT, matchesTraceEndpoint } from '../fixtures'
-import { buildExternalRequestMessage, buildExternalTargetPreview, buildRequestMessage, createRequestEntry, formatResponseBody, parseResponseBody, toEnabledEntries } from '../requestModel'
+import { buildExternalRequestMessage, buildExternalTargetPreview, buildRequestMessage, createRequestEntry, filterApis, formatResponseBody, parseResponseBody, toEnabledEntries } from '../requestModel'
 import { buildCommonProjectLayers, buildDomainStructurePath, buildEstimatedFlow, buildProjectMetrics, compareEstimatedAndActualFlow, createPlaceholderTrace, fetchTraceWithRetry, flattenProjectApis, getApiMethodBadgeClassName, getApiMethodLabel, getDomainDisplayMode, groupProjectLayers, isConcreteMethodApi, isStackFlowRuntimeApi } from '../workbenchModel'
 
 export function useWorkbenchController() {
@@ -32,6 +32,7 @@ export function useWorkbenchController() {
   } = project
   const {
     productId, setProductId, targetBaseUrl, setTargetBaseUrl,
+    endpointSearch, setEndpointSearch,
     queryParams, requestHeaders,
     requestBody, setRequestBody, requestBodyError, setRequestBodyError,
     externalRequestSnapshot, setExternalRequestSnapshot, scenario, setScenario,
@@ -69,8 +70,9 @@ export function useWorkbenchController() {
   const hasDetectedDomains = projectStructure.domains.length > 0
   const hasDetectedApis = apiCatalog.length > 0
   const domainApis = apiCatalog.filter((api) => api.domainId === selectedDomain.id)
-  const visibleApis = apiScope === 'all' ? apiCatalog : domainApis
-  const selectedApi = visibleApis.find((api) => api.id === selectedApiId) ?? visibleApis[0] ?? EMPTY_API_DEFINITION
+  const scopedApis = apiScope === 'all' ? apiCatalog : domainApis
+  const visibleApis = filterApis(scopedApis, endpointSearch)
+  const selectedApi = scopedApis.find((api) => api.id === selectedApiId) ?? scopedApis[0] ?? EMPTY_API_DEFINITION
   const projectMetrics = buildProjectMetrics(projectStructure)
   const domainLayerGroups = groupProjectLayers(selectedDomain.layers)
   const domainStructurePath = buildDomainStructurePath(domainLayerGroups, selectedDomain.infrastructure)
@@ -332,9 +334,20 @@ export function useWorkbenchController() {
   }
 
   function selectApi(api: ApiDefinition) {
+    if (api.id !== selectedApi.id) {
+      closeActiveStream()
+      setTraceDetail(null)
+      setSelectedNodeId(null)
+      setStreamStatus('idle')
+      setTraceCollectionStatus('DISABLED')
+      setExternalResponse(null)
+      setExternalRequestSnapshot(null)
+      setLastResponseBody(null)
+      setRequestState('idle')
+      setRequestMessage('선택한 API의 요청을 작성하세요.')
+    }
     setSelectedApiId(api.id)
     setSelectedDomainId(api.domainId)
-    setExternalResponse(null)
     setActiveView('api')
   }
 
@@ -764,6 +777,8 @@ export function useWorkbenchController() {
     setProductId,
     targetBaseUrl,
     setTargetBaseUrl,
+    endpointSearch,
+    setEndpointSearch,
     queryParams,
     requestHeaders,
     requestBody,

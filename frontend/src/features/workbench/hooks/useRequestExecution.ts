@@ -15,8 +15,9 @@ type CreateEntry = (key: string, value: string, enabled: boolean) => ExternalReq
 export function useRequestExecution(createEntry: CreateEntry) {
   const [productId, setProductId] = useState('1001')
   const [targetBaseUrl, setTargetBaseUrl] = useState(import.meta.env.VITE_DEFAULT_TARGET_BASE_URL ?? '')
-  const [queryParams, setQueryParams] = useState<ExternalRequestEntry[]>([createEntry('page', '1', false)])
-  const [requestHeaders, setRequestHeaders] = useState<ExternalRequestEntry[]>([createEntry('Authorization', '', false)])
+  const [endpointSearch, setEndpointSearch] = useState('')
+  const [queryParams, setQueryParams] = useState<ExternalRequestEntry[]>([])
+  const [requestHeaders, setRequestHeaders] = useState<ExternalRequestEntry[]>([])
   const [requestBody, setRequestBody] = useState('{\n  "name": "Sample product"\n}')
   const [requestBodyError, setRequestBodyError] = useState<string | null>(null)
   const [externalRequestSnapshot, setExternalRequestSnapshot] = useState<ExternalRequestSnapshot | null>(null)
@@ -56,6 +57,7 @@ export function useRequestExecution(createEntry: CreateEntry) {
   return {
     productId, setProductId,
     targetBaseUrl, setTargetBaseUrl,
+    endpointSearch, setEndpointSearch,
     queryParams, setQueryParams,
     requestHeaders, setRequestHeaders,
     requestBody, setRequestBody,
