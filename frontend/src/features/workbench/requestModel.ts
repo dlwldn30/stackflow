@@ -5,6 +5,7 @@ import type {
   ProductPayload,
 } from '../../types/trace'
 import { EVENT_STATUS_LABEL } from '../../ui/copy'
+import type { ApiDefinition } from './types'
 
 export function buildRequestMessage(resultStatus: EventStatus, payload: ProductPayload) {
   if (payload.errorMessage) return `${EVENT_STATUS_LABEL[resultStatus]}: ${payload.errorMessage}`
@@ -32,10 +33,19 @@ export function updateRequestEntries(
 }
 
 export function removeRequestEntry(entries: ExternalRequestEntry[], id: string) {
-  if (entries.length <= 1) {
-    return entries.map((entry) => entry.id === id ? { ...entry, key: '', value: '', enabled: false } : entry)
-  }
   return entries.filter((entry) => entry.id !== id)
+}
+
+export function filterApis(apis: ApiDefinition[], searchTerm: string) {
+  const normalizedSearch = searchTerm.trim().toLocaleLowerCase()
+  if (!normalizedSearch) return apis
+  return apis.filter((api) => [
+    api.methodSpecified ? api.method : '메서드 미지정',
+    api.pathTemplate,
+    api.controller,
+    api.handler,
+    api.label,
+  ].some((value) => value.toLocaleLowerCase().includes(normalizedSearch)))
 }
 
 export function toEnabledEntries(entries: ExternalRequestEntry[]) {

@@ -39,11 +39,14 @@ describe('workbench state hooks', () => {
     let sequence = 0
     const createEntry = (key: string, value: string, enabled: boolean) => ({ id: `${++sequence}`, key, value, enabled })
     const { result } = renderHook(() => useRequestExecution(createEntry))
+    expect(result.current.queryParams).toEqual([])
     act(() => result.current.addQueryParam())
-    expect(result.current.queryParams).toHaveLength(2)
-    const addedEntryId = result.current.queryParams[1].id
+    expect(result.current.queryParams).toHaveLength(1)
+    const addedEntryId = result.current.queryParams[0].id
     act(() => result.current.updateQueryParam(addedEntryId, { key: 'size', value: '10' }))
-    expect(result.current.queryParams[1]).toMatchObject({ key: 'size', value: '10' })
+    expect(result.current.queryParams[0]).toMatchObject({ key: 'size', value: '10' })
+    act(() => result.current.setEndpointSearch('product'))
+    expect(result.current.endpointSearch).toBe('product')
   })
 
   it('owns trace selection and stream lifecycle references', () => {

@@ -1,13 +1,11 @@
 import { Background, Controls, ReactFlow } from '@xyflow/react'
-import { AlertCircle, ArrowLeft, ArrowRight, Boxes, Braces, CheckCircle2, ChevronRight, Database, FolderOpen, Network, Plus, Route, ScanSearch, Send, Trash2 } from 'lucide-react'
+import { AlertCircle, ArrowRight, Boxes, Braces, CheckCircle2, ChevronRight, Database, FolderOpen, Network, Route, ScanSearch } from 'lucide-react'
 import '../../App.css'
 import { StatusBadge } from '../../components/StatusBadge'
 import { TraceWaterfall } from '../../components/TraceWaterfall'
-import { EVENT_STATUS_LABEL, PROJECT_STATUS_LABEL, TRACE_COLLECTION_STATUS_LABEL } from '../../ui/copy'
+import { EVENT_STATUS_LABEL, PROJECT_STATUS_LABEL } from '../../ui/copy'
 import { AppShell } from './components/AppShell'
-import { SCENARIOS } from './fixtures'
 import { useWorkbenchController } from './hooks/useWorkbenchController'
-import { countEnabledEntries } from './requestModel'
 import {
   formatProfileLastSeen,
   getApiMethodBadgeClassName,
@@ -16,7 +14,12 @@ import {
   getDomainDisplayMode,
 } from './workbenchModel'
 import { LayerEvidenceList, ProjectView } from './views/ProjectView'
+import { EndpointExplorer } from './views/EndpointExplorer'
+import { RequestComposer } from './views/RequestComposer'
+import { RequestEvidencePanel } from './views/RequestEvidencePanel'
+import { RequestFlowPanel } from './views/RequestFlowPanel'
 import { RequestView } from './views/RequestView'
+import './views/RequestView.css'
 import { TraceView } from './views/TraceView'
 
 export function StackFlowWorkbench() {
@@ -33,6 +36,7 @@ export function StackFlowWorkbench() {
     analysisTarget,
     analysisState,
     analysisMessage,
+    selectedApiId,
     setSelectedApiId,
     selectedDomainId,
     apiScope,
@@ -49,13 +53,14 @@ export function StackFlowWorkbench() {
     setProductId,
     targetBaseUrl,
     setTargetBaseUrl,
+    endpointSearch,
+    setEndpointSearch,
     queryParams,
     requestHeaders,
     requestBody,
     setRequestBody,
     requestBodyError,
     setRequestBodyError,
-    externalRequestSnapshot,
     scenario,
     setScenario,
     requestOptionTab,
@@ -116,6 +121,7 @@ export function StackFlowWorkbench() {
     traceDisplayStatus,
     traceDisplayTone,
     currentResultStatus,
+    externalPath,
     externalTargetPreview,
     bodyAllowed,
     selectedApiMethodLabel,
@@ -152,16 +158,16 @@ export function StackFlowWorkbench() {
             <div className="panel-header control-header">
               <div>
                 <span className="section-label">
-                  {activeView === 'project' ? '프로젝트 탐색' : activeView === 'api' ? 'API 선택' : 'Trace 기록'}
+                  {activeView === 'project' ? '프로젝트 탐색' : activeView === 'api' ? 'API 요청' : 'Trace 기록'}
                 </span>
                 <h2>
-                  {activeView === 'project' ? '프로젝트 열기' : activeView === 'api' ? apiScope === 'all' ? '전체 API' : selectedDomain.name : '최근 Trace'}
+                  {activeView === 'project' ? '프로젝트 열기' : activeView === 'api' ? selectedApi.label : '최근 Trace'}
                 </h2>
                 <p>
                   {activeView === 'project'
                     ? 'Spring Boot 루트 폴더를 선택하세요.'
                     : activeView === 'api'
-                      ? '실행하거나 확인할 endpoint를 선택하세요.'
+                      ? '요청을 작성하고 응답을 확인하세요.'
                       : '이전 실행 기록을 다시 확인할 수 있습니다.'}
                 </p>
               </div>
@@ -290,315 +296,64 @@ export function StackFlowWorkbench() {
             </ProjectView>
 
             <RequestView active={activeView === 'api'}>
-              <>
-                <section className="setup-step setup-step--endpoint">
-              <div className="setup-step__head">
-                <ChevronRight size={18} aria-hidden="true" />
-                <div>
-                  <strong>Endpoint 선택</strong>
-                  <small>전체 API를 보거나 선택한 도메인만 좁혀서 확인합니다.</small>
-                </div>
-              </div>
-
-              <div className="api-scope-control" role="group" aria-label="API 표시 범위">
-                <button type="button" className={apiScope === 'all' ? 'is-active' : ''} onClick={() => setApiScope('all')}>
-                  전체 API <strong>{apiCatalog.length}</strong>
-                </button>
-                <button type="button" className={apiScope === 'domain' ? 'is-active' : ''} onClick={() => setApiScope('domain')}>
-                  {selectedDomain.name} <strong>{domainApis.length}</strong>
-                </button>
-              </div>
-
-              <div className="section-row">
-                <span className="section-label">API 목록</span>
-                <span>{apiScope === 'all' ? `전체 ${apiCatalog.length}개` : `${selectedDomain.name} ${domainApis.length}개 · 전체 ${apiCatalog.length}개`}</span>
-              </div>
-              <div className="api-list api-list--catalog">
-                {hasDetectedApis ? (
-                  visibleApis.map((api) => (
-                    <button
-                      key={api.id}
-                      type="button"
-                      className={`api-item${selectedApi.id === api.id ? ' is-selected' : ''}`}
-                      onClick={() => selectApi(api)}
-                    >
-                      <span className={getApiMethodBadgeClassName(api)}>{getApiMethodLabel(api)}</span>
-                      <div>
-                        <strong>{api.label}</strong>
-                        <span>{api.pathTemplate}</span>
-                        <p>{api.requestType} · {api.description}</p>
-                        <span className="api-item__handler">{api.controller}.{api.handler}</span>
-                        {!api.methodSpecified ? (
-                          <span className="api-item__handler">정적 분석만 가능 · HTTP method 미지정</span>
-                        ) : null}
-                      </div>
-                    </button>
-                  ))
-                ) : (
-                  <p className="empty-copy">요청하거나 Trace를 확인할 REST API가 없습니다.</p>
-                )}
-              </div>
-                </section>
-
-                <section className="setup-step setup-step--run">
-              <div className="request-context-bar">
-                <button type="button" onClick={() => setActiveView('project')}>
-                  <ArrowLeft size={15} aria-hidden="true" />
-                  프로젝트 구조
-                </button>
-                <span>
-                  <strong>{selectedDomain.name}</strong>
-                  {selectedApiMethodLabel} {selectedApi.pathTemplate}
-                </span>
-              </div>
-              <div className="setup-step__head">
-                <Send size={18} aria-hidden="true" />
-                <div>
-                  <strong>
-                    {runtimeSupported || externalTraceVerified
-                      ? 'API 요청과 Trace 실행'
-                      : externalTraceConfigured
-                        ? 'API 요청으로 Agent 확인'
-                        : '외부 API 요청'}
-                  </strong>
-                  <small>
-                    {runtimeSupported
-                      ? '실시간 연결을 연 뒤 선택한 API를 실행합니다.'
-                      : externalTraceVerified
-                        ? '요청에 traceparent를 넣고 Java Agent가 보낸 실제 span을 수집합니다.'
-                        : externalTraceConfigured
-                          ? '요청에 traceparent를 넣고 최초 span이 도착하는지 확인합니다.'
-                        : 'StackFlow backend proxy를 통해 선택한 endpoint를 호출합니다.'}
-                  </small>
-                </div>
-              </div>
-
-              <div className="selected-request">
-                <span className={selectedApiMethodClassName}>{selectedApiMethodLabel}</span>
-                <div>
-                  <strong>{selectedApi.label}</strong>
-                  <small>{selectedApi.pathTemplate}</small>
-                  {!selectedApi.methodSpecified ? <small>HTTP method가 명시되지 않아 정적 분석만 가능합니다.</small> : null}
-                </div>
-                <span className={`pill pill--inline ${runtimeSupported ? 'pill--success' : 'pill--warning'}`}>
-                      {runtimeModeLabel}
-                </span>
-              </div>
-
-              <div className="request-form">
-                {externalRunnable ? (
-                  <>
-                    <div className="request-block request-block--basic">
-                      <div className="request-block__head">
-                        <span>요청 대상</span>
-                        <small>기본값은 공개 URL만 허용합니다.</small>
-                      </div>
-                      <label className="field">
-                        <span>대상 기본 URL</span>
-                        <input
-                          value={targetBaseUrl}
-                          onChange={(event) => setTargetBaseUrl(event.target.value)}
-                          placeholder="https://api.example.com"
-                        />
-                      </label>
-                      {selectedApi.requiresProductId ? (
-                        <label className="field">
-                          <span>Path variable 값</span>
-                          <input value={productId} onChange={(event) => setProductId(event.target.value)} />
-                        </label>
-                      ) : null}
-                      <details className="security-note">
-                        <summary>로컬·사설 URL 요청 안내</summary>
-                        <p>로컬 앱을 호출하려면 backend에서 private target 허용 설정을 켜야 합니다.</p>
-                      </details>
-                    </div>
-                    <div className="request-options">
-                      <div className="request-option-tabs" role="tablist" aria-label="요청 옵션">
-                        <button type="button" role="tab" aria-selected={requestOptionTab === 'query'} className={requestOptionTab === 'query' ? 'is-active' : ''} onClick={() => setRequestOptionTab('query')}>
-                          Query <span>{countEnabledEntries(queryParams)}</span>
-                        </button>
-                        <button type="button" role="tab" aria-selected={requestOptionTab === 'headers'} className={requestOptionTab === 'headers' ? 'is-active' : ''} onClick={() => setRequestOptionTab('headers')}>
-                          Header <span>{countEnabledEntries(requestHeaders)}</span>
-                        </button>
-                        <button type="button" role="tab" aria-selected={requestOptionTab === 'body'} className={requestOptionTab === 'body' ? 'is-active' : ''} onClick={() => setRequestOptionTab('body')}>
-                          Body <span>{bodyAllowed ? 'JSON' : '-'}</span>
-                        </button>
-                      </div>
-                      {requestOptionTab === 'query' ? (
-                        <div className="request-editor">
-                          <div className="request-editor__head">
-                            <span>쿼리 파라미터</span>
-                            <button type="button" onClick={addQueryParam}>
-                              <Plus size={14} aria-hidden="true" />
-                              항목 추가
-                            </button>
-                          </div>
-                          <div className="request-entry-list">
-                            {queryParams.map((entry) => (
-                              <div key={entry.id} className={`request-entry${entry.enabled ? '' : ' is-disabled'}`}>
-                                <label className="entry-toggle">
-                                  <input
-                                    type="checkbox"
-                                    checked={entry.enabled}
-                                    onChange={(event) => updateQueryParam(entry.id, { enabled: event.target.checked })}
-                                  />
-                                  <span>{entry.enabled ? '사용' : '제외'}</span>
-                                </label>
-                                <input
-                                  value={entry.key}
-                                  onChange={(event) => updateQueryParam(entry.id, { key: event.target.value })}
-                                  placeholder="key"
-                                />
-                                <input
-                                  value={entry.value}
-                                  onChange={(event) => updateQueryParam(entry.id, { value: event.target.value })}
-                                  placeholder="value"
-                                />
-                                <button type="button" onClick={() => removeQueryParam(entry.id)} aria-label="쿼리 파라미터 삭제">
-                                  <Trash2 size={14} aria-hidden="true" />
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-                      {requestOptionTab === 'headers' ? (
-                        <div className="request-editor">
-                          <div className="request-editor__head">
-                            <span>요청 헤더</span>
-                            <button type="button" onClick={addRequestHeader}>
-                              <Plus size={14} aria-hidden="true" />
-                              항목 추가
-                            </button>
-                          </div>
-                          <div className="request-entry-list">
-                            {requestHeaders.map((entry) => (
-                              <div key={entry.id} className={`request-entry${entry.enabled ? '' : ' is-disabled'}`}>
-                                <label className="entry-toggle">
-                                  <input
-                                    type="checkbox"
-                                    checked={entry.enabled}
-                                    onChange={(event) => updateRequestHeader(entry.id, { enabled: event.target.checked })}
-                                  />
-                                  <span>{entry.enabled ? '사용' : '제외'}</span>
-                                </label>
-                                <input
-                                  value={entry.key}
-                                  onChange={(event) => updateRequestHeader(entry.id, { key: event.target.value })}
-                                  placeholder="Authorization"
-                                />
-                                <input
-                                  value={entry.value}
-                                  onChange={(event) => updateRequestHeader(entry.id, { value: event.target.value })}
-                                  placeholder="Bearer token"
-                                />
-                                <button type="button" onClick={() => removeRequestHeader(entry.id)} aria-label="요청 헤더 삭제">
-                                  <Trash2 size={14} aria-hidden="true" />
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-                      {requestOptionTab === 'body' ? (
-                        <label className={`field request-body-field${bodyAllowed ? '' : ' is-disabled'}`}>
-                          <span>{bodyAllowed ? 'JSON 요청 본문' : '이 HTTP method는 요청 본문을 사용하지 않습니다'}</span>
-                          <textarea
-                            value={requestBody}
-                            onChange={(event) => {
-                              setRequestBody(event.target.value)
-                              setRequestBodyError(null)
-                            }}
-                            disabled={!bodyAllowed}
-                            rows={6}
-                          />
-                        </label>
-                      ) : null}
-                    </div>
-                    <div className="request-preview request-preview--send">
-                      <span>실행할 요청</span>
-                      <div>
-                        <span className={selectedApiMethodClassName}>{selectedApiMethodLabel}</span>
-                        <strong>{externalTargetPreview}</strong>
-                      </div>
-                    </div>
-                    {requestBodyError ? <p className="request-message request-message--error">{requestBodyError}</p> : null}
-                  </>
-                ) : null}
-                {selectedApi.requiresProductId && !externalRunnable ? (
-                  <label className="field">
-                    <span>Product ID</span>
-                    <input value={productId} onChange={(event) => setProductId(event.target.value)} />
-                  </label>
-                ) : null}
-                {runtimeSupported ? (
-                  <label className="field">
-                    <span>실행 시나리오</span>
-                    <select value={scenario} onChange={(event) => setScenario(event.target.value as (typeof SCENARIOS)[number]['value'])}>
-                      {SCENARIOS.map((item) => (
-                        <option key={item.value} value={item.value}>
-                          {item.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
-                <button className="run-button" type="button" onClick={() => void runRequest()} disabled={requestState === 'loading' || !hasDetectedApis || analyzeOnly}>
-                  <Send size={17} aria-hidden="true" />
-                  {requestState === 'loading'
-                    ? (runtimeSupported ? 'Trace 수집 중...' : '외부 API 요청 중...')
-                    : runtimeSupported
-                      ? '요청 보내고 Trace 보기'
-                    : externalRunnable
-                        ? externalTraceVerified
-                          ? '요청 보내고 Trace 보기'
-                          : externalTraceConfigured
-                            ? '요청 보내고 Agent 확인'
-                            : '외부 API 요청'
-                        : '정적 분석만 가능'}
-                </button>
-                <p className="request-message">{requestMessage}</p>
-
-                <section className="request-result-panel" aria-label="API 응답">
-                  <div className="section-row">
-                    <div>
-                      <span className="section-label">응답</span>
-                      <strong>{externalRunnable ? '외부 HTTP 결과' : '실행 결과'}</strong>
-                    </div>
-                    <span className={`pill pill--inline pill--${((externalRunnable ? externalResponse?.resultStatus : traceDetail?.resultStatus) ?? 'idle').toLowerCase()}`}>
-                      {externalRunnable
-                        ? externalResponse ? `HTTP ${externalResponse.httpStatus || '-'}` : '대기'
-                        : traceDetail ? `HTTP ${traceDetail.httpStatus || '-'}` : '대기'}
-                    </span>
-                  </div>
-                  {externalRunnable ? (
-                    externalResponse ? (
-                      <>
-                        <div className="request-result-meta">
-                          <span><strong>{externalResponse.durationMs}ms</strong>소요 시간</span>
-                          <span><strong>{externalResponse.contentType || '-'}</strong>Content-Type</span>
-                          <span><strong>{externalResponse.traceId?.slice(0, 8) || '-'}</strong>Trace ID</span>
-                        </div>
-                        {externalResponse.errorMessage ? <p className="external-error">{externalResponse.errorMessage}</p> : null}
-                        {formattedExternalResponseBody ? (
-                          <pre className="response-body response-body--external">{formattedExternalResponseBody}</pre>
-                        ) : <p className="empty-copy">대상 API가 빈 응답 본문을 반환했습니다.</p>}
-                      </>
-                    ) : <p className="empty-copy">대상 URL을 입력하고 요청을 보내면 여기에 응답이 표시됩니다.</p>
-                  ) : formattedResponseBody ? (
-                    <>
-                      <div className="request-result-meta">
-                        <span><strong>{traceDetail?.durationMs ?? 0}ms</strong>소요 시간</span>
-                        <span><strong>{traceDetail?.events.length ?? 0}</strong>실행 이벤트</span>
-                        <span><strong>{traceDetail?.traceId.slice(0, 8) ?? '-'}</strong>Trace ID</span>
-                      </div>
-                      <pre className="response-body response-body--external">{formattedResponseBody}</pre>
-                    </>
-                  ) : <p className="empty-copy">요청을 실행하면 JSON 응답이 여기에 표시됩니다.</p>}
-                </section>
-              </div>
-                </section>
-              </>
+              <EndpointExplorer
+                apiCatalogCount={apiCatalog.length}
+                domainName={selectedDomain.name}
+                domainApiCount={domainApis.length}
+                apiScope={apiScope}
+                endpointSearch={endpointSearch}
+                visibleApis={visibleApis}
+                selectedApiId={selectedApiId}
+                onScopeChange={setApiScope}
+                onSearchChange={setEndpointSearch}
+                onSelectApi={selectApi}
+              />
+              <RequestComposer
+                selectedApi={selectedApi}
+                domainName={selectedDomain.name}
+                methodLabel={selectedApiMethodLabel}
+                methodClassName={selectedApiMethodClassName}
+                runtimeModeLabel={runtimeModeLabel}
+                runtimeSupported={runtimeSupported}
+                externalRunnable={externalRunnable}
+                externalTraceConfigured={externalTraceConfigured}
+                externalTraceVerified={externalTraceVerified}
+                analyzeOnly={analyzeOnly}
+                hasDetectedApis={hasDetectedApis}
+                targetBaseUrl={targetBaseUrl}
+                externalPath={externalPath}
+                externalTargetPreview={externalTargetPreview}
+                productId={productId}
+                scenario={scenario}
+                requestOptionTab={requestOptionTab}
+                queryParams={queryParams}
+                requestHeaders={requestHeaders}
+                requestBody={requestBody}
+                requestBodyError={requestBodyError}
+                bodyAllowed={bodyAllowed}
+                requestState={requestState}
+                requestMessage={requestMessage}
+                externalResponse={externalResponse}
+                traceDetail={traceDetail}
+                traceCollectionStatus={traceCollectionStatus}
+                formattedExternalResponseBody={formattedExternalResponseBody}
+                formattedResponseBody={formattedResponseBody}
+                onBackProject={() => setActiveView('project')}
+                onTargetBaseUrlChange={setTargetBaseUrl}
+                onProductIdChange={setProductId}
+                onScenarioChange={setScenario}
+                onRequestOptionTabChange={setRequestOptionTab}
+                onRequestBodyChange={setRequestBody}
+                onClearRequestBodyError={() => setRequestBodyError(null)}
+                onAddQueryParam={addQueryParam}
+                onAddRequestHeader={addRequestHeader}
+                onUpdateQueryParam={updateQueryParam}
+                onUpdateRequestHeader={updateRequestHeader}
+                onRemoveQueryParam={removeQueryParam}
+                onRemoveRequestHeader={removeRequestHeader}
+                onRunRequest={() => void runRequest()}
+                onOpenTrace={() => setActiveView('runtime')}
+              />
             </RequestView>
           </div>
 
@@ -777,89 +532,17 @@ export function StackFlowWorkbench() {
 
           <RequestView active={activeView === 'api'}>
             <div className="panel-card panel-card--api-flow">
-              <details className="request-flow-disclosure">
-                <summary>
-                  <span>
-                    <span className="section-label">보조 정보</span>
-                    <strong>예상 호출 경로</strong>
-                    <small>{selectedApiMethodLabel} {selectedApi.pathTemplate} · 코드 구조 기반</small>
-                  </span>
-                  <span>{estimatedFlow.length}단계</span>
-                </summary>
-                <div className="request-flow-content">
-              <div className="api-flow-summary">
-                <span>
-                  <strong>도메인</strong>
-                  {selectedDomain.name}
-                </span>
-                <span>
-                  <strong>Handler</strong>
-                  {selectedApi.controller}.{selectedApi.handler}
-                </span>
-                <span>
-                  <strong>요청 유형</strong>
-                  {selectedApi.requestType}
-                </span>
-                <span>
-                  <strong>근거 수준</strong>
-                  {hasIntegrationBoundary ? '외부 연동 경계 포함' : '코드 구조 기반 예상'}
-                </span>
-              </div>
-
-              <div className="estimated-flow" aria-label="예상 API 흐름">
-                {estimatedFlow.length > 0 ? (
-                  estimatedFlow.map((step, index) => (
-                    <article key={step.id} className="estimated-step">
-                      <span>{String(index + 1).padStart(2, '0')}</span>
-                      <div>
-                        <em>{step.layer}</em>
-                        <strong>{step.label}</strong>
-                      </div>
-                      <small>
-                        {step.detail}
-                        <b>{step.source}</b>
-                      </small>
-                    </article>
-                  ))
-                ) : (
-                  <p className="empty-copy">REST API를 찾지 못해 예상 요청 경로를 만들 수 없습니다.</p>
-                )}
-              </div>
-
-              <div className="analysis-boundary">
-                <strong>
-                  {runtimeSupported
-                    ? '이 API는 요청 후 실제 Trace를 확인할 수 있습니다.'
-                    : !selectedApi.methodSpecified
-                      ? 'Handler mapping에 HTTP method가 없어 정적 분석만 제공합니다.'
-                      : externalRunnable && externalTraceVerified
-                        ? '외부 요청에 Trace Context를 연결해 실제 span을 수집합니다.'
-                        : externalRunnable && externalTraceConfigured
-                          ? '외부 요청을 보내 Agent의 최초 span 수신을 확인합니다.'
-                        : externalRunnable
-                          ? '실행 명령을 생성하고 Agent로 대상 앱을 재시작하세요.'
-                      : hasIntegrationBoundary
-                      ? '외부 연동 경계를 정적 분석으로 표시합니다.'
-                      : '이 샘플 API는 정적 분석만 제공합니다.'}
-                </strong>
-                <p>
-                  {runtimeSupported
-                    ? '왼쪽 요청 설정에서 API를 실행하면 Trace 탭으로 이동합니다.'
-                    : !selectedApi.methodSpecified
-                      ? 'StackFlow는 HTTP method를 임의로 추측하지 않습니다. 소스에서 method를 확인하세요.'
-                      : externalRunnable && externalTraceVerified
-                        ? '요청 시 traceparent를 강제로 주입하고 같은 trace ID의 OTLP span을 기다립니다.'
-                        : externalRunnable && externalTraceConfigured
-                          ? '실행 명령으로 앱을 재시작했다면 이 요청이 Agent 확인 요청이 됩니다.'
-                        : externalRunnable
-                          ? '프로젝트 구조 탭의 실행 Trace 설정에서 재실행 명령을 만들 수 있습니다.'
-                      : hasIntegrationBoundary
-                      ? 'Gateway와 Client는 naming과 package 구조에서 감지한 외부 호출 경계입니다.'
-                      : 'Product 샘플 API를 선택하면 내장 Runtime Trace를 실행할 수 있습니다.'}
-                </p>
-              </div>
-                </div>
-              </details>
+              <RequestFlowPanel
+                methodLabel={selectedApiMethodLabel}
+                path={selectedApi.pathTemplate}
+                estimatedFlow={estimatedFlow}
+                runtimeSupported={runtimeSupported}
+                methodSpecified={selectedApi.methodSpecified}
+                externalRunnable={externalRunnable}
+                externalTraceConfigured={externalTraceConfigured}
+                externalTraceVerified={externalTraceVerified}
+                hasIntegrationBoundary={hasIntegrationBoundary}
+              />
             </div>
           </RequestView>
 
@@ -1242,139 +925,17 @@ export function StackFlowWorkbench() {
           </ProjectView>
 
           <RequestView active={activeView === 'api'}>
-            <div className="panel-card inspector-workbench">
-              <div className="panel-header">
-                <div>
-                  <span className="section-label">선택한 API 근거</span>
-                  <h2>{selectedApi.label}</h2>
-                  <p>{selectedApi.description}</p>
-                </div>
-                <span className={`pill pill--inline ${runtimeSupported ? 'pill--success' : 'pill--warning'}`}>
-                  {runtimeModeLabel}
-                </span>
-              </div>
-              <div className="insight-list">
-                <article>
-                  <span>Handler</span>
-                  <strong>{selectedApi.controller}.{selectedApi.handler}</strong>
-                  <p>{selectedApiMethodLabel} {selectedApi.pathTemplate}</p>
-                </article>
-                <article>
-                  <span>예상 경로</span>
-                  <strong>{estimatedFlow.map((step) => step.label).join(' → ')}</strong>
-                  <p>{hasIntegrationBoundary ? 'UseCase, Gateway, Client를 분리해 외부 연동 경계를 표시합니다.' : '감지된 domain layer의 클래스 이름을 기준으로 구성합니다.'}</p>
-                </article>
-                <article>
-                  <span>실행 가능 범위</span>
-                  <strong>{runtimeSupported || externalTraceVerified ? '실제 Trace 가능' : externalTraceConfigured ? 'Agent 확인 전' : !selectedApi.methodSpecified ? '정적 분석만 가능' : externalRunnable ? 'Agent 설정 필요' : hasIntegrationBoundary ? '외부 연동 구조만 표시' : '정적 분석만 가능'}</strong>
-                  <p>{runtimeSupported ? '요청을 실행하면 Trace 탭에서 실제 흐름을 확인할 수 있습니다.' : externalTraceVerified ? 'Agent span 수신 이력이 있으며 traceparent로 실제 흐름을 연결합니다.' : externalTraceConfigured ? '앱을 Agent로 재시작한 뒤 이 API를 요청하면 최초 span 수신을 확인합니다.' : !selectedApi.methodSpecified ? 'Controller method에 HTTP verb가 명시되지 않았습니다.' : externalRunnable ? '프로젝트 구조에서 실행 명령을 생성하고 대상 앱을 재시작하세요.' : hasIntegrationBoundary ? '이 샘플 API는 연동 계층을 정적으로 설명합니다.' : '이 API는 현재 정적 분석만 제공합니다.'}</p>
-                </article>
-              </div>
-              {externalRunnable ? (
-                <section className="inspector-section response-card external-response-card">
-                  <div className="section-row">
-                    <span className="section-label">외부 HTTP 결과</span>
-                    <span className={`pill pill--inline pill--${(externalResponse?.resultStatus ?? 'idle').toLowerCase()}`}>
-                      {externalResponse ? `HTTP ${externalResponse.httpStatus || '-'}` : '대기'}
-                    </span>
-                  </div>
-                  {externalResponse ? (
-                    <>
-                      <article className="evidence-block evidence-block--request">
-                        <header>
-                          <span>보낸 요청</span>
-                          <strong>{externalRequestSnapshot?.method ?? (selectedApi.methodSpecified ? selectedApi.method : selectedApiMethodLabel)}</strong>
-                        </header>
-                        <p>{externalRequestSnapshot?.targetUrl ?? externalTargetPreview}</p>
-                        <div className="evidence-grid">
-                          <span>
-                            <strong>Query</strong>
-                            {countEnabledEntries(externalRequestSnapshot?.queryParams ?? [])}
-                          </span>
-                          <span>
-                            <strong>Header</strong>
-                            {countEnabledEntries(externalRequestSnapshot?.headers ?? [])}
-                          </span>
-                          <span>
-                            <strong>Body</strong>
-                            {externalRequestSnapshot?.requestBody ? '사용' : '없음'}
-                          </span>
-                        </div>
-                      </article>
-                      <article className="evidence-block evidence-block--response">
-                        <header>
-                          <span>받은 응답</span>
-                          <strong>HTTP {externalResponse.httpStatus || '-'}</strong>
-                        </header>
-                        <div className="evidence-grid">
-                          <span>
-                            <strong>소요 시간</strong>
-                            {externalResponse.durationMs}ms
-                          </span>
-                          <span>
-                            <strong>Content-Type</strong>
-                            {externalResponse.contentType || '-'}
-                          </span>
-                          {externalResponse.traceId ? (
-                            <span>
-                              <strong>Trace</strong>
-                              {externalResponse.traceId.slice(0, 8)} · {TRACE_COLLECTION_STATUS_LABEL[traceCollectionStatus]}
-                            </span>
-                          ) : null}
-                        </div>
-                      </article>
-                      {externalResponse.errorMessage ? (
-                        <p className="external-error">{externalResponse.errorMessage}</p>
-                      ) : null}
-                      {formattedExternalResponseBody ? (
-                        <pre className="response-body response-body--external">{formattedExternalResponseBody}</pre>
-                      ) : (
-                        <p className="empty-copy">대상 API가 빈 응답 본문을 반환했습니다.</p>
-                      )}
-                    </>
-                  ) : (
-                    <p className="empty-copy">대상 기본 URL을 입력하고 요청을 실행하면 응답을 확인할 수 있습니다.</p>
-                  )}
-                </section>
-              ) : null}
-              {!externalRunnable ? (
-                <section className="inspector-section response-card external-response-card">
-                  <div className="section-row">
-                    <span className="section-label">응답</span>
-                    <span className={`pill pill--inline pill--${(traceDetail?.resultStatus ?? 'idle').toLowerCase()}`}>
-                      {traceDetail ? `HTTP ${traceDetail.httpStatus || '-'}` : '대기'}
-                    </span>
-                  </div>
-                  {formattedResponseBody ? (
-                    <>
-                      <article className="evidence-block evidence-block--response">
-                        <header>
-                          <span>받은 응답</span>
-                          <strong>{traceDetail?.durationMs ?? 0}ms</strong>
-                        </header>
-                        <div className="evidence-grid">
-                          <span>
-                            <strong>Trace</strong>
-                            {traceDetail?.traceId.slice(0, 8) ?? '-'}
-                          </span>
-                          <span>
-                            <strong>이벤트</strong>
-                            {traceDetail?.events.length ?? 0}
-                          </span>
-                          <span>
-                            <strong>결과</strong>
-                            {traceDetail ? EVENT_STATUS_LABEL[traceDetail.resultStatus] : '대기'}
-                          </span>
-                        </div>
-                      </article>
-                      <pre className="response-body response-body--external">{formattedResponseBody}</pre>
-                    </>
-                  ) : (
-                    <p className="empty-copy">선택한 API를 실행하면 JSON 응답이 표시됩니다.</p>
-                  )}
-                </section>
-              ) : null}
-            </div>
+            <RequestEvidencePanel
+              selectedApi={selectedApi}
+              methodLabel={selectedApiMethodLabel}
+              runtimeModeLabel={runtimeModeLabel}
+              runtimeSupported={runtimeSupported}
+              externalRunnable={externalRunnable}
+              externalTraceConfigured={externalTraceConfigured}
+              externalTraceVerified={externalTraceVerified}
+              hasIntegrationBoundary={hasIntegrationBoundary}
+              estimatedFlow={estimatedFlow}
+            />
           </RequestView>
 
           <TraceView active={activeView === 'runtime'}>

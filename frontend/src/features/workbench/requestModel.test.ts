@@ -3,6 +3,7 @@ import {
   buildExternalTargetPreview,
   countEnabledEntries,
   createRequestEntry,
+  filterApis,
   formatResponseBody,
   parseResponseBody,
   removeRequestEntry,
@@ -23,10 +24,21 @@ describe('request model', () => {
       .toBe('http://localhost:8091/products?page=2')
   })
 
-  it('updates and clears the final request entry instead of removing the editor row', () => {
+  it('updates and removes request entries', () => {
     const entries = [{ id: '1', key: 'page', value: '1', enabled: true }]
     expect(updateRequestEntries(entries, '1', { value: '3' })[0].value).toBe('3')
-    expect(removeRequestEntry(entries, '1')).toEqual([{ id: '1', key: '', value: '', enabled: false }])
+    expect(removeRequestEntry(entries, '1')).toEqual([])
+  })
+
+  it('filters endpoints without changing their source order', () => {
+    const apis = [
+      { id: 'list', method: 'GET', methodSpecified: true, pathTemplate: '/products', controller: 'ProductController', handler: 'list', label: '상품 목록' },
+      { id: 'create', method: 'POST', methodSpecified: true, pathTemplate: '/orders', controller: 'OrderController', handler: 'create', label: '주문 생성' },
+    ] as Parameters<typeof filterApis>[0]
+
+    expect(filterApis(apis, 'product')).toEqual([apis[0]])
+    expect(filterApis(apis, 'POST')).toEqual([apis[1]])
+    expect(filterApis(apis, '')).toEqual(apis)
   })
 
   it('formats JSON and preserves non-JSON response bodies', () => {
