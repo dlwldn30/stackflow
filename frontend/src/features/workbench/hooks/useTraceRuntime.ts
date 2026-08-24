@@ -3,12 +3,14 @@ import type { ReactFlowInstance } from '@xyflow/react'
 import type { TraceCollectionStatus, TraceDetail, TraceSummary } from '../../../types/trace'
 import type { StreamStatus } from '../../../ui/copy'
 import type { ActionFields, StateFields, TraceViewTab } from '../types'
+import type { TraceHistoryFilter } from '../traceModel'
 
 export function useTraceRuntime() {
   const [traceDetail, setTraceDetail] = useState<TraceDetail | null>(null)
   const [recentTraces, setRecentTraces] = useState<TraceSummary[]>([])
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [traceViewTab, setTraceViewTab] = useState<TraceViewTab>('timeline')
+  const [traceHistoryFilter, setTraceHistoryFilter] = useState<TraceHistoryFilter>('all')
   const [streamStatus, setStreamStatus] = useState<StreamStatus>('idle')
   const [traceCollectionStatus, setTraceCollectionStatus] = useState<TraceCollectionStatus>('DISABLED')
   const activeStreamRef = useRef<EventSource | null>(null)
@@ -35,6 +37,7 @@ export function useTraceRuntime() {
     recentTraces, setRecentTraces,
     selectedNodeId, setSelectedNodeId,
     traceViewTab, setTraceViewTab,
+    traceHistoryFilter, setTraceHistoryFilter,
     streamStatus, setStreamStatus,
     traceCollectionStatus, setTraceCollectionStatus,
     activeStreamRef,

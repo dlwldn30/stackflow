@@ -10,6 +10,7 @@ import { useProjectWorkspace } from './useProjectWorkspace'
 import { useRequestExecution } from './useRequestExecution'
 import { useTraceRuntime } from './useTraceRuntime'
 import type { ApiDefinition, ExternalRequestSnapshot } from '../types'
+import { buildFailurePropagationPath, filterTraceHistory, getDefaultInspectionEvent, getInspectorEvent, getTraceOutcome } from '../traceModel'
 import { EMPTY_API_DEFINITION, EMPTY_DOMAIN, FALLBACK_API_CATALOG, FALLBACK_PROJECT_STRUCTURE, PROJECT_STATUS_CONTENT, matchesTraceEndpoint } from '../fixtures'
 import { buildExternalRequestMessage, buildExternalTargetPreview, buildRequestMessage, createRequestEntry, filterApis, formatResponseBody, parseResponseBody, toEnabledEntries } from '../requestModel'
 import { buildCommonProjectLayers, buildDomainStructurePath, buildEstimatedFlow, buildProjectMetrics, compareEstimatedAndActualFlow, createPlaceholderTrace, fetchTraceWithRetry, flattenProjectApis, getApiMethodBadgeClassName, getApiMethodLabel, getDomainDisplayMode, groupProjectLayers, isConcreteMethodApi, isStackFlowRuntimeApi } from '../workbenchModel'
@@ -45,6 +46,7 @@ export function useWorkbenchController() {
   const {
     traceDetail, setTraceDetail, recentTraces, setRecentTraces,
     selectedNodeId, setSelectedNodeId, traceViewTab, setTraceViewTab,
+    traceHistoryFilter, setTraceHistoryFilter,
     streamStatus, setStreamStatus, traceCollectionStatus, setTraceCollectionStatus,
     activeStreamRef, activeRunIdRef, flowInstanceRef, closeActiveStream, resetTraceRuntime,
   } = runtime
@@ -56,16 +58,22 @@ export function useWorkbenchController() {
   )
   const primaryFailureEvent = getPrimaryFailureEvent(traceDetail?.events ?? [])
   const primaryFailureNodeId = primaryFailureEvent?.spanId ?? primaryFailureEvent?.component ?? null
-  const selectedNode = getNodeDetail(
-    graph.states,
-    selectedNodeId ?? primaryFailureNodeId ?? graph.states.find((state) => state.active)?.id ?? null,
-  )
-  const activeNodeCount = graph.states.filter((state) => state.active).length
-  const latestEvent = traceDetail?.events.at(-1) ?? null
-  const inspectorEvent = primaryFailureEvent ?? latestEvent
-  const primaryFailureLabel = graph.states.find((state) => state.id === primaryFailureNodeId)?.label
+  const defaultInspectionEvent = getDefaultInspectionEvent(traceDetail, primaryFailureEvent)
+  const defaultInspectionNodeId = defaultInspectionEvent?.spanId ?? defaultInspectionEvent?.component ?? null
+  const selectedNode = getNodeDetail(graph.states, selectedNodeId)
+    ?? getNodeDetail(graph.states, defaultInspectionNodeId)
+  const inspectorEvent = getInspectorEvent(selectedNode)
+  const primaryFailureLabel = primaryFailureEvent?.eventType
+    ?? graph.states.find((state) => state.id === primaryFailureNodeId)?.label
     ?? primaryFailureEvent?.component
     ?? null
+  const traceOutcome = traceDetail ? getTraceOutcome(traceDetail, primaryFailureEvent) : null
+  const failurePropagationPath = buildFailurePropagationPath(traceDetail?.events ?? [], primaryFailureEvent)
+  const filteredRecentTraces = filterTraceHistory(recentTraces, traceHistoryFilter)
+
+  useEffect(() => {
+    setSelectedNodeId(null)
+  }, [traceDetail?.traceId, setSelectedNodeId])
   const selectedDomain = projectStructure.domains.find((domain) => domain.id === selectedDomainId) ?? projectStructure.domains[0] ?? EMPTY_DOMAIN
   const hasDetectedDomains = projectStructure.domains.length > 0
   const hasDetectedApis = apiCatalog.length > 0
@@ -140,10 +148,6 @@ export function useWorkbenchController() {
   const selectedApiMethodLabel = getApiMethodLabel(selectedApi)
   const selectedApiMethodClassName = getApiMethodBadgeClassName(selectedApi)
   const graphFitKey = `${traceDetail?.traceId ?? 'empty'}-${traceDetail?.events.length ?? 0}`
-  const recentEvents = useMemo(() => {
-    return traceDetail?.events.slice(0, 8) ?? []
-  }, [traceDetail])
-
   const formattedResponseBody = useMemo(() => {
     if (!lastResponseBody) {
       return null
@@ -636,7 +640,6 @@ export function useWorkbenchController() {
               endedAt: payload.endedAt,
             }
           })
-          setSelectedNodeId(payload.spanId ?? payload.component)
         })
       },
       onCollectionStatus: (payload) => {
@@ -815,6 +818,8 @@ export function useWorkbenchController() {
     setSelectedNodeId,
     traceViewTab,
     setTraceViewTab,
+    traceHistoryFilter,
+    setTraceHistoryFilter,
     streamStatus,
     setStreamStatus,
     traceCollectionStatus,
@@ -830,10 +835,11 @@ export function useWorkbenchController() {
     primaryFailureEvent,
     primaryFailureNodeId,
     selectedNode,
-    activeNodeCount,
-    latestEvent,
     inspectorEvent,
     primaryFailureLabel,
+    traceOutcome,
+    failurePropagationPath,
+    filteredRecentTraces,
     selectedDomain,
     hasDetectedDomains,
     hasDetectedApis,
@@ -870,7 +876,6 @@ export function useWorkbenchController() {
     selectedApiMethodLabel,
     selectedApiMethodClassName,
     graphFitKey,
-    recentEvents,
     formattedResponseBody,
     formattedExternalResponseBody,
     loadApiCatalog,

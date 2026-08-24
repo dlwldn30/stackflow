@@ -3,10 +3,11 @@ import type { WaterfallModel } from '../lib/waterfall'
 interface TraceWaterfallProps {
   model: WaterfallModel
   selectedSpanId: string | null
+  primaryFailureSpanId: string | null
   onSelectSpan: (spanId: string) => void
 }
 
-export function TraceWaterfall({ model, selectedSpanId, onSelectSpan }: TraceWaterfallProps) {
+export function TraceWaterfall({ model, selectedSpanId, primaryFailureSpanId, onSelectSpan }: TraceWaterfallProps) {
   return (
     <section className="waterfall" aria-label="Span 타임라인">
       <header className="waterfall__head">
@@ -35,33 +36,37 @@ export function TraceWaterfall({ model, selectedSpanId, onSelectSpan }: TraceWat
       </div>
 
       <div className="waterfall-rows">
-        {model.spans.map((span) => (
-          <button
-            key={span.id}
-            type="button"
-            className={`waterfall-row waterfall-row--${span.event.status.toLowerCase()}${selectedSpanId === span.id ? ' is-selected' : ''}`}
-            onClick={() => onSelectSpan(span.id)}
-          >
-            <span className="waterfall-row__name" style={{ paddingLeft: `${10 + Math.min(span.depth, 6) * 14}px` }}>
-              <strong>{span.event.eventType}</strong>
-              <small>{span.event.component} · {span.event.spanKind ?? 'EVENT'}</small>
-            </span>
-            <span className="waterfall-row__track">
-              <span
-                className={`waterfall-row__bar${span.widthPercent < 8 ? ' is-compact' : ''}`}
-                style={{ left: `${span.leftPercent}%`, width: `${span.widthPercent}%` }}
-                aria-label={`${span.durationMs}ms`}
-              >
-                {span.widthPercent >= 8 ? <span>{span.durationMs}ms</span> : null}
+        {model.spans.map((span) => {
+          const selectionId = span.event.spanId ?? span.event.component
+
+          return (
+            <button
+              key={span.id}
+              type="button"
+              className={`waterfall-row waterfall-row--${span.event.status.toLowerCase()}${selectedSpanId === selectionId ? ' is-selected' : ''}${primaryFailureSpanId === selectionId ? ' is-primary-failure' : ''}`}
+              onClick={() => onSelectSpan(selectionId)}
+            >
+              <span className="waterfall-row__name" style={{ paddingLeft: `${10 + Math.min(span.depth, 6) * 14}px` }}>
+                <strong>{span.event.eventType}</strong>
+                <small>{span.event.component} · {span.event.spanKind ?? 'EVENT'}</small>
               </span>
-            </span>
-            <span className="waterfall-row__exclusive">
-              {span.bottleneckRank ? <b>#{span.bottleneckRank}</b> : null}
-              <strong>{span.exclusiveMs}ms</strong>
-              <small>자체</small>
-            </span>
-          </button>
-        ))}
+              <span className="waterfall-row__track">
+                <span
+                  className={`waterfall-row__bar${span.widthPercent < 8 ? ' is-compact' : ''}`}
+                  style={{ left: `${span.leftPercent}%`, width: `${span.widthPercent}%` }}
+                  aria-label={`${span.durationMs}ms`}
+                >
+                  {span.widthPercent >= 8 ? <span>{span.durationMs}ms</span> : null}
+                </span>
+              </span>
+              <span className="waterfall-row__exclusive">
+                {span.bottleneckRank ? <b>#{span.bottleneckRank}</b> : null}
+                <strong>{span.exclusiveMs}ms</strong>
+                <small>자체</small>
+              </span>
+            </button>
+          )
+        })}
       </div>
     </section>
   )

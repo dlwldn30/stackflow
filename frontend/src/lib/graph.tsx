@@ -87,6 +87,10 @@ const BASE_EDGES = [
 
 const STATUS_PRIORITY: EventStatus[] = ['TIMEOUT', 'ERROR', 'WARNING', 'SUCCESS', 'SKIPPED']
 
+function isFailureStatus(status: EventStatus | 'IDLE' | undefined): boolean {
+  return status === 'ERROR' || status === 'TIMEOUT'
+}
+
 export function buildGraph(trace: TraceDetail | null): {
   nodes: Node[]
   edges: Edge[]
@@ -134,6 +138,7 @@ export function buildGraph(trace: TraceDetail | null): {
     const targetState = statesById.get(target)
     const edgeId = `${source}-${target}`
     const active = activeEdges.has(edgeId)
+    const failed = active && (isFailureStatus(sourceState?.status) || isFailureStatus(targetState?.status))
 
     return {
       id: edgeId,
@@ -141,12 +146,12 @@ export function buildGraph(trace: TraceDetail | null): {
       target,
       type: 'smoothstep',
       animated: active && Boolean(sourceState?.active && targetState?.active),
-      className: `flow-edge${active ? ' is-active' : ''}`,
+      className: `flow-edge${active ? ' is-active' : ''}${failed ? ' is-failed' : ''}`,
       markerEnd: {
         type: MarkerType.ArrowClosed,
         width: active ? 18 : 14,
         height: active ? 18 : 14,
-        color: active ? '#1f7a55' : '#9aa6b5',
+        color: failed ? '#c2413c' : active ? '#1f7a55' : '#9aa6b5',
       },
       zIndex: active ? 8 : 1,
       interactionWidth: 24,
@@ -222,19 +227,19 @@ function buildSpanGraph(events: TraceEvent[]): {
     if (!event.spanId || !event.parentSpanId || !eventsBySpanId.has(event.parentSpanId)) {
       return []
     }
-    const failed = event.status === 'ERROR' || event.status === 'TIMEOUT'
+    const failed = isFailureStatus(event.status)
     return [{
       id: `${event.parentSpanId}-${event.spanId}`,
       source: event.parentSpanId,
       target: event.spanId,
       type: 'smoothstep',
       animated: false,
-      className: 'flow-edge is-active',
+      className: `flow-edge is-active${failed ? ' is-failed' : ''}`,
       markerEnd: {
         type: MarkerType.ArrowClosed,
         width: 18,
         height: 18,
-        color: failed ? '#b42318' : '#1f7a55',
+        color: failed ? '#c2413c' : '#1f7a55',
       },
       zIndex: 8,
       interactionWidth: 24,
