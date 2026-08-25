@@ -63,11 +63,12 @@ export const getRecentTraces = () =>
 export const createTraceSession = () =>
   requestJson<TraceSessionResponse>('/api/traces/session', { method: 'POST' }, 'Trace 세션을 만들지 못했습니다.')
 
-export const executeExternalRequest = (payload: unknown) =>
+export const executeExternalRequest = (payload: unknown, signal?: AbortSignal) =>
   requestJson<ExternalRequestResponse>('/api/external/request', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
+    signal,
   }, '외부 API 요청 프록시가 실패했습니다.')
 
 export const getTrace = (traceId: string) =>

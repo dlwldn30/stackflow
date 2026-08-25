@@ -42,6 +42,7 @@ export function useWorkbenchController() {
     externalResponse, setExternalResponse, updateQueryParam, updateRequestHeader,
     removeQueryParam, removeRequestHeader, addQueryParam, addRequestHeader,
     resetForExternalProject, resetForSampleProject,
+    beginExternalRequest, completeExternalRequest, cancelActiveRequest,
   } = request
   const {
     traceDetail, setTraceDetail, recentTraces, setRecentTraces,
@@ -173,6 +174,10 @@ export function useWorkbenchController() {
   useEffect(() => {
     void loadApiCatalog()
     void loadRecentTraces()
+    return () => {
+      activeRunIdRef.current += 1
+      cancelActiveRequest()
+    }
   }, [])
 
   useEffect(() => {
@@ -195,11 +200,13 @@ export function useWorkbenchController() {
   /* oxlint-enable react-hooks/exhaustive-deps */
 
   async function loadApiCatalog() {
+    const loadRunId = activeRunIdRef.current
     try {
       const defaultProjectPath = import.meta.env.VITE_DEFAULT_PROJECT_PATH
       const structure = defaultProjectPath
         ? await analyzeProject(defaultProjectPath)
         : await getProjectStructure()
+      if (activeRunIdRef.current !== loadRunId) return
       const analyzedCatalog = flattenProjectApis(structure)
       applyProjectStructure(
         structure,
@@ -208,6 +215,7 @@ export function useWorkbenchController() {
         defaultProjectPath ? 'external' : 'sample',
       )
     } catch {
+      if (activeRunIdRef.current !== loadRunId) return
       startTransition(() => {
         setProjectStructure(FALLBACK_PROJECT_STRUCTURE)
         setApiCatalog(FALLBACK_API_CATALOG)
@@ -232,17 +240,21 @@ export function useWorkbenchController() {
       return
     }
 
+    invalidateActiveRun()
+    const analysisRunId = activeRunIdRef.current
     setAnalysisState('loading')
     setAnalysisMessage('프로젝트 파일과 Spring mapping을 읽고 있습니다...')
     const nextAnalysisTarget = requestedPath.trim() === '' ? 'sample' : 'external'
 
     try {
       const structure = await analyzeProject(requestedPath)
+      if (activeRunIdRef.current !== analysisRunId) return
       const analyzedCatalog = flattenProjectApis(structure)
       applyProjectStructure(structure, analyzedCatalog, structure.analysisMessage, nextAnalysisTarget)
       setAnalysisState(structure.analysisStatus === 'FAILED' ? 'error' : 'idle')
       setActiveView('project')
     } catch (error) {
+      if (activeRunIdRef.current !== analysisRunId) return
       setAnalysisState('error')
       setAnalysisMessage(error instanceof Error ? error.message : '프로젝트 분석에 실패했습니다.')
     }
@@ -280,9 +292,7 @@ export function useWorkbenchController() {
     message: string,
     target: 'sample' | 'external',
   ) {
-    if (target === 'external') {
-      closeActiveStream()
-    }
+    invalidateActiveRun()
 
     startTransition(() => {
       setProjectStructure(structure)
@@ -332,6 +342,9 @@ export function useWorkbenchController() {
     if (domain.id === EMPTY_DOMAIN.id) {
       return
     }
+    if (domain.id !== selectedDomain.id) {
+      invalidateActiveRun()
+    }
     setSelectedDomainId(domain.id)
     setApiScope('domain')
     setActiveView('project')
@@ -344,7 +357,7 @@ export function useWorkbenchController() {
 
   function selectApi(api: ApiDefinition) {
     if (api.id !== selectedApi.id) {
-      closeActiveStream()
+      invalidateActiveRun()
       setTraceDetail(null)
       setSelectedNodeId(null)
       setStreamStatus('idle')
@@ -395,10 +408,9 @@ export function useWorkbenchController() {
       return
     }
 
-    const runId = activeRunIdRef.current + 1
+    invalidateActiveRun()
+    const runId = activeRunIdRef.current
     const requestMethod = selectedApi.method as HttpMethod
-    activeRunIdRef.current = runId
-    closeActiveStream()
     setRequestState('loading')
     setStreamStatus('connecting')
     setActiveView('runtime')
@@ -518,9 +530,8 @@ export function useWorkbenchController() {
     }
 
     const captureTrace = externalTraceConfigured
-    const runId = activeRunIdRef.current + 1
-    activeRunIdRef.current = runId
-    closeActiveStream()
+    invalidateActiveRun()
+    const runId = activeRunIdRef.current
     setActiveView('api')
     setRequestState('loading')
     setStreamStatus('idle')
@@ -554,6 +565,7 @@ export function useWorkbenchController() {
 
     setRequestMessage(`${selectedApiMethodLabel} ${externalTargetPreview} 요청 중...`)
 
+    const requestAbortController = beginExternalRequest()
     try {
       const payload = await executeExternalRequest({
         targetBaseUrl: normalizedTargetBaseUrl,
@@ -563,17 +575,22 @@ export function useWorkbenchController() {
         headers: toEnabledEntries(requestHeaders),
         requestBody: nextRequestBody || null,
         captureTrace,
-      })
-      startTransition(() => {
-        setExternalResponse(payload)
-        setLastResponseBody(parseResponseBody(payload.responseBody))
-        setExternalRequestSnapshot(requestSnapshot)
-        setRequestState(payload.resultStatus === 'SUCCESS' ? 'idle' : 'error')
-        setTraceCollectionStatus(payload.traceCollectionStatus)
-        setRequestMessage(buildExternalRequestMessage(payload))
-      })
+      }, requestAbortController.signal)
+      completeExternalRequest(requestAbortController)
+      if (activeRunIdRef.current !== runId) {
+        return
+      }
+      setExternalResponse(payload)
+      setLastResponseBody(parseResponseBody(payload.responseBody))
+      setExternalRequestSnapshot(requestSnapshot)
+      setRequestState(payload.resultStatus === 'SUCCESS' ? 'idle' : 'error')
+      setTraceCollectionStatus(payload.traceCollectionStatus)
+      setRequestMessage(buildExternalRequestMessage(payload))
 
       if (payload.traceId) {
+        if (activeRunIdRef.current !== runId) {
+          return
+        }
         const traceId = payload.traceId
         setTraceDetail(createPlaceholderTrace(
           traceId,
@@ -587,6 +604,9 @@ export function useWorkbenchController() {
         setActiveView('runtime')
         setRequestMessage('외부 요청은 완료됐습니다. OpenTelemetry span을 기다리고 있습니다...')
         try {
+          if (activeRunIdRef.current !== runId) {
+            return
+          }
           const stream = await openTraceStream(traceId, runId)
           if (activeRunIdRef.current !== runId) {
             stream.close()
@@ -594,11 +614,18 @@ export function useWorkbenchController() {
           }
           activeStreamRef.current = stream
         } catch {
+          if (activeRunIdRef.current !== runId) {
+            return
+          }
           setStreamStatus('error')
           setRequestMessage('Trace 실시간 연결을 열지 못했습니다. Agent와 수집 주소를 확인하세요.')
         }
       }
     } catch (error) {
+      completeExternalRequest(requestAbortController)
+      if (activeRunIdRef.current !== runId || error instanceof Error && error.name === 'AbortError') {
+        return
+      }
       setRequestState('error')
       setRequestMessage(error instanceof Error ? error.message : '외부 API 요청 중 오류가 발생했습니다.')
     }
@@ -746,8 +773,10 @@ export function useWorkbenchController() {
   }
 
   async function selectTrace(traceId: string) {
-    closeActiveStream()
+    invalidateActiveRun()
+    const selectionRunId = activeRunIdRef.current
     const detail = await fetchTraceWithRetry(traceId)
+    if (activeRunIdRef.current !== selectionRunId) return
     const matchingApi = apiCatalog.find((api) => matchesTraceEndpoint(api, detail))
     startTransition(() => {
       setTraceDetail(detail)
@@ -763,9 +792,22 @@ export function useWorkbenchController() {
       setRequestMessage(`기록에서 Trace ${detail.traceId.slice(0, 8)}를 불러왔습니다.`)
     })
   }
+
+  function invalidateActiveRun() {
+    activeRunIdRef.current += 1
+    cancelActiveRequest()
+    closeActiveStream()
+  }
+
+  function navigateToView(view: ViewMode) {
+    if (view !== activeView) {
+      invalidateActiveRun()
+    }
+    setActiveView(view)
+  }
   return {
     activeView,
-    setActiveView,
+    setActiveView: navigateToView,
     project,
     request,
     runtime,

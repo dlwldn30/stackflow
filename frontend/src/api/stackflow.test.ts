@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { analyzeProject, getInstrumentationProfileStatus, getProjectStructure } from './stackflow'
+import { analyzeProject, executeExternalRequest, getInstrumentationProfileStatus, getProjectStructure } from './stackflow'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -58,5 +58,17 @@ describe('stackflow API client', () => {
       '/api/instrumentation/profiles/profile%2Fid/status',
       undefined,
     )
+  })
+
+  it('passes an abort signal to an external request', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ resultStatus: 'SUCCESS' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const controller = new AbortController()
+
+    await executeExternalRequest({ method: 'GET' }, controller.signal)
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/external/request', expect.objectContaining({
+      signal: controller.signal,
+    }))
   })
 })

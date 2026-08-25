@@ -90,6 +90,7 @@ export interface ExternalRequestResponse {
   resultStatus: 'SUCCESS' | 'ERROR'
   contentType: string
   responseBody: string
+  responseBodyTruncated: boolean
   errorMessage: string | null
   traceId: string | null
   traceCollectionStatus: TraceCollectionStatus
