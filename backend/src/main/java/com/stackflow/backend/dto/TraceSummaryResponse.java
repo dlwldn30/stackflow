@@ -1,6 +1,7 @@
 package com.stackflow.backend.dto;
 
 import com.stackflow.backend.domain.EventStatus;
+import com.stackflow.backend.domain.TraceCollectionStatus;
 import java.time.Instant;
 
 public record TraceSummaryResponse(
@@ -10,6 +11,7 @@ public record TraceSummaryResponse(
 	EventStatus resultStatus,
 	int httpStatus,
 	long durationMs,
-	Instant startedAt
+	Instant startedAt,
+	TraceCollectionStatus traceCollectionStatus
 ) {
 }

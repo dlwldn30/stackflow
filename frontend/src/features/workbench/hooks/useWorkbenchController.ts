@@ -68,6 +68,7 @@ export function useWorkbenchController() {
     ?? primaryFailureEvent?.component
     ?? null
   const traceOutcome = traceDetail ? getTraceOutcome(traceDetail, primaryFailureEvent) : null
+  const traceCollectionTimedOut = traceDetail?.traceCollectionStatus === 'TIMED_OUT'
   const failurePropagationPath = buildFailurePropagationPath(traceDetail?.events ?? [], primaryFailureEvent)
   const filteredRecentTraces = filterTraceHistory(recentTraces, traceHistoryFilter)
 
@@ -121,26 +122,30 @@ export function useWorkbenchController() {
       : '정적 분석만 가능'
   const traceDisplayStatus = streamStatus === 'connection_timeout'
     ? STREAM_STATUS_LABEL[streamStatus]
-    : traceDetail?.source === 'OPENTELEMETRY' && streamStatus !== 'idle'
-    ? TRACE_COLLECTION_STATUS_LABEL[traceCollectionStatus]
-    : traceDetail
-      ? EVENT_STATUS_LABEL[traceDetail.resultStatus]
-      : STREAM_STATUS_LABEL[streamStatus]
-  const traceDisplayTone = streamStatus === 'idle' && traceDetail
-    ? traceDetail.resultStatus === 'SUCCESS'
-      ? 'success'
-      : traceDetail.resultStatus === 'WARNING'
-        ? 'warning'
-        : 'error'
-    : streamStatus === 'completed'
-      ? 'success'
-    : streamStatus === 'error'
-      ? 'error'
-      : streamStatus === 'connection_timeout'
-        ? 'warning'
-      : streamStatus === 'idle'
-          ? 'neutral'
-          : 'info'
+    : traceCollectionTimedOut
+      ? TRACE_COLLECTION_STATUS_LABEL.TIMED_OUT
+      : traceDetail?.source === 'OPENTELEMETRY' && streamStatus !== 'idle'
+        ? TRACE_COLLECTION_STATUS_LABEL[traceCollectionStatus]
+        : traceDetail
+          ? EVENT_STATUS_LABEL[traceDetail.resultStatus]
+          : STREAM_STATUS_LABEL[streamStatus]
+  const traceDisplayTone = traceCollectionTimedOut
+    ? 'warning'
+    : streamStatus === 'idle' && traceDetail
+      ? traceDetail.resultStatus === 'SUCCESS'
+        ? 'success'
+        : traceDetail.resultStatus === 'WARNING'
+          ? 'warning'
+          : 'error'
+      : streamStatus === 'completed'
+        ? 'success'
+        : streamStatus === 'error'
+          ? 'error'
+          : streamStatus === 'connection_timeout'
+            ? 'warning'
+            : streamStatus === 'idle'
+              ? 'neutral'
+              : 'info'
   const currentResultStatus = externalResponse?.resultStatus ?? traceDetail?.resultStatus ?? 'IDLE'
   const externalPath = selectedApi.buildPath(productId)
   const externalTargetPreview = buildExternalTargetPreview(targetBaseUrl, externalPath, queryParams)
@@ -474,6 +479,7 @@ export function useWorkbenchController() {
             httpStatus: finalTrace.httpStatus,
             durationMs: finalTrace.durationMs,
             startedAt: finalTrace.startedAt,
+            traceCollectionStatus: finalTrace.traceCollectionStatus,
           })
           return next.slice(0, 8)
         })
@@ -647,6 +653,9 @@ export function useWorkbenchController() {
           return
         }
         setTraceCollectionStatus(payload.status)
+        setTraceDetail((current) => current && current.traceId === payload.traceId
+          ? { ...current, traceCollectionStatus: payload.status }
+          : current)
         if (payload.status === 'PENDING') {
           setStreamStatus('connecting')
         } else if (payload.status === 'COLLECTING') {
@@ -657,6 +666,21 @@ export function useWorkbenchController() {
           setStreamStatus('error')
         }
         setRequestMessage(payload.message)
+        if (payload.status === 'TIMED_OUT') {
+          void fetchTraceWithRetry(payload.traceId).then((detail) => {
+            if (activeRunIdRef.current !== runId) return
+            setTraceDetail(detail)
+            const failureEvent = getPrimaryFailureEvent(detail.events)
+            setSelectedNodeId(
+              failureEvent?.spanId
+                ?? failureEvent?.component
+                ?? detail.events[0]?.spanId
+                ?? detail.events[0]?.component
+                ?? null,
+            )
+            void loadRecentTraces()
+          }).catch(() => undefined)
+        }
       },
       onTerminal: (payload, nextStatus) => {
         if (activeRunIdRef.current !== runId) {
@@ -675,6 +699,9 @@ export function useWorkbenchController() {
               durationMs: payload.durationMs,
               httpStatus: payload.httpStatus,
               resultStatus: payload.resultStatus,
+              traceCollectionStatus: current.source === 'OPENTELEMETRY'
+                ? 'COMPLETED'
+                : current.traceCollectionStatus,
             }
           })
           setRequestMessage(
@@ -725,6 +752,7 @@ export function useWorkbenchController() {
     startTransition(() => {
       setTraceDetail(detail)
       setSelectedNodeId(null)
+      setTraceCollectionStatus(detail.traceCollectionStatus)
       if (matchingApi) {
         setSelectedApiId(matchingApi.id)
         setSelectedDomainId(matchingApi.domainId)

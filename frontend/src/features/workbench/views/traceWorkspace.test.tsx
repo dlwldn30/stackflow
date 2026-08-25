@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { GraphNodeState, TraceDetail, TraceEvent, TraceSummary } from '../../../types/trace'
 import { TraceWaterfall } from '../../../components/TraceWaterfall'
@@ -19,6 +19,7 @@ const detail: TraceDetail = {
   traceId: 'trace', method: 'GET', endpoint: '/lab/products/1001/database-timeout', scenario: 'timeout',
   startedAt: new Date(0).toISOString(), endedAt: new Date(25).toISOString(), durationMs: 25,
   httpStatus: 504, resultStatus: 'TIMEOUT', events: [failureEvent], source: 'OPENTELEMETRY', serviceName: 'trace-lab',
+  traceCollectionStatus: 'COMPLETED',
 }
 
 describe('Trace workspace presentation', () => {
@@ -38,17 +39,44 @@ describe('Trace workspace presentation', () => {
     expect(screen.getByLabelText('오류 전파 경로')).toHaveTextContent('ProductService')
   })
 
+  it('separates span collection timeout from an HTTP request failure', () => {
+    const { container } = render(
+      <TraceOutcomeSummary
+        trace={{ ...detail, httpStatus: 200, resultStatus: 'SUCCESS', events: [], traceCollectionStatus: 'TIMED_OUT' }}
+        outcome="collection_timeout"
+        failureEvent={null}
+        failureLabel={null}
+        propagationPath={[]}
+        onInspectFailure={vi.fn()}
+      />,
+    )
+    expect(within(container).getAllByText('Span 수집 시간 초과')).not.toHaveLength(0)
+    expect(within(container).queryByText('요청 실패')).not.toBeInTheDocument()
+  })
+
   it('changes the recent trace filter explicitly', () => {
     const onFilterChange = vi.fn()
     const traces: TraceSummary[] = [{
       traceId: 'trace', endpoint: '/lab/products/1001', scenario: 'normal', resultStatus: 'SUCCESS',
-      httpStatus: 200, durationMs: 12, startedAt: new Date(0).toISOString(),
+      httpStatus: 200, durationMs: 12, startedAt: new Date(0).toISOString(), traceCollectionStatus: 'DISABLED',
     }]
     render(
       <TraceHistoryPanel traces={traces} totalCount={1} filter="all" selectedTraceId={null} onFilterChange={onFilterChange} onSelectTrace={vi.fn()} />,
     )
     fireEvent.click(screen.getByRole('button', { name: '확인 필요' }))
     expect(onFilterChange).toHaveBeenCalledWith('attention')
+  })
+
+  it('labels a collection timeout without presenting it as an application timeout', () => {
+    const traces: TraceSummary[] = [{
+      traceId: 'trace', endpoint: '/lab/products/1001', scenario: 'external-opentelemetry', resultStatus: 'SUCCESS',
+      httpStatus: 200, durationMs: 12, startedAt: new Date(0).toISOString(), traceCollectionStatus: 'TIMED_OUT',
+    }]
+    const { container } = render(
+      <TraceHistoryPanel traces={traces} totalCount={1} filter="all" selectedTraceId={null} onFilterChange={vi.fn()} onSelectTrace={vi.fn()} />,
+    )
+    const timeoutPill = within(container).getByText('수집 시간 초과')
+    expect(timeoutPill).toHaveClass('pill--warning')
   })
 
   it('shows selected span facts and keeps raw details collapsed', () => {

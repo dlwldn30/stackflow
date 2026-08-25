@@ -16,6 +16,7 @@ const OUTCOME_COPY: Record<TraceOutcome, { label: string; detail: string }> = {
   success: { label: '정상 완료', detail: '실패 없이 요청 처리가 끝났습니다.' },
   recovered: { label: '복구된 실패', detail: '중간 오류가 발생했지만 fallback으로 요청은 완료됐습니다.' },
   failure: { label: '요청 실패', detail: '실제 하위 원인 span부터 확인하세요.' },
+  collection_timeout: { label: 'Span 수집 시간 초과', detail: 'HTTP 요청 결과는 유지됐지만 Agent span 수집이 완료되지 않았습니다.' },
 }
 
 export function TraceOutcomeSummary({
@@ -64,8 +65,10 @@ export function TraceOutcomeSummary({
           </button>
         </div>
       ) : (
-        <div className="trace-cause trace-cause--success">
-          <span className="trace-cause__icon" aria-hidden="true"><CheckCircle2 size={17} /></span>
+        <div className={`trace-cause${outcome === 'success' ? ' trace-cause--success' : outcome === 'collection_timeout' ? ' trace-cause--collection-timeout' : ''}`}>
+          <span className="trace-cause__icon" aria-hidden="true">
+            {outcome === 'collection_timeout' ? <AlertCircle size={17} /> : <CheckCircle2 size={17} />}
+          </span>
           <div className="trace-cause__body">
             <span>실행 결과</span>
             <strong>{copy.label}</strong>

@@ -54,23 +54,29 @@ export function TraceHistoryPanel({
         {traces.length === 0 ? (
           <p className="empty-copy">{totalCount === 0 ? '아직 수집된 Trace가 없습니다.' : '이 조건에 맞는 Trace가 없습니다.'}</p>
         ) : (
-          traces.map((trace) => (
-            <button
-              key={trace.traceId}
-              type="button"
-              className={`trace-item trace-item--${trace.resultStatus.toLowerCase()}${selectedTraceId === trace.traceId ? ' is-selected' : ''}`}
-              onClick={() => onSelectTrace(trace.traceId)}
-            >
-              <div>
-                <strong>{trace.endpoint}</strong>
-                <span>{trace.traceId.slice(0, 8)}</span>
-              </div>
-              <div>
-                <span className={`pill pill--inline pill--${trace.resultStatus.toLowerCase()}`}>{EVENT_STATUS_LABEL[trace.resultStatus]}</span>
-                <span>{trace.durationMs}ms</span>
-              </div>
-            </button>
-          ))
+          traces.map((trace) => {
+            const collectionTimedOut = trace.traceCollectionStatus === 'TIMED_OUT'
+            const tone = collectionTimedOut ? 'collection-timeout' : trace.resultStatus.toLowerCase()
+            return (
+              <button
+                key={trace.traceId}
+                type="button"
+                className={`trace-item trace-item--${tone}${selectedTraceId === trace.traceId ? ' is-selected' : ''}`}
+                onClick={() => onSelectTrace(trace.traceId)}
+              >
+                <div>
+                  <strong>{trace.endpoint}</strong>
+                  <span>{trace.traceId.slice(0, 8)}</span>
+                </div>
+                <div>
+                  <span className={`pill pill--inline pill--${collectionTimedOut ? 'warning' : tone}`}>
+                    {collectionTimedOut ? '수집 시간 초과' : EVENT_STATUS_LABEL[trace.resultStatus]}
+                  </span>
+                  <span>{trace.durationMs}ms</span>
+                </div>
+              </button>
+            )
+          })
         )}
       </div>
     </div>

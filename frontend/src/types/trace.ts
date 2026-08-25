@@ -50,6 +50,7 @@ export interface TraceDetail {
   events: TraceEvent[]
   source: TraceSource
   serviceName: string | null
+  traceCollectionStatus: TraceCollectionStatus
 }
 
 export interface TraceSummary {
@@ -60,6 +61,7 @@ export interface TraceSummary {
   httpStatus: number
   durationMs: number
   startedAt: string
+  traceCollectionStatus: TraceCollectionStatus
 }
 
 export interface TraceSessionResponse {

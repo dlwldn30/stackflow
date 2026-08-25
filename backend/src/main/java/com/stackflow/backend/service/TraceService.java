@@ -47,10 +47,18 @@ public class TraceService {
 	}
 
 	public void storeExternalTrace(Trace trace) {
-		storeTrace(trace);
+		storeTrace(trace, true);
+	}
+
+	public void storeExternalTraceCollectionTimeout(Trace trace) {
+		storeTrace(trace, false);
 	}
 
 	private void storeTrace(Trace trace) {
+		storeTrace(trace, true);
+	}
+
+	private void storeTrace(Trace trace, boolean publishTerminal) {
 		traces.put(trace.traceId(), trace);
 		order.remove(trace.traceId());
 		order.addFirst(trace.traceId());
@@ -59,6 +67,9 @@ public class TraceService {
 			if (expired != null) {
 				traces.remove(expired);
 			}
+		}
+		if (!publishTerminal) {
+			return;
 		}
 		if (trace.resultStatus() == EventStatus.ERROR || trace.resultStatus() == EventStatus.TIMEOUT) {
 			traceStreamService.publishTraceFailed(trace);
@@ -103,7 +114,8 @@ public class TraceService {
 					trace.resultStatus(),
 					trace.httpStatus(),
 					trace.durationMs(),
-					trace.startedAt()
+					trace.startedAt(),
+					trace.traceCollectionStatus()
 				));
 			}
 		}

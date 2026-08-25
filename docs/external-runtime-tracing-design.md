@@ -72,7 +72,14 @@ External trace collection uses these explicit states:
 - `Span 대기`: the HTTP request was sent with trace context and StackFlow is waiting for OTLP.
 - `수집 중`: one or more spans have arrived.
 - `완료`: the span tree is stored and available through Trace API/SSE.
-- `수집 시간 초과`: no usable completed trace arrived within 15 seconds. The HTTP response remains valid and separate.
+- `수집 시간 초과`: no usable completed trace arrived within 15 seconds. The HTTP result remains valid, and the timed-out trace is stored with any partial spans that arrived.
+
+Stored Trace details and summaries expose execution and collection as separate facts:
+
+- `resultStatus`: the HTTP/span execution result.
+- `traceCollectionStatus`: `DISABLED` for sample traces, `COMPLETED` for completed OTLP collection, or `TIMED_OUT` when collection expires.
+
+A collection timeout remains available in recent Trace history and detail lookup. SSE publishes `TIMED_OUT` once as the terminal collection state and then releases the stream.
 
 Sample traces retain the fixed StackFlow component graph. OpenTelemetry traces use the actual `spanId -> parentSpanId` graph.
 

@@ -6,6 +6,7 @@ import com.stackflow.backend.domain.TraceCollectionStatus;
 import com.stackflow.backend.domain.TraceEvent;
 import com.stackflow.backend.domain.TraceSource;
 import jakarta.annotation.PreDestroy;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -18,24 +19,47 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
 public class ExternalTraceService {
 
-	private static final long COLLECTION_TIMEOUT_SECONDS = 15;
-	private static final long COMPLETION_DEBOUNCE_MS = 600;
+	private static final Duration COLLECTION_TIMEOUT = Duration.ofSeconds(15);
+	private static final Duration COMPLETION_DEBOUNCE = Duration.ofMillis(600);
 
 	private final TraceService traceService;
 	private final Map<String, TraceAccumulator> accumulators = new ConcurrentHashMap<>();
-	private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
-		Thread thread = new Thread(runnable, "stackflow-trace-collector");
-		thread.setDaemon(true);
-		return thread;
-	});
+	private final Clock clock;
+	private final ScheduledExecutorService scheduler;
+	private final Duration collectionTimeout;
+	private final Duration completionDebounce;
 
+	private static ScheduledExecutorService createScheduler() {
+		return Executors.newSingleThreadScheduledExecutor(runnable -> {
+			Thread thread = new Thread(runnable, "stackflow-trace-collector");
+			thread.setDaemon(true);
+			return thread;
+		});
+	}
+
+	@Autowired
 	public ExternalTraceService(TraceService traceService) {
+		this(traceService, Clock.systemUTC(), createScheduler(), COLLECTION_TIMEOUT, COMPLETION_DEBOUNCE);
+	}
+
+	ExternalTraceService(
+		TraceService traceService,
+		Clock clock,
+		ScheduledExecutorService scheduler,
+		Duration collectionTimeout,
+		Duration completionDebounce
+	) {
 		this.traceService = traceService;
+		this.clock = clock;
+		this.scheduler = scheduler;
+		this.collectionTimeout = collectionTimeout;
+		this.completionDebounce = completionDebounce;
 	}
 
 	public TraceCaptureContext startCapture(String method, String endpoint) {
@@ -46,13 +70,13 @@ public class ExternalTraceService {
 			parentSpanId,
 			method,
 			endpoint,
-			Instant.now()
+			clock.instant()
 		);
 		traceService.registerExternalTrace(traceId);
 		accumulators.put(traceId, accumulator);
 		traceService.publishExternalTraceStarted(traceId, method, endpoint);
 		traceService.publishCollectionStatus(traceId, TraceCollectionStatus.PENDING, "OpenTelemetry span을 기다리고 있습니다.");
-		scheduler.schedule(() -> timeout(traceId), COLLECTION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+		scheduler.schedule(() -> timeout(traceId), collectionTimeout.toMillis(), TimeUnit.MILLISECONDS);
 		return new TraceCaptureContext(traceId, parentSpanId, "00-" + traceId + "-" + parentSpanId + "-01");
 	}
 
@@ -77,6 +101,9 @@ public class ExternalTraceService {
 		}
 		List<TraceEvent> accepted = new ArrayList<>();
 		synchronized (accumulator) {
+			if (accumulators.get(traceId) != accumulator) {
+				return;
+			}
 			accumulator.serviceName = serviceName;
 			for (TraceEvent event : events) {
 				String key = event.spanId() == null || event.spanId().isBlank() ? event.eventId() : event.spanId();
@@ -84,23 +111,18 @@ public class ExternalTraceService {
 					accepted.add(event);
 				}
 			}
-			accumulator.lastUpdatedAt = Instant.now();
+			accumulator.lastUpdatedAt = clock.instant();
 			accumulator.status = TraceCollectionStatus.COLLECTING;
-		}
-		traceService.publishCollectionStatus(traceId, TraceCollectionStatus.COLLECTING, accepted.size() + "개 span을 수집했습니다.");
-		accepted.forEach(traceService::publishExternalTraceEvent);
-		if (hasServerSpan(accumulator)) {
-			scheduler.schedule(() -> finalizeIfQuiet(traceId), COMPLETION_DEBOUNCE_MS, TimeUnit.MILLISECONDS);
+			traceService.publishCollectionStatus(traceId, TraceCollectionStatus.COLLECTING, accepted.size() + "개 span을 수집했습니다.");
+			accepted.forEach(traceService::publishExternalTraceEvent);
+			if (hasServerSpan(accumulator)) {
+				scheduler.schedule(() -> finalizeIfQuiet(traceId), completionDebounce.toMillis(), TimeUnit.MILLISECONDS);
+			}
 		}
 	}
 
 	public boolean isCaptureActive(String traceId) {
 		return accumulators.containsKey(traceId);
-	}
-
-	public TraceCollectionStatus getStatus(String traceId) {
-		TraceAccumulator accumulator = accumulators.get(traceId);
-		return accumulator == null ? TraceCollectionStatus.COMPLETED : accumulator.status;
 	}
 
 	private void finalizeIfQuiet(String traceId) {
@@ -109,38 +131,17 @@ public class ExternalTraceService {
 			return;
 		}
 		synchronized (accumulator) {
-			if (Duration.between(accumulator.lastUpdatedAt, Instant.now()).toMillis() < COMPLETION_DEBOUNCE_MS
+			if (Duration.between(accumulator.lastUpdatedAt, clock.instant()).compareTo(completionDebounce) < 0
 				|| !hasServerSpan(accumulator)) {
 				return;
 			}
-			List<TraceEvent> events = accumulator.events.values().stream()
-				.sorted(Comparator.comparing(TraceEvent::startedAt).thenComparing(TraceEvent::endedAt))
-				.toList();
-			Instant startedAt = events.stream().map(TraceEvent::startedAt).min(Instant::compareTo).orElse(accumulator.startedAt);
-			Instant endedAt = events.stream().map(TraceEvent::endedAt).max(Instant::compareTo).orElse(Instant.now());
-			EventStatus resultStatus = resultStatus(accumulator.httpStatus, events);
-			long durationMs = Math.max(
-				Duration.between(startedAt, endedAt).toMillis(),
-				accumulator.requestDurationMs
-			);
-			Trace trace = new Trace(
-				traceId,
-				accumulator.method,
-				accumulator.endpoint,
-				"external-opentelemetry",
-				startedAt,
-				endedAt,
-				durationMs,
-				accumulator.httpStatus,
-				resultStatus,
-				events,
-				TraceSource.OPENTELEMETRY,
-				accumulator.serviceName
-			);
+			if (!accumulators.remove(traceId, accumulator)) {
+				return;
+			}
+			Trace trace = buildTrace(accumulator, TraceCollectionStatus.COMPLETED);
 			accumulator.status = TraceCollectionStatus.COMPLETED;
 			traceService.publishCollectionStatus(traceId, TraceCollectionStatus.COMPLETED, "실제 실행 span 수집을 완료했습니다.");
 			traceService.storeExternalTrace(trace);
-			accumulators.remove(traceId);
 		}
 	}
 
@@ -154,19 +155,57 @@ public class ExternalTraceService {
 		if (hasTimeout) {
 			return EventStatus.TIMEOUT;
 		}
-		return hasError || httpStatus >= 400 ? EventStatus.ERROR : EventStatus.SUCCESS;
+		return hasError || httpStatus <= 0 || httpStatus >= 400 ? EventStatus.ERROR : EventStatus.SUCCESS;
 	}
 
-	private void timeout(String traceId) {
-		TraceAccumulator accumulator = accumulators.remove(traceId);
+	void timeout(String traceId) {
+		TraceAccumulator accumulator = accumulators.get(traceId);
 		if (accumulator == null) {
 			return;
 		}
-		accumulator.status = TraceCollectionStatus.TIMED_OUT;
+		Trace trace;
+		synchronized (accumulator) {
+			if (!accumulators.remove(traceId, accumulator)) {
+				return;
+			}
+			accumulator.status = TraceCollectionStatus.TIMED_OUT;
+			trace = buildTrace(accumulator, TraceCollectionStatus.TIMED_OUT);
+		}
+		traceService.storeExternalTraceCollectionTimeout(trace);
 		traceService.publishCollectionStatus(
 			traceId,
 			TraceCollectionStatus.TIMED_OUT,
-			"15초 동안 span을 받지 못했습니다. Java Agent와 수집 주소를 확인하세요."
+			collectionTimeout.toSeconds() + "초 동안 span을 받지 못했습니다. Java Agent와 수집 주소를 확인하세요."
+		);
+	}
+
+	private Trace buildTrace(TraceAccumulator accumulator, TraceCollectionStatus collectionStatus) {
+		List<TraceEvent> events = accumulator.events.values().stream()
+			.sorted(Comparator.comparing(TraceEvent::startedAt).thenComparing(TraceEvent::endedAt))
+			.toList();
+		Instant startedAt = events.stream().map(TraceEvent::startedAt).min(Instant::compareTo).orElse(accumulator.startedAt);
+		Instant endedAt = events.stream().map(TraceEvent::endedAt).max(Instant::compareTo)
+			.orElseGet(() -> accumulator.requestDurationMs > 0
+				? startedAt.plusMillis(accumulator.requestDurationMs)
+				: clock.instant());
+		long durationMs = Math.max(
+			Math.max(0, Duration.between(startedAt, endedAt).toMillis()),
+			accumulator.requestDurationMs
+		);
+		return new Trace(
+			accumulator.traceId,
+			accumulator.method,
+			accumulator.endpoint,
+			"external-opentelemetry",
+			startedAt,
+			endedAt,
+			durationMs,
+			accumulator.httpStatus,
+			resultStatus(accumulator.httpStatus, events),
+			events,
+			TraceSource.OPENTELEMETRY,
+			accumulator.serviceName,
+			collectionStatus
 		);
 	}
 
@@ -192,7 +231,7 @@ public class ExternalTraceService {
 		private final Instant startedAt;
 		private final Map<String, TraceEvent> events = new LinkedHashMap<>();
 		private volatile TraceCollectionStatus status = TraceCollectionStatus.PENDING;
-		private volatile Instant lastUpdatedAt = Instant.now();
+		private volatile Instant lastUpdatedAt;
 		private volatile String serviceName = "external-spring-app";
 		private volatile int httpStatus;
 		private volatile long requestDurationMs;
@@ -203,6 +242,7 @@ public class ExternalTraceService {
 			this.method = method;
 			this.endpoint = endpoint;
 			this.startedAt = startedAt;
+			this.lastUpdatedAt = startedAt;
 		}
 	}
 }
