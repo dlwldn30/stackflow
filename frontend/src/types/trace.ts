@@ -51,6 +51,13 @@ export interface TraceDetail {
   source: TraceSource
   serviceName: string | null
   traceCollectionStatus: TraceCollectionStatus
+  responsePreview: TraceResponsePreview | null
+}
+
+export interface TraceResponsePreview {
+  contentType: string
+  body: string
+  truncated: boolean
 }
 
 export interface TraceSummary {

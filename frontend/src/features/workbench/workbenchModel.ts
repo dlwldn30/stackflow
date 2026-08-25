@@ -387,6 +387,7 @@ export function createPlaceholderTrace(
     source,
     serviceName,
     traceCollectionStatus: source === 'OPENTELEMETRY' ? 'PENDING' : 'DISABLED',
+    responsePreview: null,
   }
 }
 

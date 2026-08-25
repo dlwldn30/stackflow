@@ -46,6 +46,21 @@ public class TraceService {
 		return trace;
 	}
 
+	public Trace completeTrace(
+		TraceSession session,
+		int httpStatus,
+		EventStatus resultStatus,
+		Object responseBody
+	) {
+		Trace trace = session.complete(
+			httpStatus,
+			resultStatus,
+			TraceResponsePreviewFactory.fromJson(responseBody).orElse(null)
+		);
+		storeTrace(trace);
+		return trace;
+	}
+
 	public void storeExternalTrace(Trace trace) {
 		storeTrace(trace, true);
 	}

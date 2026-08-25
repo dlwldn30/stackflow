@@ -61,7 +61,10 @@ Spans are deduplicated by span ID and ordered by start timestamp. A SERVER span 
 - Maximum OTLP request size: 5 MB.
 - Maximum stored attribute value: 2 KB.
 - Maximum stored attributes per span: 64.
-- Headers, cookies, authorization, tokens, query values, request/response bodies, passwords, secrets, and database statements are not stored.
+- Request headers, query values, request bodies, and database statements are not stored.
+- Trace details may retain a response preview for JSON, `application/*+json`, and `text/*` responses only. Empty, binary, unsupported, and malformed JSON bodies are discarded.
+- JSON keys containing authorization, token, password, secret, cookie, or session are recursively replaced with `[REDACTED]`, ignoring case and `_`, `-`, `.` separators.
+- Sanitized response previews are limited to 64 KiB of valid UTF-8 and remain in the same in-memory recent Trace store. Text previews are size-limited but cannot receive structural key redaction.
 - Unknown attributes outside the allowlist are discarded.
 
 This is a local development feature, not an authenticated production collector.

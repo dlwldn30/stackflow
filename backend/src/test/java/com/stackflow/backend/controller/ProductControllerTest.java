@@ -2,6 +2,7 @@ package com.stackflow.backend.controller;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.stackflow.backend.domain.ComponentType;
 import com.stackflow.backend.domain.EventStatus;
@@ -98,6 +99,8 @@ class ProductControllerTest {
 		assertEquals(body.traceId(), trace.traceId());
 		assertEquals("/api/products/1002", trace.endpoint());
 		assertEquals(EventStatus.SUCCESS, trace.resultStatus());
+		assertEquals("application/json", trace.responsePreview().contentType());
+		assertTrue(trace.responsePreview().body().contains("Latency Dashboard Kit"));
 	}
 
 	@Test
@@ -132,6 +135,8 @@ class ProductControllerTest {
 		assertEquals(HttpStatus.GATEWAY_TIMEOUT, response.getStatusCode());
 		ErrorResponse body = assertInstanceOf(ErrorResponse.class, response.getBody());
 		assertEquals(EventStatus.TIMEOUT, body.resultStatus());
+		Trace trace = traceController.getTrace(body.traceId());
+		assertTrue(trace.responsePreview().body().contains("DatabaseTimeoutException"));
 	}
 
 	@Test

@@ -2,6 +2,8 @@ package com.stackflow.backend.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.stackflow.backend.domain.ComponentType;
 import com.stackflow.backend.domain.EventStatus;
@@ -21,6 +23,61 @@ import org.junit.jupiter.api.Test;
 class ExternalTraceServiceTest {
 
 	@Test
+	void waitsForHttpResponseWhenServerSpanArrivesFirst() throws InterruptedException {
+		TraceStreamService streamService = new TraceStreamService();
+		TraceService traceService = new TraceService(streamService);
+		ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+		ExternalTraceService service = new ExternalTraceService(
+			traceService,
+			Clock.systemUTC(),
+			scheduler,
+			Duration.ofDays(1),
+			Duration.ofMillis(30)
+		);
+		try {
+			ExternalTraceService.TraceCaptureContext capture = service.startCapture("GET", "/orders/1");
+			Instant now = Instant.now();
+			service.acceptSpans(capture.traceId(), "order-app", List.of(new TraceEvent(
+				"server-span",
+				capture.traceId(),
+				ComponentType.CONTROLLER,
+				"GET /orders/1",
+				EventStatus.SUCCESS,
+				now,
+				now.plusMillis(10),
+				10,
+				null,
+				null,
+				Map.of(),
+				"server-span",
+				null,
+				"order-app",
+				"SERVER"
+			)));
+
+			Thread.sleep(80);
+			assertTrue(service.isCaptureActive(capture.traceId()));
+			assertThrows(TraceNotFoundException.class, () -> traceService.getTrace(capture.traceId()));
+
+			service.recordHttpResponse(
+				capture.traceId(),
+				200,
+				15,
+				"text/plain",
+				"completed after spans"
+			);
+			Thread.sleep(80);
+
+			Trace trace = traceService.getTrace(capture.traceId());
+			assertEquals("completed after spans", trace.responsePreview().body());
+			assertFalse(service.isCaptureActive(capture.traceId()));
+		} finally {
+			service.shutdown();
+			streamService.shutdown();
+		}
+	}
+
+	@Test
 	void storesPartialSpansAndHttpResultWhenCollectionTimesOut() {
 		Instant now = Instant.parse("2026-08-25T00:00:00Z");
 		TraceStreamService streamService = new TraceStreamService();
@@ -36,7 +93,13 @@ class ExternalTraceServiceTest {
 		try {
 			ExternalTraceService.TraceCaptureContext capture = service.startCapture("GET", "/orders/1");
 			streamService.createEmitter(capture.traceId());
-			service.recordHttpResponse(capture.traceId(), 200, 35);
+			service.recordHttpResponse(
+				capture.traceId(),
+				200,
+				35,
+				"application/json",
+				"{\"orderId\":1,\"accessToken\":\"private\"}"
+			);
 			service.acceptSpans(capture.traceId(), "order-app", List.of(new TraceEvent(
 				"service-span",
 				capture.traceId(),
@@ -79,6 +142,8 @@ class ExternalTraceServiceTest {
 			assertEquals(EventStatus.SUCCESS, trace.resultStatus());
 			assertEquals(200, trace.httpStatus());
 			assertEquals(35, trace.durationMs());
+			assertTrue(trace.responsePreview().body().contains("[REDACTED]"));
+			assertFalse(trace.responsePreview().body().contains("private"));
 			assertEquals(List.of("service-span"), trace.events().stream().map(TraceEvent::spanId).toList());
 			assertEquals(TraceCollectionStatus.TIMED_OUT, traceService.getRecentTraces().getFirst().traceCollectionStatus());
 			assertEquals(0, streamService.activeConnectionCount());
