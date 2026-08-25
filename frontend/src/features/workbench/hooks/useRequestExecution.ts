@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ExternalRequestEntry, ExternalRequestResponse } from '../../../types/trace'
 import type {
   AsyncState,
@@ -27,6 +27,25 @@ export function useRequestExecution(createEntry: CreateEntry) {
   const [requestMessage, setRequestMessage] = useState('API를 선택하고 요청을 실행하세요.')
   const [lastResponseBody, setLastResponseBody] = useState<unknown>(null)
   const [externalResponse, setExternalResponse] = useState<ExternalRequestResponse | null>(null)
+  const activeRequestAbortRef = useRef<AbortController | null>(null)
+
+  const cancelActiveRequest = useCallback(() => {
+    activeRequestAbortRef.current?.abort()
+    activeRequestAbortRef.current = null
+  }, [])
+  const beginExternalRequest = useCallback(() => {
+    cancelActiveRequest()
+    const controller = new AbortController()
+    activeRequestAbortRef.current = controller
+    return controller
+  }, [cancelActiveRequest])
+  const completeExternalRequest = useCallback((controller: AbortController) => {
+    if (activeRequestAbortRef.current === controller) {
+      activeRequestAbortRef.current = null
+    }
+  }, [])
+
+  useEffect(() => cancelActiveRequest, [cancelActiveRequest])
 
   const updateQueryParam = (id: string, patch: Partial<ExternalRequestEntry>) =>
     setQueryParams((current) => updateRequestEntries(current, id, patch))
@@ -69,6 +88,7 @@ export function useRequestExecution(createEntry: CreateEntry) {
     requestMessage, setRequestMessage,
     lastResponseBody, setLastResponseBody,
     externalResponse, setExternalResponse,
+    beginExternalRequest, completeExternalRequest, cancelActiveRequest,
     updateQueryParam, updateRequestHeader,
     removeQueryParam, removeRequestHeader,
     addQueryParam, addRequestHeader,

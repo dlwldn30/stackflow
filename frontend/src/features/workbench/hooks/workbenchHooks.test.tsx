@@ -49,6 +49,24 @@ describe('workbench state hooks', () => {
     expect(result.current.endpointSearch).toBe('product')
   })
 
+  it('aborts the previous external request on a new run and unmount', () => {
+    const { result, unmount } = renderHook(() => useRequestExecution(() => ({ id: '1', key: '', value: '', enabled: true })))
+
+    let first: AbortController
+    let second: AbortController
+    act(() => {
+      first = result.current.beginExternalRequest()
+      second = result.current.beginExternalRequest()
+    })
+
+    expect(first!.signal.aborted).toBe(true)
+    expect(second!.signal.aborted).toBe(false)
+    act(() => result.current.completeExternalRequest(first!))
+    expect(second!.signal.aborted).toBe(false)
+    unmount()
+    expect(second!.signal.aborted).toBe(true)
+  })
+
   it('owns trace selection and stream lifecycle references', () => {
     const { result, unmount } = renderHook(() => useTraceRuntime())
     act(() => {

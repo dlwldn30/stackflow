@@ -10,6 +10,7 @@ public record ExternalRequestResponse(
 	String resultStatus,
 	String contentType,
 	String responseBody,
+	boolean responseBodyTruncated,
 	String errorMessage,
 	String traceId,
 	TraceCollectionStatus traceCollectionStatus
@@ -32,6 +33,7 @@ public record ExternalRequestResponse(
 			resultStatus,
 			contentType,
 			responseBody,
+			false,
 			errorMessage,
 			null,
 			TraceCollectionStatus.DISABLED

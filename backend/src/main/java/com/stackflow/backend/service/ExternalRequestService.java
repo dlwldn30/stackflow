@@ -3,7 +3,9 @@ package com.stackflow.backend.service;
 import com.stackflow.backend.dto.ExternalRequestPayload;
 import com.stackflow.backend.dto.ExternalRequestResponse;
 import com.stackflow.backend.domain.TraceCollectionStatus;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -25,6 +27,7 @@ public class ExternalRequestService {
 
 	private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(3);
 	private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(8);
+	static final int MAX_RESPONSE_BODY_BYTES = 1024 * 1024;
 	private static final String ALLOW_PRIVATE_TARGETS_PROPERTY = "stackflow.external.allow-private-targets";
 	private static final String ALLOW_PRIVATE_TARGETS_ENV = "STACKFLOW_ALLOW_PRIVATE_TARGETS";
 	private static final Set<String> BLOCKED_HEADERS = Set.of(
@@ -75,15 +78,20 @@ public class ExternalRequestService {
 				? externalTraceService.startCapture(method, targetUri.getPath())
 				: null;
 			HttpRequest request = buildRequest(targetUri, method, payload.headers(), payload.requestBody(), traceContext);
-			HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+			HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+			LimitedResponseBody responseBody;
+			try (InputStream bodyStream = response.body()) {
+				responseBody = readResponseBody(bodyStream);
+			}
 			long durationMs = Duration.between(startedAt, Instant.now()).toMillis();
+			String contentType = response.headers().firstValue("content-type").orElse("");
 			if (traceContext != null) {
 				externalTraceService.recordHttpResponse(
 					traceContext.traceId(),
 					response.statusCode(),
 					durationMs,
-					response.headers().firstValue("content-type").orElse(""),
-					response.body()
+					contentType,
+					responseBodyForTrace(contentType, responseBody.body(), responseBody.truncated())
 				);
 			}
 			return new ExternalRequestResponse(
@@ -92,8 +100,9 @@ public class ExternalRequestService {
 				response.statusCode(),
 				durationMs,
 				response.statusCode() >= 200 && response.statusCode() < 400 ? "SUCCESS" : "ERROR",
-				response.headers().firstValue("content-type").orElse(""),
-				response.body(),
+				contentType,
+				responseBody.body(),
+				responseBody.truncated(),
 				null,
 				traceContext == null ? null : traceContext.traceId(),
 				traceContext == null ? TraceCollectionStatus.DISABLED : TraceCollectionStatus.PENDING
@@ -115,11 +124,60 @@ public class ExternalRequestService {
 				"ERROR",
 				"",
 				"",
+				false,
 				ex.getMessage(),
 				traceContext == null ? null : traceContext.traceId(),
 				traceContext == null ? TraceCollectionStatus.DISABLED : TraceCollectionStatus.PENDING
 			);
 		}
+	}
+
+	private LimitedResponseBody readResponseBody(InputStream inputStream) throws IOException {
+		ByteArrayOutputStream output = new ByteArrayOutputStream(8192);
+		byte[] buffer = new byte[8192];
+		int totalBytes = 0;
+		boolean truncated = false;
+		while (totalBytes < MAX_RESPONSE_BODY_BYTES) {
+			int read = inputStream.read(buffer, 0, Math.min(buffer.length, MAX_RESPONSE_BODY_BYTES - totalBytes));
+			if (read < 0) {
+				break;
+			}
+			output.write(buffer, 0, read);
+			totalBytes += read;
+		}
+		if (totalBytes == MAX_RESPONSE_BODY_BYTES) {
+			truncated = inputStream.read() >= 0;
+		}
+
+		byte[] bytes = output.toByteArray();
+		int safeLength = truncated ? findUtf8Boundary(bytes) : bytes.length;
+		return new LimitedResponseBody(new String(bytes, 0, safeLength, StandardCharsets.UTF_8), truncated);
+	}
+
+	private int findUtf8Boundary(byte[] bytes) {
+		if (bytes.length == 0) {
+			return 0;
+		}
+		int leadIndex = bytes.length - 1;
+		while (leadIndex >= 0 && (bytes[leadIndex] & 0xc0) == 0x80) {
+			leadIndex -= 1;
+		}
+		if (leadIndex < 0) {
+			return 0;
+		}
+		int lead = bytes[leadIndex] & 0xff;
+		int expectedLength = lead < 0x80 ? 1 : lead < 0xe0 ? 2 : lead < 0xf0 ? 3 : lead < 0xf8 ? 4 : 1;
+		return bytes.length - leadIndex < expectedLength ? leadIndex : bytes.length;
+	}
+
+	String responseBodyForTrace(String contentType, String responseBody, boolean truncated) {
+		if (!truncated) {
+			return responseBody;
+		}
+		String mediaType = contentType == null ? "" : contentType.split(";", 2)[0].trim().toLowerCase(Locale.ROOT);
+		return mediaType.equals("application/json") || mediaType.startsWith("application/") && mediaType.endsWith("+json")
+			? null
+			: responseBody;
 	}
 
 	URI buildTargetUri(String targetBaseUrl, String path) {
@@ -288,5 +346,8 @@ public class ExternalRequestService {
 			return Boolean.parseBoolean(propertyValue);
 		}
 		return Boolean.parseBoolean(System.getenv(ALLOW_PRIVATE_TARGETS_ENV));
+	}
+
+	private record LimitedResponseBody(String body, boolean truncated) {
 	}
 }
