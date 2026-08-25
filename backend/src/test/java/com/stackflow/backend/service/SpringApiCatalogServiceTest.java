@@ -477,6 +477,96 @@ class SpringApiCatalogServiceTest {
 	}
 
 	@Test
+	void detectsExternalControllerEvenWhenItsNameMatchesStackFlowManagementController(@TempDir Path projectRoot) throws IOException {
+		Path sourceRoot = projectRoot.resolve("src/main/java/com/example/observability");
+		Files.createDirectories(sourceRoot);
+		Files.writeString(sourceRoot.resolve("TraceController.java"), """
+			package com.example.observability;
+
+			import org.springframework.web.bind.annotation.GetMapping;
+			import org.springframework.web.bind.annotation.RestController;
+
+			@RestController
+			public class TraceController {
+				@GetMapping("/api/observability/traces")
+				public String listTraces() { return "ok"; }
+			}
+			""");
+
+		ProjectStructureResponse structure = springApiCatalogService.getProjectStructure(projectRoot.toString());
+
+		assertEquals(ProjectAnalysisStatus.SUCCESS, structure.analysisStatus());
+		assertTrue(structure.domains().stream()
+			.flatMap(domain -> domain.endpoints().stream())
+			.anyMatch(endpoint -> endpoint.controller().equals("TraceController")
+				&& endpoint.path().equals("/api/observability/traces")));
+	}
+
+	@Test
+	void combinesEveryClassAndMethodMappingPath(@TempDir Path projectRoot) throws IOException {
+		Path sourceRoot = projectRoot.resolve("src/main/java/com/example/order");
+		Files.createDirectories(sourceRoot);
+		Files.writeString(sourceRoot.resolve("OrderController.java"), """
+			package com.example.order;
+
+			import org.springframework.web.bind.annotation.GetMapping;
+			import org.springframework.web.bind.annotation.RequestMapping;
+			import org.springframework.web.bind.annotation.RestController;
+
+			@RestController
+			@RequestMapping({"/api/orders", "/internal/orders"})
+			public class OrderController {
+				@GetMapping({"/list", "/search"})
+				public String findOrders() { return "ok"; }
+			}
+			""");
+
+		ProjectStructureResponse structure = springApiCatalogService.getProjectStructure(projectRoot.toString());
+		ProjectDomainResponse domain = structure.domains().getFirst();
+		Set<String> paths = domain.endpoints().stream().map(ApiCatalogItemResponse::path).collect(Collectors.toSet());
+
+		assertEquals(Set.of(
+			"/api/orders/list",
+			"/api/orders/search",
+			"/internal/orders/list",
+			"/internal/orders/search"
+		), paths);
+		assertEquals("/api/orders", domain.controllers().getFirst().basePath());
+		assertEquals(List.of("/api/orders", "/internal/orders"), domain.controllers().getFirst().basePaths());
+	}
+
+	@Test
+	void excludesUnresolvedMappingPathAndReportsHandlerWarning(@TempDir Path projectRoot) throws IOException {
+		Path sourceRoot = projectRoot.resolve("src/main/java/com/example/product");
+		Files.createDirectories(sourceRoot);
+		Files.writeString(sourceRoot.resolve("ProductController.java"), """
+			package com.example.product;
+
+			import org.springframework.web.bind.annotation.GetMapping;
+			import org.springframework.web.bind.annotation.RequestMapping;
+			import org.springframework.web.bind.annotation.RestController;
+
+			@RestController
+			@RequestMapping("/api/products")
+			public class ProductController {
+				@GetMapping(ApiPaths.PRODUCTS)
+				public String unresolvedProducts() { return "unknown"; }
+
+				@GetMapping("/available")
+				public String availableProducts() { return "ok"; }
+			}
+			""");
+
+		ProjectStructureResponse structure = springApiCatalogService.getProjectStructure(projectRoot.toString());
+		List<ApiCatalogItemResponse> endpoints = structure.domains().getFirst().endpoints();
+
+		assertEquals(1, endpoints.size());
+		assertEquals("/api/products/available", endpoints.getFirst().path());
+		assertTrue(structure.analysisCoverage().warnings().stream().anyMatch(warning ->
+			warning.contains("ProductController.java#unresolvedProducts")));
+	}
+
+	@Test
 	void keepsPackagePrivateControllerClassRequestMappingAsBasePathOnly(@TempDir Path projectRoot) throws IOException {
 		Files.writeString(projectRoot.resolve("build.gradle"), "plugins { id 'org.springframework.boot' version '4.1.0' }");
 		Path sourceRoot = projectRoot.resolve("src/main/java/com/example/order");
@@ -769,6 +859,26 @@ class SpringApiCatalogServiceTest {
 		assertEquals(2, structure.analysisCoverage().controllerCandidates());
 		assertEquals(2, structure.analysisCoverage().detectedControllers());
 		assertEquals(2, structure.analysisCoverage().detectedEndpoints());
+	}
+
+	@Test
+	void usesEachSourceRootModuleMetadataAsInfrastructureEvidence(@TempDir Path projectRoot) throws IOException {
+		Path sourceRoot = projectRoot.resolve("catalog/src/main/java/com/example/product");
+		Path resources = projectRoot.resolve("catalog/src/main/resources");
+		Files.createDirectories(sourceRoot);
+		Files.createDirectories(resources);
+		Files.writeString(projectRoot.resolve("catalog/build.gradle"), "runtimeOnly 'org.postgresql:postgresql'");
+		Files.writeString(resources.resolve("application.yml"), "spring:\n  data:\n    redis:\n      host: localhost\n  datasource:\n    url: jdbc:postgresql://localhost/catalog\n");
+		Files.writeString(sourceRoot.resolve("ProductController.java"), simpleRestController("Product", "/api/products"));
+		Files.writeString(sourceRoot.resolve("ProductRepository.java"), "package com.example.product; public class ProductRepository {}");
+		Files.writeString(sourceRoot.resolve("ProductCacheService.java"), "package com.example.product; public class ProductCacheService {}");
+
+		ProjectStructureResponse structure = springApiCatalogService.getProjectStructure(projectRoot.toString());
+
+		assertTrue(structure.infrastructure().contains("Redis"));
+		assertTrue(structure.infrastructure().contains("PostgreSQL"));
+		assertTrue(structure.domains().getFirst().infrastructure().contains("Redis"));
+		assertTrue(structure.domains().getFirst().infrastructure().contains("PostgreSQL"));
 	}
 
 	@Test

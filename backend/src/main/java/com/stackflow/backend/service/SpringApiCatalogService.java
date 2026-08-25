@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -43,16 +44,14 @@ public class SpringApiCatalogService {
 	private static final Set<String> SUPPORTED_MAPPING_ANNOTATIONS = Set.of(
 		"RequestMapping", "GetMapping", "PostMapping", "PutMapping", "DeleteMapping", "PatchMapping"
 	);
-	private static final List<String> PROJECT_METADATA_FILES = List.of(
+	private static final String STACKFLOW_CONTROLLER_PACKAGE = "com.stackflow.backend.controller";
+	private static final List<String> MODULE_METADATA_FILES = List.of(
 		"build.gradle",
 		"build.gradle.kts",
 		"pom.xml",
 		"src/main/resources/application.properties",
 		"src/main/resources/application.yml",
-		"src/main/resources/application.yaml",
-		"backend/src/main/resources/application.properties",
-		"backend/src/main/resources/application.yml",
-		"backend/src/main/resources/application.yaml"
+		"src/main/resources/application.yaml"
 	);
 	private final SpringMappingParser mappingParser = new SpringMappingParser();
 
@@ -130,7 +129,8 @@ public class SpringApiCatalogService {
 				.flatMap(controller -> controller.endpoints().stream())
 				.sorted(Comparator.comparing(ApiCatalogItemResponse::path).thenComparing(ApiCatalogItemResponse::method))
 				.toList();
-			List<ProjectEvidenceItemResponse> infrastructureDetails = detectInfrastructureDetails(projectRoot, classes, endpoints);
+			List<Path> metadataFiles = discoverProjectMetadataFiles(projectRoot, sourceRoots);
+			List<ProjectEvidenceItemResponse> infrastructureDetails = detectInfrastructureDetails(metadataFiles, classes, endpoints);
 			ProjectAnalysisStatus analysisStatus = endpoints.isEmpty()
 				? ProjectAnalysisStatus.EMPTY
 				: ProjectAnalysisStatus.SUCCESS;
@@ -150,7 +150,7 @@ public class SpringApiCatalogService {
 				detectInfrastructure(infrastructureDetails),
 				infrastructureDetails,
 				buildLayerSummary(classes),
-				buildDomains(projectRoot, controllers, classes, endpoints)
+				buildDomains(metadataFiles, controllers, classes, endpoints)
 			);
 		} catch (IOException exception) {
 			AnalysisCoverageResponse coverage = new AnalysisCoverageResponse(
@@ -260,14 +260,19 @@ public class SpringApiCatalogService {
 		}
 
 		String controller = extractTypeName(source).orElse(javaFile.getFileName().toString().replace(".java", ""));
-		if (isInternalController(controller)) {
+		String packageName = extractPackageName(source).orElse("");
+		if (isInternalController(packageName, controller)) {
 			return Optional.empty();
 		}
 
-		String basePath = extractClassBasePath(source);
-		String packageName = extractPackageName(source).orElse("");
+		ClassMappingPaths classMapping = extractClassBasePaths(source);
+		List<String> basePaths = classMapping.paths();
 		List<ApiCatalogItemResponse> catalog = new ArrayList<>();
 		String sourceFile = relativizeSourcePath(sourceRoot, javaFile);
+		List<String> warnings = new ArrayList<>();
+		if (classMapping.unresolved()) {
+			warnings.add(buildUnresolvedPathWarning(sourceFile, controller));
+		}
 
 		for (int index = 0; index < lines.size(); index += 1) {
 			String line = lines.get(index).trim();
@@ -279,47 +284,59 @@ public class SpringApiCatalogService {
 			}
 
 			SpringMappingParser.AnnotationBlock annotationBlock = mappingParser.collectAnnotationBlock(lines, index);
-			List<SpringMappingParser.MappingAnnotation> mappings = mappingParser.parse(annotationBlock.content());
-			if (mappings.isEmpty()) {
-				continue;
-			}
-
 			Optional<HandlerMetadata> handler = findNextHandlerName(lines, annotationBlock.endIndex() + 1);
 			boolean methodResponseBody = hasResponseBodyBeforeMapping(lines, index, classDeclarationIndex)
 				|| handler.map(HandlerMetadata::responseBody).orElse(false);
 			if (handler.isEmpty() || (controllerMode == ControllerMode.METHOD_RESPONSE_BODY && !methodResponseBody)) {
 				continue;
 			}
+			SpringMappingParser.ParseResult parseResult = mappingParser.parseResult(annotationBlock.content());
+			if (parseResult.unresolvedPath()) {
+				warnings.add(buildUnresolvedPathWarning(sourceFile, handler.get().name()));
+				continue;
+			}
+			if (parseResult.mappings().isEmpty() || classMapping.unresolved()) {
+				continue;
+			}
 
-			for (SpringMappingParser.MappingAnnotation mapping : mappings) {
-				String path = normalizePath(basePath, mapping.path());
-				List<String> pathVariables = extractPathVariables(path);
-				catalog.add(new ApiCatalogItemResponse(
-					buildId(mapping.method(), path, controller, handler.get().name()),
-					mapping.method(),
-					mapping.methodSpecified(),
-					path,
-					controller,
-					handler.get().name(),
-					classifyRequestType(mapping.method(), path, handler.get().name()),
-					!pathVariables.isEmpty(),
-					pathVariables,
-					sourceFile,
-					handler.get().lineNumber()
-				));
+			for (String basePath : basePaths) {
+				for (SpringMappingParser.MappingAnnotation mapping : parseResult.mappings()) {
+					String path = normalizePath(basePath, mapping.path());
+					List<String> pathVariables = extractPathVariables(path);
+					catalog.add(new ApiCatalogItemResponse(
+						buildId(mapping.method(), path, controller, handler.get().name()),
+						mapping.method(),
+						mapping.methodSpecified(),
+						path,
+						controller,
+						handler.get().name(),
+						classifyRequestType(mapping.method(), path, handler.get().name()),
+						!pathVariables.isEmpty(),
+						pathVariables,
+						sourceFile,
+						handler.get().lineNumber()
+					));
+				}
 			}
 			index = annotationBlock.endIndex();
 		}
 
-		return Optional.of(new ControllerScan(controller, packageName, basePath, sourceFile, List.copyOf(catalog)));
+		return Optional.of(new ControllerScan(
+			controller,
+			packageName,
+			basePaths,
+			sourceFile,
+			catalog.stream().distinct().toList(),
+			List.copyOf(warnings)
+		));
 	}
 
-	private boolean isInternalController(String controller) {
-		return controller.equals("TraceController")
+	private boolean isInternalController(String packageName, String controller) {
+		return packageName.equals(STACKFLOW_CONTROLLER_PACKAGE) && (controller.equals("TraceController")
 			|| controller.equals("ProjectAnalysisController")
 			|| controller.equals("ExternalRequestController")
 			|| controller.equals("InstrumentationController")
-			|| controller.equals("OtlpTraceIngestController");
+			|| controller.equals("OtlpTraceIngestController"));
 	}
 
 	private boolean isRestControllerAnnotation(String line) {
@@ -359,16 +376,26 @@ public class SpringApiCatalogService {
 		return matcher.find() ? Optional.of(matcher.group(1)) : Optional.empty();
 	}
 
-	private String extractClassBasePath(String source) {
+	private ClassMappingPaths extractClassBasePaths(String source) {
 		List<String> lines = source.lines().toList();
 		int classDeclarationIndex = findClassDeclarationIndex(lines);
 		for (int index = classDeclarationIndex - 1; index >= 0; index -= 1) {
 			if (!lines.get(index).trim().startsWith("@RequestMapping")) {
 				continue;
 			}
-			return mappingParser.extractPath(mappingParser.collectAnnotationBlock(lines, index).content()).orElse("");
+			SpringMappingParser.ParseResult result = mappingParser.parseResult(
+				mappingParser.collectAnnotationBlock(lines, index).content()
+			);
+			return new ClassMappingPaths(
+				result.mappings().stream().map(SpringMappingParser.MappingAnnotation::path).distinct().toList(),
+				result.unresolvedPath()
+			);
 		}
-		return "";
+		return new ClassMappingPaths(List.of(""), false);
+	}
+
+	private String buildUnresolvedPathWarning(String sourceFile, String handler) {
+		return "경로 식을 해석할 수 없어 endpoint에서 제외했습니다: " + sourceFile + "#" + handler;
 	}
 
 	private int findClassDeclarationIndex(List<String> lines) {
@@ -528,7 +555,7 @@ public class SpringApiCatalogService {
 	}
 
 	private List<ProjectEvidenceItemResponse> detectInfrastructureDetails(
-		Path projectRoot,
+		List<Path> metadataFiles,
 		List<ClassMetadata> classes,
 		List<ApiCatalogItemResponse> endpoints
 	) {
@@ -536,9 +563,9 @@ public class SpringApiCatalogService {
 		boolean hasCache = classes.stream().anyMatch(item -> item.name().contains("Cache"))
 			|| endpoints.stream().anyMatch(item -> item.path().toLowerCase(Locale.ROOT).contains("cache"));
 		boolean hasPersistence = classes.stream().anyMatch(item -> item.name().contains("Repository") || item.name().contains("Store"));
-		boolean hasRedisEvidence = projectMetadataContains(projectRoot, "redis", "spring.data.redis", "lettuce", "jedis");
-		boolean hasPostgresqlEvidence = projectMetadataContains(projectRoot, "postgresql", "jdbc:postgresql", "org.postgresql");
-		boolean hasMysqlEvidence = projectMetadataContains(projectRoot, "mysql", "mariadb", "jdbc:mysql");
+		boolean hasRedisEvidence = projectMetadataContains(metadataFiles, "redis", "spring.data.redis", "lettuce", "jedis");
+		boolean hasPostgresqlEvidence = projectMetadataContains(metadataFiles, "postgresql", "jdbc:postgresql", "org.postgresql");
+		boolean hasMysqlEvidence = projectMetadataContains(metadataFiles, "mysql", "mariadb", "jdbc:mysql");
 
 		if (hasCache) {
 			String evidence = classes.stream()
@@ -593,7 +620,7 @@ public class SpringApiCatalogService {
 	}
 
 	private List<ProjectDomainResponse> buildDomains(
-		Path projectRoot,
+		List<Path> metadataFiles,
 		List<ControllerScan> controllers,
 		List<ClassMetadata> classes,
 		List<ApiCatalogItemResponse> endpoints
@@ -606,13 +633,13 @@ public class SpringApiCatalogService {
 		}
 
 		return controllersByDomain.entrySet().stream()
-			.map(entry -> buildDomain(projectRoot, entry.getKey(), entry.getValue(), classes, endpoints))
+			.map(entry -> buildDomain(metadataFiles, entry.getKey(), entry.getValue(), classes, endpoints))
 			.sorted(Comparator.comparing(ProjectDomainResponse::name))
 			.toList();
 	}
 
 	private ProjectDomainResponse buildDomain(
-		Path projectRoot,
+		List<Path> metadataFiles,
 		String domainKey,
 		List<ControllerScan> controllers,
 		List<ClassMetadata> classes,
@@ -629,7 +656,7 @@ public class SpringApiCatalogService {
 		List<ClassMetadata> domainClasses = classes.stream()
 			.filter(item -> belongsToDomain(domainKey, domainControllerNames, item))
 			.toList();
-		List<ProjectEvidenceItemResponse> domainInfrastructureDetails = detectInfrastructureDetails(projectRoot, domainClasses, domainEndpoints);
+		List<ProjectEvidenceItemResponse> domainInfrastructureDetails = detectInfrastructureDetails(metadataFiles, domainClasses, domainEndpoints);
 
 		return new ProjectDomainResponse(
 			domainId,
@@ -643,6 +670,7 @@ public class SpringApiCatalogService {
 					controller.controller(),
 					controller.packageName(),
 					controller.basePath(),
+					controller.basePaths(),
 					controller.endpoints().size(),
 					controller.sourceFile()
 				))
@@ -768,6 +796,10 @@ public class SpringApiCatalogService {
 		if (limitReached) {
 			warnings.add("Java 파일이 " + MAX_JAVA_FILES + "개를 넘어 분석 범위를 제한했습니다.");
 		}
+		controllers.stream()
+			.flatMap(controller -> controller.warnings().stream())
+			.distinct()
+			.forEach(warnings::add);
 		int candidates = (int) javaFiles.stream().filter(this::isControllerCandidate).count();
 		if (candidates > controllers.size()) {
 			warnings.add("Controller 후보 " + candidates + "개 중 " + controllers.size() + "개에서 REST 응답 mapping을 확인했습니다.");
@@ -930,12 +962,32 @@ public class SpringApiCatalogService {
 		}
 	}
 
-	private boolean projectMetadataContains(Path projectRoot, String... tokens) {
-		for (String metadataFile : PROJECT_METADATA_FILES) {
-			Path filePath = projectRoot.resolve(metadataFile);
-			if (!Files.exists(filePath)) {
-				continue;
+	private List<Path> discoverProjectMetadataFiles(Path projectRoot, List<Path> sourceRoots) {
+		Path normalizedProjectRoot = projectRoot.toAbsolutePath().normalize();
+		Set<Path> moduleRoots = new LinkedHashSet<>();
+		moduleRoots.add(normalizedProjectRoot);
+		for (Path sourceRoot : sourceRoots) {
+			Path normalizedSourceRoot = sourceRoot.toAbsolutePath().normalize();
+			Path moduleRoot = normalizedSourceRoot;
+			for (int depth = 0; depth < 3 && moduleRoot != null; depth += 1) {
+				moduleRoot = moduleRoot.getParent();
 			}
+			if (moduleRoot != null && moduleRoot.startsWith(normalizedProjectRoot)) {
+				moduleRoots.add(moduleRoot);
+			}
+		}
+
+		return moduleRoots.stream()
+			.flatMap(moduleRoot -> MODULE_METADATA_FILES.stream().map(moduleRoot::resolve))
+			.filter(Files::isRegularFile)
+			.map(path -> path.toAbsolutePath().normalize())
+			.distinct()
+			.sorted()
+			.toList();
+	}
+
+	private boolean projectMetadataContains(List<Path> metadataFiles, String... tokens) {
+		for (Path filePath : metadataFiles) {
 			try {
 				String content = Files.readString(filePath).toLowerCase(Locale.ROOT);
 				for (String token : tokens) {
@@ -953,10 +1005,17 @@ public class SpringApiCatalogService {
 	private record ControllerScan(
 		String controller,
 		String packageName,
-		String basePath,
+		List<String> basePaths,
 		String sourceFile,
-		List<ApiCatalogItemResponse> endpoints
+		List<ApiCatalogItemResponse> endpoints,
+		List<String> warnings
 	) {
+		String basePath() {
+			return basePaths.isEmpty() ? "" : basePaths.getFirst();
+		}
+	}
+
+	private record ClassMappingPaths(List<String> paths, boolean unresolved) {
 	}
 
 	private record ClassMetadata(String name, String packageName, String layerType) {

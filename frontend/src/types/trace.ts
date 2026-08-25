@@ -195,6 +195,7 @@ export interface ProjectController {
   name: string
   packageName: string
   basePath: string
+  basePaths: string[]
   endpointCount: number
   sourceFile: string
 }
