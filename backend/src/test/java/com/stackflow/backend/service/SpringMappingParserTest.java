@@ -134,6 +134,28 @@ class SpringMappingParserTest {
 	}
 
 	@Test
+	void reportsUnresolvedConstantPathWithoutCreatingRootMapping() {
+		SpringMappingParser.ParseResult result = parser.parseResult("@GetMapping(ApiPaths.PRODUCTS)");
+
+		assertTrue(result.unresolvedPath());
+		assertTrue(result.mappings().isEmpty());
+	}
+
+	@Test
+	void reportsMixedLiteralAndConstantPathArrayAsUnresolved() {
+		SpringMappingParser.ParseResult result = parser.parseResult("@GetMapping({\"/products\", ApiPaths.SEARCH})");
+
+		assertTrue(result.unresolvedPath());
+		assertEquals(List.of("/products"), result.mappings().stream().map(SpringMappingParser.MappingAnnotation::path).toList());
+	}
+
+	@Test
+	void reportsConcatenatedPathExpressionAsUnresolved() {
+		assertTrue(parser.parseResult("@GetMapping(\"/api/\" + ApiPaths.VERSION)").unresolvedPath());
+		assertTrue(parser.parseResult("@GetMapping(path = \"/api/\" + ApiPaths.VERSION)").unresolvedPath());
+	}
+
+	@Test
 	void ignoresNonMappingAnnotationBlocks() {
 		assertTrue(parser.parse("@Autowired").isEmpty());
 		assertFalse(parser.startsMappingAnnotation("@Autowired"));

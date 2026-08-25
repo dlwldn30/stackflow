@@ -215,7 +215,7 @@ export const FALLBACK_PROJECT_STRUCTURE: ProjectStructure = {
         { name: 'Redis', detectedBy: 'sample', evidence: 'Cache read and cache refresh flows are part of the sample product domain.' },
         { name: 'MySQL', detectedBy: 'sample', evidence: 'Repository and stock lookup flows represent the sample data path.' },
       ],
-      controllers: [{ name: 'ProductController', packageName: 'com.stackflow.backend.controller', basePath: '/api', endpointCount: 4, sourceFile: 'com/stackflow/backend/controller/ProductController.java' }],
+      controllers: [{ name: 'ProductController', packageName: 'com.stackflow.backend.controller', basePath: '/api', basePaths: ['/api'], endpointCount: 4, sourceFile: 'com/stackflow/backend/controller/ProductController.java' }],
       layers: [
         { name: 'Controller', type: 'CONTROLLER', classes: ['ProductController'], evidence: 'Detected sample controller class ProductController.' },
         { name: 'Service', type: 'SERVICE', classes: ['ProductService'], evidence: 'Detected sample service class ProductService.' },
@@ -248,7 +248,7 @@ export const FALLBACK_PROJECT_STRUCTURE: ProjectStructure = {
       infrastructureDetails: [
         { name: 'In-memory', detectedBy: 'sample', evidence: 'Payment sample responses are returned from the in-app client without database persistence.' },
       ],
-      controllers: [{ name: 'PaymentController', packageName: 'com.stackflow.backend.controller', basePath: '/api/payments', endpointCount: 2, sourceFile: 'com/stackflow/backend/controller/PaymentController.java' }],
+      controllers: [{ name: 'PaymentController', packageName: 'com.stackflow.backend.controller', basePath: '/api/payments', basePaths: ['/api/payments'], endpointCount: 2, sourceFile: 'com/stackflow/backend/controller/PaymentController.java' }],
       layers: [
         { name: 'Controller', type: 'CONTROLLER', classes: ['PaymentController'], evidence: 'Detected sample controller class PaymentController.' },
         { name: 'UseCase', type: 'USECASE', classes: ['PaymentUseCase'], evidence: 'Detected sample use-case class PaymentUseCase.' },
