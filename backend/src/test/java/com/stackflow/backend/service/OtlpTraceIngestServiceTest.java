@@ -18,11 +18,94 @@ import io.opentelemetry.proto.trace.v1.ResourceSpans;
 import io.opentelemetry.proto.trace.v1.ScopeSpans;
 import io.opentelemetry.proto.trace.v1.Span;
 import io.opentelemetry.proto.trace.v1.Status;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.HexFormat;
 import org.junit.jupiter.api.Test;
 
 class OtlpTraceIngestServiceTest {
+
+	@Test
+	void storesCodeLocationAndPrefersTheLatestExceptionEventWithAStackTrace() throws Exception {
+		TraceService traceService = new TraceService(new TraceStreamService());
+		ExternalTraceService externalTraceService = new ExternalTraceService(traceService);
+		OtlpTraceIngestService ingestService = new OtlpTraceIngestService(externalTraceService, new InstrumentationProfileRegistry());
+		ExternalTraceService.TraceCaptureContext capture = externalTraceService.startCapture("GET", "/orders/1001");
+		long startNanos = Instant.now().toEpochMilli() * 1_000_000L;
+		String home = System.getProperty("user.home");
+		try {
+			externalTraceService.recordHttpResponse(capture.traceId(), 500, 12);
+			Span failedSpan = Span.newBuilder(span(
+				capture.traceId(), "0123456789abcdef", null, "OrderService.findOrder",
+				Span.SpanKind.SPAN_KIND_SERVER, startNanos, 12
+			))
+				.addAttributes(attribute("code.namespace", "com.example.order.OrderService"))
+				.addAttributes(attribute("code.function.name", "findOrder"))
+				.addAttributes(attribute("code.file.path", home + "/workspace/OrderService.java"))
+				.addAttributes(attribute("code.line.number", "42"))
+				.addEvents(exceptionEvent(
+					"java.lang.IllegalStateException",
+					"order lookup failed",
+					"java.lang.IllegalStateException: order lookup failed\n\tat " + home + "/workspace/OrderService.java:42"
+				))
+				.addEvents(exceptionEvent("java.lang.RuntimeException", "propagated", null))
+				.setStatus(Status.newBuilder().setCode(Status.StatusCode.STATUS_CODE_ERROR))
+				.build();
+			ExportTraceServiceRequest request = ExportTraceServiceRequest.newBuilder()
+				.addResourceSpans(ResourceSpans.newBuilder()
+					.addScopeSpans(ScopeSpans.newBuilder().addSpans(failedSpan)))
+				.build();
+
+			assertEquals(1, ingestService.ingest(request));
+			Thread.sleep(900);
+
+			var event = traceService.getTrace(capture.traceId()).events().getFirst();
+			assertEquals("java.lang.IllegalStateException", event.errorType());
+			assertEquals("order lookup failed", event.errorMessage());
+			assertEquals("com.example.order.OrderService", event.metadata().get("code.namespace"));
+			assertEquals("findOrder", event.metadata().get("code.function.name"));
+			assertEquals("42", event.metadata().get("code.line.number"));
+			assertTrue(event.stackTrace().contains("~/workspace/OrderService.java:42"));
+			assertFalse(event.metadata().containsKey("exception.stacktrace"));
+			assertFalse(event.stackTraceTruncated());
+		} finally {
+			externalTraceService.shutdown();
+		}
+	}
+
+	@Test
+	void limitsStackTraceAtUtf8BoundaryAndMarksItAsTruncated() throws Exception {
+		TraceService traceService = new TraceService(new TraceStreamService());
+		ExternalTraceService externalTraceService = new ExternalTraceService(traceService);
+		OtlpTraceIngestService ingestService = new OtlpTraceIngestService(externalTraceService, new InstrumentationProfileRegistry());
+		ExternalTraceService.TraceCaptureContext capture = externalTraceService.startCapture("GET", "/orders/timeout");
+		long startNanos = Instant.now().toEpochMilli() * 1_000_000L;
+		String stackTrace = "java.lang.RuntimeException: 실패\n" + "한글-frame\n".repeat(4_000);
+		try {
+			externalTraceService.recordHttpResponse(capture.traceId(), 500, 12);
+			Span failedSpan = Span.newBuilder(span(
+				capture.traceId(), "1123456789abcdef", null, "OrderService.timeout",
+				Span.SpanKind.SPAN_KIND_SERVER, startNanos, 12
+			))
+				.addEvents(exceptionEvent("java.lang.RuntimeException", "실패", stackTrace))
+				.setStatus(Status.newBuilder().setCode(Status.StatusCode.STATUS_CODE_ERROR))
+				.build();
+			ExportTraceServiceRequest request = ExportTraceServiceRequest.newBuilder()
+				.addResourceSpans(ResourceSpans.newBuilder()
+					.addScopeSpans(ScopeSpans.newBuilder().addSpans(failedSpan)))
+				.build();
+
+			ingestService.ingest(request);
+			Thread.sleep(900);
+
+			var event = traceService.getTrace(capture.traceId()).events().getFirst();
+			assertTrue(event.stackTraceTruncated());
+			assertTrue(event.stackTrace().getBytes(StandardCharsets.UTF_8).length <= 16 * 1024);
+			assertFalse(event.stackTrace().endsWith("\uFFFD"));
+		} finally {
+			externalTraceService.shutdown();
+		}
+	}
 
 	@Test
 	void convertsOtlpSpansIntoParentChildRuntimeTrace() throws Exception {
@@ -325,5 +408,16 @@ class OtlpTraceIngestServiceTest {
 			.setKey(key)
 			.setValue(AnyValue.newBuilder().setStringValue(value))
 			.build();
+	}
+
+	private static Span.Event exceptionEvent(String type, String message, String stackTrace) {
+		Span.Event.Builder builder = Span.Event.newBuilder()
+			.setName("exception")
+			.addAttributes(attribute("exception.type", type))
+			.addAttributes(attribute("exception.message", message));
+		if (stackTrace != null) {
+			builder.addAttributes(attribute("exception.stacktrace", stackTrace));
+		}
+		return builder.build();
 	}
 }

@@ -18,8 +18,48 @@ public record TraceEvent(
 	String spanId,
 	String parentSpanId,
 	String serviceName,
-	String spanKind
+	String spanKind,
+	String stackTrace,
+	boolean stackTraceTruncated
 ) {
+	public TraceEvent(
+		String eventId,
+		String traceId,
+		ComponentType component,
+		String eventType,
+		EventStatus status,
+		Instant startedAt,
+		Instant endedAt,
+		long durationMs,
+		String errorType,
+		String errorMessage,
+		Map<String, String> metadata,
+		String spanId,
+		String parentSpanId,
+		String serviceName,
+		String spanKind
+	) {
+		this(
+			eventId,
+			traceId,
+			component,
+			eventType,
+			status,
+			startedAt,
+			endedAt,
+			durationMs,
+			errorType,
+			errorMessage,
+			metadata,
+			spanId,
+			parentSpanId,
+			serviceName,
+			spanKind,
+			null,
+			false
+		);
+	}
+
 	public TraceEvent(
 		String eventId,
 		String traceId,
@@ -48,7 +88,9 @@ public record TraceEvent(
 			null,
 			null,
 			"stackflow-sample",
-			"INTERNAL"
+			"INTERNAL",
+			null,
+			false
 		);
 	}
 }
