@@ -3,7 +3,10 @@ package com.stackflow.backend.service;
 import com.stackflow.backend.domain.ComponentType;
 import com.stackflow.backend.domain.EventStatus;
 import com.stackflow.backend.domain.Trace;
+import com.stackflow.backend.domain.TraceCollectionStatus;
 import com.stackflow.backend.domain.TraceEvent;
+import com.stackflow.backend.domain.TraceResponsePreview;
+import com.stackflow.backend.domain.TraceSource;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -87,6 +90,14 @@ public class TraceSession {
 	}
 
 	public Trace complete(int httpStatus, EventStatus resultStatus) {
+		return complete(httpStatus, resultStatus, null);
+	}
+
+	public Trace complete(
+		int httpStatus,
+		EventStatus resultStatus,
+		TraceResponsePreview responsePreview
+	) {
 		Instant endedAt = Instant.now();
 		List<TraceEvent> orderedEvents = events.stream()
 			.sorted(Comparator.comparing(TraceEvent::startedAt).thenComparing(TraceEvent::endedAt))
@@ -101,7 +112,11 @@ public class TraceSession {
 			Duration.between(startedAt, endedAt).toMillis(),
 			httpStatus,
 			resultStatus,
-			orderedEvents
+			orderedEvents,
+			TraceSource.SAMPLE,
+			"stackflow-sample",
+			TraceCollectionStatus.DISABLED,
+			responsePreview
 		);
 	}
 

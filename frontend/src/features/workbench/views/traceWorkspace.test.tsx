@@ -11,7 +11,7 @@ const failureEvent: TraceEvent = {
   eventId: 'postgres', traceId: 'trace', component: 'POSTGRESQL', eventType: 'SELECT product', status: 'TIMEOUT',
   startedAt: new Date(0).toISOString(), endedAt: new Date(25).toISOString(), durationMs: 25,
   errorType: 'SQLTimeoutException', errorMessage: 'query timed out',
-  metadata: { 'db.system.name': 'postgresql', 'db.operation.name': 'SELECT' },
+  metadata: { productId: '1001', 'db.system.name': 'postgresql', 'db.operation.name': 'SELECT' },
   spanId: 'postgres', parentSpanId: 'service', serviceName: 'trace-lab', spanKind: 'CLIENT',
 }
 
@@ -20,6 +20,7 @@ const detail: TraceDetail = {
   startedAt: new Date(0).toISOString(), endedAt: new Date(25).toISOString(), durationMs: 25,
   httpStatus: 504, resultStatus: 'TIMEOUT', events: [failureEvent], source: 'OPENTELEMETRY', serviceName: 'trace-lab',
   traceCollectionStatus: 'COMPLETED',
+  responsePreview: { contentType: 'application/json', body: '{"status":504}', truncated: false },
 }
 
 describe('Trace workspace presentation', () => {
@@ -84,22 +85,23 @@ describe('Trace workspace presentation', () => {
       id: 'postgres', component: 'POSTGRESQL', label: 'SELECT product', status: 'TIMEOUT',
       durationMs: 25, active: true, visits: [failureEvent],
     }
-    render(
+    const { container } = render(
       <TraceInspector
         trace={detail}
         selectedNode={selectedNode}
         selectedEvent={failureEvent}
         primaryFailureEvent={failureEvent}
         primaryFailureLabel="SELECT product"
-        formattedResponseBody={'{"status":504}'}
         onInspectPrimaryFailure={vi.fn()}
       />,
     )
-    expect(screen.getByRole('heading', { name: 'SELECT product' })).toBeInTheDocument()
-    expect(screen.getByText('SQLTimeoutException')).toBeInTheDocument()
-    expect(screen.getByText('postgresql')).toBeInTheDocument()
-    expect(screen.getByText('전체 metadata').closest('details')).not.toHaveAttribute('open')
-    expect(screen.getByText('응답 JSON').closest('details')).not.toHaveAttribute('open')
+    const inspector = within(container)
+    expect(inspector.getByRole('heading', { name: 'SELECT product' })).toBeInTheDocument()
+    expect(inspector.getByText('SQLTimeoutException')).toBeInTheDocument()
+    expect(inspector.getAllByText('postgresql')).toHaveLength(2)
+    expect(inspector.getByText('상품 ID')).toBeInTheDocument()
+    expect(inspector.getByText('전체 metadata').closest('details')).not.toHaveAttribute('open')
+    expect(inspector.getByText('요청 응답').closest('details')).toHaveAttribute('open')
   })
 
   it('distinguishes a propagated parent error from the actual failure span', () => {
@@ -124,7 +126,6 @@ describe('Trace workspace presentation', () => {
         selectedEvent={controllerEvent}
         primaryFailureEvent={failureEvent}
         primaryFailureLabel="ProductService.lookupProduct"
-        formattedResponseBody={null}
         onInspectPrimaryFailure={onInspectPrimaryFailure}
       />,
     )
@@ -132,6 +133,36 @@ describe('Trace workspace presentation', () => {
     expect(screen.getByText('상위로 전파된 오류')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '실제 시작 지점 ProductService.lookupProduct 확인' }))
     expect(onInspectPrimaryFailure).toHaveBeenCalledOnce()
+  })
+
+  it('keeps a collection-timeout response collapsed and shows it without a selected span', () => {
+    const traceWithoutSpans: TraceDetail = {
+      ...detail,
+      traceId: 'collection-timeout',
+      resultStatus: 'ERROR',
+      httpStatus: 500,
+      events: [],
+      traceCollectionStatus: 'TIMED_OUT',
+      responsePreview: { contentType: 'text/plain', body: 'request completed', truncated: true },
+    }
+    const { container } = render(
+      <TraceInspector
+        trace={traceWithoutSpans}
+        selectedNode={null}
+        selectedEvent={null}
+        primaryFailureEvent={null}
+        primaryFailureLabel={null}
+        onInspectPrimaryFailure={vi.fn()}
+      />,
+    )
+
+    const inspector = within(container)
+    const responseDetails = inspector.getByText('요청 응답').closest('details')
+    expect(responseDetails).not.toHaveAttribute('open')
+    expect(inspector.getByText('텍스트 · 64KiB 일부')).toBeInTheDocument()
+    fireEvent.click(inspector.getByText('요청 응답'))
+    expect(responseDetails).toHaveAttribute('open')
+    expect(inspector.getByText('request completed')).toBeInTheDocument()
   })
 
   it('uses the component id when a sample Waterfall event has no span id', () => {

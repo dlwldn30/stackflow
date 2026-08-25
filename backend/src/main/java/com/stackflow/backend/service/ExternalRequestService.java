@@ -78,7 +78,13 @@ public class ExternalRequestService {
 			HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 			long durationMs = Duration.between(startedAt, Instant.now()).toMillis();
 			if (traceContext != null) {
-				externalTraceService.recordHttpResponse(traceContext.traceId(), response.statusCode(), durationMs);
+				externalTraceService.recordHttpResponse(
+					traceContext.traceId(),
+					response.statusCode(),
+					durationMs,
+					response.headers().firstValue("content-type").orElse(""),
+					response.body()
+				);
 			}
 			return new ExternalRequestResponse(
 				method,
@@ -99,7 +105,7 @@ public class ExternalRequestService {
 			}
 			long durationMs = Duration.between(startedAt, Instant.now()).toMillis();
 			if (traceContext != null) {
-				externalTraceService.recordHttpResponse(traceContext.traceId(), 0, durationMs);
+				externalTraceService.recordHttpResponse(traceContext.traceId(), 0, durationMs, null, null);
 			}
 			return new ExternalRequestResponse(
 				safeMethod(payload.method()),

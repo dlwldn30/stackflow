@@ -4,7 +4,6 @@ import com.stackflow.backend.domain.ComponentType;
 import com.stackflow.backend.domain.EventStatus;
 import com.stackflow.backend.domain.Product;
 import com.stackflow.backend.domain.ScenarioMode;
-import com.stackflow.backend.domain.Trace;
 import com.stackflow.backend.dto.ErrorResponse;
 import com.stackflow.backend.dto.ProductListResponse;
 import com.stackflow.backend.dto.ProductLookupResponse;
@@ -67,13 +66,14 @@ public class ProductController {
 				EventStatus.SUCCESS,
 				Map.of("httpStatus", "200")
 			);
-			Trace trace = traceService.completeTrace(traceSession, 200, EventStatus.SUCCESS);
-			return ResponseEntity.ok(new ProductListResponse(
-				trace.traceId(),
+			ProductListResponse response = new ProductListResponse(
+				traceSession.traceId(),
 				scenarioMode.apiValue(),
 				EventStatus.SUCCESS,
 				products
-			));
+			);
+			traceService.completeTrace(traceSession, 200, EventStatus.SUCCESS, response);
+			return ResponseEntity.ok(response);
 		} catch (ProductNotFoundException exception) {
 			return buildError(traceSession, controllerStep, scenarioMode, HttpStatus.NOT_FOUND, EventStatus.ERROR, exception);
 		} catch (DatabaseTimeoutException exception) {
@@ -123,14 +123,15 @@ public class ProductController {
 				result.resultStatus(),
 				Map.of("httpStatus", "200")
 			);
-			Trace trace = traceService.completeTrace(traceSession, 200, result.resultStatus());
-			return ResponseEntity.ok(new ProductLookupResponse(
-				trace.traceId(),
+			ProductLookupResponse response = new ProductLookupResponse(
+				traceSession.traceId(),
 				scenarioMode.apiValue(),
 				result.resultStatus(),
 				result.cacheStatus(),
 				result.product()
-			));
+			);
+			traceService.completeTrace(traceSession, 200, result.resultStatus(), response);
+			return ResponseEntity.ok(response);
 		} catch (ProductNotFoundException exception) {
 			return buildError(traceSession, controllerStep, scenarioMode, HttpStatus.NOT_FOUND, EventStatus.ERROR, exception);
 		} catch (DatabaseTimeoutException exception) {
@@ -169,14 +170,15 @@ public class ProductController {
 				EventStatus.SUCCESS,
 				Map.of("httpStatus", "200")
 			);
-			Trace trace = traceService.completeTrace(traceSession, 200, EventStatus.SUCCESS);
-			return ResponseEntity.ok(new ProductStockResponse(
-				trace.traceId(),
+			ProductStockResponse response = new ProductStockResponse(
+				traceSession.traceId(),
 				scenarioMode.apiValue(),
 				EventStatus.SUCCESS,
 				productId,
 				stock
-			));
+			);
+			traceService.completeTrace(traceSession, 200, EventStatus.SUCCESS, response);
+			return ResponseEntity.ok(response);
 		} catch (ProductNotFoundException exception) {
 			return buildError(traceSession, controllerStep, scenarioMode, HttpStatus.NOT_FOUND, EventStatus.ERROR, exception);
 		} catch (DatabaseTimeoutException exception) {
@@ -215,14 +217,15 @@ public class ProductController {
 				result.resultStatus(),
 				Map.of("httpStatus", "200")
 			);
-			Trace trace = traceService.completeTrace(traceSession, 200, result.resultStatus());
-			return ResponseEntity.ok(new ProductLookupResponse(
-				trace.traceId(),
+			ProductLookupResponse response = new ProductLookupResponse(
+				traceSession.traceId(),
 				scenarioMode.apiValue(),
 				result.resultStatus(),
 				result.cacheStatus(),
 				result.product()
-			));
+			);
+			traceService.completeTrace(traceSession, 200, result.resultStatus(), response);
+			return ResponseEntity.ok(response);
 		} catch (ProductNotFoundException exception) {
 			return buildError(traceSession, controllerStep, scenarioMode, HttpStatus.NOT_FOUND, EventStatus.ERROR, exception);
 		} catch (DatabaseTimeoutException exception) {
@@ -279,13 +282,14 @@ public class ProductController {
 			resultStatus,
 			Map.of("httpStatus", Integer.toString(httpStatus.value()))
 		);
-		Trace trace = traceService.completeTrace(traceSession, httpStatus.value(), resultStatus);
-		return ResponseEntity.status(httpStatus).body(new ErrorResponse(
-			trace.traceId(),
+		ErrorResponse response = new ErrorResponse(
+			traceSession.traceId(),
 			scenarioMode.apiValue(),
 			resultStatus,
 			exception.getClass().getSimpleName(),
 			exception.getMessage()
-		));
+		);
+		traceService.completeTrace(traceSession, httpStatus.value(), resultStatus, response);
+		return ResponseEntity.status(httpStatus).body(response);
 	}
 }

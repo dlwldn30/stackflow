@@ -16,7 +16,8 @@ public record Trace(
 	List<TraceEvent> events,
 	TraceSource source,
 	String serviceName,
-	TraceCollectionStatus traceCollectionStatus
+	TraceCollectionStatus traceCollectionStatus,
+	TraceResponsePreview responsePreview
 ) {
 	public Trace(
 		String traceId,
@@ -43,7 +44,8 @@ public record Trace(
 			events,
 			TraceSource.SAMPLE,
 			"stackflow-sample",
-			TraceCollectionStatus.DISABLED
+			TraceCollectionStatus.DISABLED,
+			null
 		);
 	}
 }

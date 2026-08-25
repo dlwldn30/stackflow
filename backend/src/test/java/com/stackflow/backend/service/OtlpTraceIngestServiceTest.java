@@ -35,7 +35,13 @@ class OtlpTraceIngestServiceTest {
 		String serviceSpanId = "fedcba9876543210";
 		long startNanos = Instant.now().toEpochMilli() * 1_000_000L;
 		try {
-			externalTraceService.recordHttpResponse(traceId, 200, 20);
+			externalTraceService.recordHttpResponse(
+				traceId,
+				200,
+				20,
+				"text/plain; charset=utf-8",
+				"order response"
+			);
 			Span serverSpan = Span.newBuilder()
 				.setTraceId(bytes(traceId))
 				.setSpanId(bytes(serverSpanId))
@@ -80,6 +86,7 @@ class OtlpTraceIngestServiceTest {
 				serviceSpanId.equals(event.spanId()) && serverSpanId.equals(event.parentSpanId())));
 			assertTrue(trace.events().stream().anyMatch(event -> event.component().name().equals("SERVICE")));
 			assertFalse(trace.events().stream().anyMatch(event -> event.metadata().containsKey("db.statement")));
+			assertEquals("order response", trace.responsePreview().body());
 		} finally {
 			externalTraceService.shutdown();
 		}

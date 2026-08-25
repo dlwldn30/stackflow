@@ -1,4 +1,4 @@
-import type { GraphNodeState, TraceDetail, TraceEvent, TraceSummary } from '../../types/trace'
+import type { GraphNodeState, TraceDetail, TraceEvent, TraceResponsePreview, TraceSummary } from '../../types/trace'
 
 export type TraceHistoryFilter = 'all' | 'success' | 'attention' | 'timeout'
 export type TraceOutcome = 'success' | 'recovered' | 'failure' | 'collection_timeout'
@@ -10,6 +10,13 @@ export interface TraceMetadataItem {
 }
 
 const METADATA_LABELS: Record<string, string> = {
+  productId: '상품 ID',
+  scenario: '시나리오',
+  api: 'API',
+  count: '결과 개수',
+  stock: '재고',
+  cacheStatus: '캐시 상태',
+  httpStatus: 'HTTP 상태',
   'http.request.method': 'HTTP 메서드',
   'http.method': 'HTTP 메서드',
   'http.response.status_code': 'HTTP 상태',
@@ -32,6 +39,18 @@ const METADATA_LABELS: Record<string, string> = {
   'db.collection.name': '컬렉션',
   'db.sql.table': '테이블',
   'error.type': '오류 유형',
+}
+
+export function formatTraceResponsePreview(preview: TraceResponsePreview | null): string | null {
+  if (!preview?.body) return null
+  if (!preview.truncated && (preview.contentType === 'application/json' || preview.contentType.endsWith('+json'))) {
+    try {
+      return JSON.stringify(JSON.parse(preview.body), null, 2)
+    } catch {
+      return preview.body
+    }
+  }
+  return preview.body
 }
 
 export function getTraceOutcome(trace: TraceDetail, failureEvent: TraceEvent | null): TraceOutcome {

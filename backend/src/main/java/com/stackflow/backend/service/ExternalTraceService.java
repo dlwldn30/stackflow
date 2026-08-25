@@ -4,6 +4,7 @@ import com.stackflow.backend.domain.EventStatus;
 import com.stackflow.backend.domain.Trace;
 import com.stackflow.backend.domain.TraceCollectionStatus;
 import com.stackflow.backend.domain.TraceEvent;
+import com.stackflow.backend.domain.TraceResponsePreview;
 import com.stackflow.backend.domain.TraceSource;
 import jakarta.annotation.PreDestroy;
 import java.time.Clock;
@@ -81,13 +82,33 @@ public class ExternalTraceService {
 	}
 
 	public void recordHttpResponse(String traceId, int httpStatus, long durationMs) {
+		recordHttpResponse(traceId, httpStatus, durationMs, null, null);
+	}
+
+	public void recordHttpResponse(
+		String traceId,
+		int httpStatus,
+		long durationMs,
+		String contentType,
+		String responseBody
+	) {
 		TraceAccumulator accumulator = accumulators.get(traceId);
 		if (accumulator == null) {
 			return;
 		}
 		synchronized (accumulator) {
+			if (accumulators.get(traceId) != accumulator) {
+				return;
+			}
 			accumulator.httpStatus = httpStatus;
 			accumulator.requestDurationMs = durationMs;
+			accumulator.responsePreview = TraceResponsePreviewFactory
+				.fromBody(contentType, responseBody)
+				.orElse(null);
+			accumulator.httpResultRecorded = true;
+			if (hasServerSpan(accumulator)) {
+				scheduler.schedule(() -> finalizeIfQuiet(traceId), completionDebounce.toMillis(), TimeUnit.MILLISECONDS);
+			}
 		}
 	}
 
@@ -132,7 +153,8 @@ public class ExternalTraceService {
 		}
 		synchronized (accumulator) {
 			if (Duration.between(accumulator.lastUpdatedAt, clock.instant()).compareTo(completionDebounce) < 0
-				|| !hasServerSpan(accumulator)) {
+				|| !hasServerSpan(accumulator)
+				|| !accumulator.httpResultRecorded) {
 				return;
 			}
 			if (!accumulators.remove(traceId, accumulator)) {
@@ -205,7 +227,8 @@ public class ExternalTraceService {
 			events,
 			TraceSource.OPENTELEMETRY,
 			accumulator.serviceName,
-			collectionStatus
+			collectionStatus,
+			accumulator.responsePreview
 		);
 	}
 
@@ -235,6 +258,8 @@ public class ExternalTraceService {
 		private volatile String serviceName = "external-spring-app";
 		private volatile int httpStatus;
 		private volatile long requestDurationMs;
+		private volatile boolean httpResultRecorded;
+		private volatile TraceResponsePreview responsePreview;
 
 		private TraceAccumulator(String traceId, String parentSpanId, String method, String endpoint, Instant startedAt) {
 			this.traceId = traceId;

@@ -356,25 +356,73 @@
 
 .trace-inspector-disclosure summary {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   padding: 11px 0;
   color: var(--color-ink);
   font-size: 0.66rem;
   font-weight: 700;
   cursor: pointer;
+  list-style: none;
 }
 
-.trace-inspector-disclosure summary span {
+.trace-inspector-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.trace-inspector-disclosure summary > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.trace-inspector-disclosure summary svg {
+  transition: transform 140ms ease;
+}
+
+.trace-inspector-disclosure[open] summary svg {
+  transform: rotate(90deg);
+}
+
+.trace-inspector-disclosure summary > span:last-child {
   color: var(--color-muted);
+  font-weight: 600;
 }
 
 .trace-inspector-disclosure .metadata-list {
+  display: grid;
+  gap: 5px;
+  max-height: 230px;
   margin: 0 0 10px;
+  overflow: auto;
+}
+
+.trace-inspector-disclosure .metadata-item {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.45fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.trace-inspector-disclosure .metadata-item b,
+.trace-inspector-disclosure .metadata-item span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .trace-inspector-disclosure .response-body {
   max-height: 260px;
   margin: 0 0 10px;
+  overflow-wrap: anywhere;
+}
+
+.trace-inspector-empty {
+  margin-bottom: 10px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trace-inspector-disclosure summary svg {
+    transition: none;
+  }
 }
 
 @media (max-width: 1220px) {

@@ -1,7 +1,8 @@
-import type { GraphNodeState, TraceDetail, TraceEvent } from '../../../types/trace'
+import { ChevronRight } from 'lucide-react'
+import type { GraphNodeState, TraceDetail, TraceEvent, TraceResponsePreview } from '../../../types/trace'
 import { EVENT_STATUS_LABEL } from '../../../ui/copy'
 import { StatusBadge } from '../../../components/StatusBadge'
-import { getKeyMetadata } from '../traceModel'
+import { formatTraceResponsePreview, getKeyMetadata } from '../traceModel'
 
 interface TraceInspectorProps {
   trace: TraceDetail | null
@@ -9,7 +10,6 @@ interface TraceInspectorProps {
   selectedEvent: TraceEvent | null
   primaryFailureEvent: TraceEvent | null
   primaryFailureLabel: string | null
-  formattedResponseBody: string | null
   onInspectPrimaryFailure: () => void
 }
 
@@ -19,7 +19,6 @@ export function TraceInspector({
   selectedEvent,
   primaryFailureEvent,
   primaryFailureLabel,
-  formattedResponseBody,
   onInspectPrimaryFailure,
 }: TraceInspectorProps) {
   const keyMetadata = getKeyMetadata(selectedEvent?.metadata ?? {})
@@ -49,13 +48,21 @@ export function TraceInspector({
       </div>
 
       {!selectedNode || !selectedEvent ? (
-        <p className="empty-copy">Waterfall, 그래프 또는 이벤트 목록에서 확인할 span을 선택하세요.</p>
+        <p className="empty-copy trace-inspector-empty">Waterfall, 그래프 또는 이벤트 목록에서 확인할 span을 선택하세요.</p>
       ) : (
         <>
           <section className="trace-inspector-summary">
             <span><small>소요 시간</small><strong>{selectedEvent.durationMs}ms</strong></span>
             <span><small>호출 횟수</small><strong>{selectedNode.visits.length}</strong></span>
             <span><small>Service</small><strong>{selectedEvent.serviceName ?? trace?.serviceName ?? '-'}</strong></span>
+          </section>
+
+          <section className="trace-inspector-section">
+            <div className="section-row"><span className="section-label">Span 관계</span></div>
+            <dl className="trace-key-metadata">
+              <div><dt>Span ID</dt><dd>{selectedEvent.spanId ?? '-'}</dd></div>
+              <div><dt>Parent Span</dt><dd>{selectedEvent.parentSpanId ?? 'root'}</dd></div>
+            </dl>
           </section>
 
           {(selectedEvent.errorType || selectedEvent.errorMessage) ? (
@@ -79,35 +86,69 @@ export function TraceInspector({
 
           <section className="trace-inspector-section">
             <div className="section-row">
-              <span className="section-label">핵심 실행 정보</span>
+              <span className="section-label">주요 속성</span>
               <span>{keyMetadata.length}개</span>
             </div>
             <dl className="trace-key-metadata">
-              <div><dt>Span ID</dt><dd>{selectedEvent.spanId ?? '-'}</dd></div>
-              <div><dt>Parent Span</dt><dd>{selectedEvent.parentSpanId ?? 'root'}</dd></div>
               {keyMetadata.map((item) => (
                 <div key={item.key}><dt>{item.label}</dt><dd>{item.value}</dd></div>
               ))}
+              {keyMetadata.length === 0 ? <div><dt>속성</dt><dd>주요 속성 없음</dd></div> : null}
             </dl>
           </section>
-
-          <details className="trace-inspector-disclosure">
-            <summary>전체 metadata <span>{allMetadata.length}</span></summary>
-            <div className="metadata-list">
-              {allMetadata.length === 0 ? (
-                <span className="metadata-item">metadata 없음</span>
-              ) : allMetadata.map(([key, value]) => (
-                <span key={key} className="metadata-item">{key}: {value}</span>
-              ))}
-            </div>
-          </details>
-
-          <details className="trace-inspector-disclosure">
-            <summary>응답 JSON</summary>
-            {formattedResponseBody ? <pre className="response-body">{formattedResponseBody}</pre> : <p className="empty-copy">응답 본문이 없습니다.</p>}
-          </details>
         </>
       )}
+
+      <details className="trace-inspector-disclosure">
+        <summary>
+          <span><ChevronRight size={14} aria-hidden="true" />전체 metadata</span>
+          <span>{allMetadata.length}개</span>
+        </summary>
+        <div className="metadata-list">
+          {allMetadata.length === 0 ? (
+            <span className="metadata-item">선택한 Span의 metadata가 없습니다.</span>
+          ) : allMetadata.map(([key, value]) => (
+            <span key={key} className="metadata-item"><b>{key}</b><span>{value}</span></span>
+          ))}
+        </div>
+      </details>
+
+      <TraceResponseDisclosure
+        key={trace?.traceId ?? 'empty-trace'}
+        preview={trace?.responsePreview ?? null}
+        defaultOpen={trace?.traceCollectionStatus !== 'TIMED_OUT'
+          && (trace?.resultStatus === 'ERROR' || trace?.resultStatus === 'TIMEOUT')}
+      />
     </div>
+  )
+}
+
+function TraceResponseDisclosure({
+  preview,
+  defaultOpen,
+}: {
+  preview: TraceResponsePreview | null
+  defaultOpen: boolean
+}) {
+  const formattedBody = formatTraceResponsePreview(preview)
+  const formatLabel = preview
+    ? preview.contentType === 'application/json' || preview.contentType.endsWith('+json') ? 'JSON' : '텍스트'
+    : null
+
+  return (
+    <details
+      className="trace-inspector-disclosure trace-response-disclosure"
+      open={defaultOpen}
+    >
+      <summary>
+        <span><ChevronRight size={14} aria-hidden="true" />요청 응답</span>
+        <span>{preview ? `${formatLabel}${preview.truncated ? ' · 64KiB 일부' : ''}` : '없음'}</span>
+      </summary>
+      {formattedBody ? (
+        <pre className="response-body">{formattedBody}</pre>
+      ) : (
+        <p className="empty-copy">저장된 응답 미리보기가 없습니다.</p>
+      )}
+    </details>
   )
 }
