@@ -55,6 +55,6 @@ export function useProjectWorkspace(
   }
 }
 
-type ProjectWorkspaceModel = ReturnType<typeof useProjectWorkspace>
+export type ProjectWorkspaceModel = ReturnType<typeof useProjectWorkspace>
 export type ProjectWorkspaceActions = ActionFields<ProjectWorkspaceModel>
 export type ProjectWorkspaceState = StateFields<ProjectWorkspaceModel>

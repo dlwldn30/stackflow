@@ -1,5 +1,254 @@
-import type { ReactNode } from 'react'
+import { Background, Controls, ReactFlow } from '@xyflow/react'
+import { ArrowRight, Route } from 'lucide-react'
+import { StatusBadge } from '../../../components/StatusBadge'
+import { TraceWaterfall } from '../../../components/TraceWaterfall'
+import { EVENT_STATUS_LABEL } from '../../../ui/copy'
+import type { WorkbenchController } from '../hooks/useWorkbenchController'
+import { TraceHistoryPanel } from './TraceHistoryPanel'
+import { TraceInspector } from './TraceInspector'
+import { TraceOutcomeSummary } from './TraceOutcomeSummary'
+import './TraceView.css'
 
-export function TraceView({ active, children }: { active: boolean; children: ReactNode }) {
-  return active ? <>{children}</> : null
+type TraceViewProps = {
+  model: WorkbenchController['traceView']
+}
+
+export function TraceView({ model }: TraceViewProps) {
+  const {
+    traceDetail, recentTraces, traceHistoryFilter, setTraceHistoryFilter,
+    filteredRecentTraces, selectTrace, selectedDomain, selectedApi,
+    selectedApiMethodLabel, traceDisplayTone, traceDisplayStatus,
+    runtimeSupported, externalTraceConfigured, analysisTarget, setActiveView,
+    traceOutcome, primaryFailureEvent, primaryFailureLabel,
+    failurePropagationPath, primaryFailureNodeId, setSelectedNodeId,
+    traceViewTab, setTraceViewTab, waterfall, graph, flowInstanceRef,
+    activeRoute, traceComparison, orderedTraceEvents, selectedNode,
+    inspectorEvent,
+  } = model
+
+  return (
+    <section className="workspace workspace--runtime">
+      <aside className="left-panel control-rail">
+        <div className="panel-card control-card">
+          <div className="panel-header control-header">
+            <div>
+              <span className="section-label">실행 기록</span>
+              <h2>최근 Trace</h2>
+              <p>이전 실행 기록을 다시 확인할 수 있습니다.</p>
+            </div>
+            <StatusBadge tone="info">{recentTraces.length}개 기록</StatusBadge>
+          </div>
+            <TraceHistoryPanel
+              traces={filteredRecentTraces}
+              totalCount={recentTraces.length}
+              filter={traceHistoryFilter}
+              selectedTraceId={traceDetail?.traceId ?? null}
+              onFilterChange={setTraceHistoryFilter}
+              onSelectTrace={(traceId) => void selectTrace(traceId)}
+            />
+
+        </div>
+      </aside>
+      <section className="graph-panel">
+            <div className="panel-card panel-card--graph">
+              <div className="graph-head">
+                <div>
+                  <span className="section-label">실제 실행 결과 · Runtime Trace</span>
+                  <h2>{selectedDomain.name} 요청 흐름</h2>
+                  <p>
+                    {traceDetail
+                      ? `${traceDetail.method} ${traceDetail.endpoint} · HTTP ${traceDetail.httpStatus || '-'}`
+                      : runtimeSupported
+                        ? `${selectedApiMethodLabel} ${selectedApi.pathTemplate} 요청을 실행하면 실제 흐름이 표시됩니다.`
+                        : externalTraceConfigured
+                          ? `${selectedApiMethodLabel} ${selectedApi.pathTemplate} 요청 후 실제 OpenTelemetry span을 표시합니다.`
+                        : !selectedApi.methodSpecified
+                          ? 'HTTP method가 명시되지 않아 정적 분석만 가능합니다.'
+                          : '프로젝트 구조에서 Agent 실행 설정을 먼저 생성하세요.'}
+                  </p>
+                </div>
+                <StatusBadge tone={traceDisplayTone}>
+                  {traceDisplayStatus}
+                </StatusBadge>
+              </div>
+
+              {!traceDetail ? (
+                <div className="trace-empty-state">
+                  <Route size={34} aria-hidden="true" />
+                  <strong>먼저 API 요청을 실행하세요</strong>
+                  <p>{analysisTarget === 'external' ? 'Agent로 대상 앱을 재시작한 뒤 API 요청을 보내면 실제 부모·자식 span을 확인할 수 있습니다.' : '실행 가능한 Product API를 보내면 Controller부터 Response까지 실제 호출 경로를 확인할 수 있습니다.'}</p>
+                  <button type="button" onClick={() => setActiveView('api')}>
+                    API 요청으로 이동
+                    <ArrowRight size={16} aria-hidden="true" />
+                  </button>
+                </div>
+              ) : (
+                <>
+              <TraceOutcomeSummary
+                trace={traceDetail}
+                outcome={traceOutcome ?? 'success'}
+                failureEvent={primaryFailureEvent}
+                failureLabel={primaryFailureLabel}
+                propagationPath={failurePropagationPath}
+                onInspectFailure={() => setSelectedNodeId(primaryFailureNodeId)}
+              />
+
+              <div className="trace-view-tabs" role="tablist" aria-label="Trace 보기 방식">
+                <button type="button" role="tab" aria-selected={traceViewTab === 'timeline'} className={traceViewTab === 'timeline' ? 'is-active' : ''} onClick={() => setTraceViewTab('timeline')}>
+                  타임라인
+                </button>
+                <button type="button" role="tab" aria-selected={traceViewTab === 'graph'} className={traceViewTab === 'graph' ? 'is-active' : ''} onClick={() => setTraceViewTab('graph')}>
+                  그래프
+                </button>
+                <button type="button" role="tab" aria-selected={traceViewTab === 'events'} className={traceViewTab === 'events' ? 'is-active' : ''} onClick={() => setTraceViewTab('events')}>
+                  이벤트 <span>{traceDetail.events.length}</span>
+                </button>
+              </div>
+
+              {traceViewTab === 'timeline' ? (
+                <TraceWaterfall
+                  model={waterfall}
+                  selectedSpanId={selectedNode?.id ?? null}
+                  primaryFailureSpanId={primaryFailureNodeId}
+                  onSelectSpan={setSelectedNodeId}
+                />
+              ) : null}
+
+              {traceViewTab === 'graph' ? (
+                <>
+              {traceComparison ? (
+                <section className="trace-comparison" aria-label="예상 흐름과 실제 Trace 비교">
+                  <div>
+                    <span className="section-label">정적 예상 단계</span>
+                    {traceComparison.expected.map((item) => (
+                      <p key={item.id} className={item.matched ? 'is-matched' : 'is-missing'}>
+                        <strong>{item.label}</strong>
+                        <span>{item.matched ? '실제 호출 확인' : '실행되지 않은 예상 단계'}</span>
+                      </p>
+                    ))}
+                  </div>
+                  <div>
+                    <span className="section-label">실제 OpenTelemetry span</span>
+                    {traceComparison.actual.map((item) => (
+                      <p key={item.id} className={item.expected ? 'is-matched' : 'is-unexpected'}>
+                        <strong>{item.label}</strong>
+                        <span>{item.expected ? '예상 흐름과 일치' : '예상에 없던 실제 호출'}</span>
+                      </p>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+
+              <div className={`flow-route${traceDetail.source === 'OPENTELEMETRY' ? ' flow-route--spans' : ''}`}>
+                {graph.states.map((state) => (
+                  <button
+                    key={state.id}
+                    type="button"
+                    className={`route-step route-step--${state.status.toLowerCase()}${state.active ? ' is-active' : ''}${selectedNode?.id === state.id ? ' is-selected' : ''}`}
+                    onClick={() => setSelectedNodeId(state.id)}
+                  >
+                    <span>{state.label}</span>
+                    <strong>{state.active ? `${state.durationMs}ms` : '대기'}</strong>
+                  </button>
+                ))}
+              </div>
+
+              <div className="graph-toolbar">
+                <div>
+                  <span>{traceDetail.events.length}개 실행 이벤트</span>
+                  <strong>{activeRoute.length > 0 ? activeRoute.map((state) => state.label).join(' → ') : '실행된 경로가 없습니다'}</strong>
+                </div>
+                <div className="legend-strip" aria-label="그래프 상태 범례">
+                  <span className="legend-chip legend-chip--success">성공</span>
+                  <span className="legend-chip legend-chip--warning">주의</span>
+                  <span className="legend-chip legend-chip--error">실패</span>
+                  <span className="legend-chip legend-chip--idle">대기</span>
+                </div>
+              </div>
+
+              <div className="graph-surface">
+                {traceDetail.source === 'SAMPLE' ? (
+                  <div className="graph-lanes" aria-hidden="true">
+                    <span>client</span>
+                    <span>application</span>
+                    <span>cache</span>
+                    <span>data</span>
+                    <span>response</span>
+                  </div>
+                ) : null}
+                <ReactFlow
+                  key={traceDetail?.traceId ?? 'empty-flow'}
+                  fitView
+                  fitViewOptions={{ padding: 0.16 }}
+                  onInit={(instance) => {
+                    flowInstanceRef.current = instance
+                    window.requestAnimationFrame(() => {
+                      instance.fitView({ padding: 0.14, duration: 120, includeHiddenNodes: true })
+                    })
+                    window.setTimeout(() => {
+                      instance.fitView({ padding: 0.14, duration: 0, includeHiddenNodes: true })
+                    }, 180)
+                  }}
+                  nodes={graph.nodes}
+                  edges={graph.edges}
+                  onNodeClick={(_, node) => setSelectedNodeId(node.id)}
+                  nodesConnectable={false}
+                  nodesDraggable={false}
+                  elementsSelectable
+                  minZoom={0.35}
+                  maxZoom={1.35}
+                  proOptions={{ hideAttribution: true }}
+                >
+                  <Controls showInteractive={false} />
+                  <Background gap={20} size={1} />
+                </ReactFlow>
+              </div>
+                </>
+              ) : null}
+
+              {traceViewTab === 'events' ? (
+                <section className="trace-event-table" aria-label="시간순 Trace 이벤트">
+                  <header>
+                    <span>시작</span>
+                    <span>Span</span>
+                    <span>구성 요소</span>
+                    <span>소요 시간</span>
+                    <span>상태</span>
+                  </header>
+                  {orderedTraceEvents.map((event) => (
+                    <button
+                      key={event.eventId}
+                      type="button"
+                      className={selectedNode?.id === (event.spanId ?? event.component) ? 'is-selected' : ''}
+                      onClick={() => setSelectedNodeId(event.spanId ?? event.component)}
+                    >
+                      <span>{new Date(event.startedAt).toLocaleTimeString('ko-KR', { hour12: false, fractionalSecondDigits: 3 })}</span>
+                      <strong>{event.eventType}</strong>
+                      <span>{event.component}</span>
+                      <span>{event.durationMs}ms</span>
+                      <StatusBadge tone={event.status === 'SUCCESS' ? 'success' : event.status === 'WARNING' ? 'warning' : 'error'}>
+                        {EVENT_STATUS_LABEL[event.status]}
+                      </StatusBadge>
+                    </button>
+                  ))}
+                </section>
+              ) : null}
+                </>
+              )}
+            </div>
+
+      </section>
+      <aside className="right-panel inspector-rail">
+            <TraceInspector
+              trace={traceDetail}
+              selectedNode={selectedNode}
+              selectedEvent={inspectorEvent}
+              primaryFailureEvent={primaryFailureEvent}
+              primaryFailureLabel={primaryFailureLabel}
+              onInspectPrimaryFailure={() => setSelectedNodeId(primaryFailureNodeId)}
+            />
+
+      </aside>
+    </section>
+  )
 }

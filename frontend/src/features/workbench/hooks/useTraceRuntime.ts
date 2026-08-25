@@ -48,6 +48,6 @@ export function useTraceRuntime() {
   }
 }
 
-type TraceRuntimeModel = ReturnType<typeof useTraceRuntime>
+export type TraceRuntimeModel = ReturnType<typeof useTraceRuntime>
 export type TraceRuntimeActions = ActionFields<TraceRuntimeModel>
 export type TraceRuntimeState = StateFields<TraceRuntimeModel>

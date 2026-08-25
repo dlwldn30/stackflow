@@ -96,6 +96,6 @@ export function useRequestExecution(createEntry: CreateEntry) {
   }
 }
 
-type RequestExecutionModel = ReturnType<typeof useRequestExecution>
+export type RequestExecutionModel = ReturnType<typeof useRequestExecution>
 export type RequestExecutionActions = ActionFields<RequestExecutionModel>
 export type RequestExecutionState = StateFields<RequestExecutionModel>
