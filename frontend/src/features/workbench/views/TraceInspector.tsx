@@ -2,7 +2,7 @@ import { ChevronRight } from 'lucide-react'
 import type { GraphNodeState, TraceDetail, TraceEvent, TraceResponsePreview } from '../../../types/trace'
 import { EVENT_STATUS_LABEL } from '../../../ui/copy'
 import { StatusBadge } from '../../../components/StatusBadge'
-import { formatTraceResponsePreview, getKeyMetadata } from '../traceModel'
+import { formatTraceResponsePreview, getExceptionLocation, getKeyMetadata } from '../traceModel'
 
 interface TraceInspectorProps {
   trace: TraceDetail | null
@@ -22,6 +22,7 @@ export function TraceInspector({
   onInspectPrimaryFailure,
 }: TraceInspectorProps) {
   const keyMetadata = getKeyMetadata(selectedEvent?.metadata ?? {})
+  const exceptionLocation = getExceptionLocation(selectedEvent?.metadata ?? {})
   const allMetadata = Object.entries(selectedEvent?.metadata ?? {})
   const selectedEventId = selectedEvent?.spanId ?? selectedEvent?.component
   const primaryFailureId = primaryFailureEvent?.spanId ?? primaryFailureEvent?.component
@@ -66,22 +67,50 @@ export function TraceInspector({
           </section>
 
           {(selectedEvent.errorType || selectedEvent.errorMessage) ? (
-            <section className="trace-inspector-error">
-              <span>{isPropagatedError ? '상위로 전파된 오류' : '원인 오류'}</span>
-              <strong>{selectedEvent.errorType ?? EVENT_STATUS_LABEL[selectedEvent.status]}</strong>
-              <p>{selectedEvent.errorMessage ?? '상세 오류 메시지가 수집되지 않았습니다.'}</p>
-              {isPropagatedError && primaryFailureEvent ? (
-                <button
-                  type="button"
-                  aria-label={`실제 시작 지점 ${primaryFailureLabel ?? primaryFailureEvent.eventType} 확인`}
-                  onClick={onInspectPrimaryFailure}
-                >
-                  <small>실제 시작 지점</small>
-                  <strong>{primaryFailureLabel ?? primaryFailureEvent.eventType}</strong>
-                  <span>{primaryFailureEvent.errorType ?? EVENT_STATUS_LABEL[primaryFailureEvent.status]}</span>
-                </button>
+            <>
+              <section className="trace-inspector-error">
+                <span>{isPropagatedError ? '상위로 전파된 오류' : '원인 오류'}</span>
+                <strong>{selectedEvent.errorType ?? EVENT_STATUS_LABEL[selectedEvent.status]}</strong>
+                <p>{selectedEvent.errorMessage ?? '상세 오류 메시지가 수집되지 않았습니다.'}</p>
+                {isPropagatedError && primaryFailureEvent ? (
+                  <button
+                    type="button"
+                    aria-label={`실제 시작 지점 ${primaryFailureLabel ?? primaryFailureEvent.eventType} 확인`}
+                    onClick={onInspectPrimaryFailure}
+                  >
+                    <small>실제 시작 지점</small>
+                    <strong>{primaryFailureLabel ?? primaryFailureEvent.eventType}</strong>
+                    <span>{primaryFailureEvent.errorType ?? EVENT_STATUS_LABEL[primaryFailureEvent.status]}</span>
+                  </button>
+                ) : null}
+              </section>
+
+              <section className="trace-inspector-section trace-exception-location">
+                <div className="section-row"><span className="section-label">오류 발생 위치</span></div>
+                {exceptionLocation.length > 0 ? (
+                  <dl className="trace-key-metadata">
+                    {exceptionLocation.map((item) => (
+                      <div key={item.key}><dt>{item.label}</dt><dd>{item.value}</dd></div>
+                    ))}
+                  </dl>
+                ) : (
+                  <p className="trace-exception-empty">코드 위치가 수집되지 않았습니다.</p>
+                )}
+                {!selectedEvent.stackTrace ? (
+                  <p className="trace-exception-empty">Agent가 stacktrace를 제공하지 않았습니다.</p>
+                ) : null}
+              </section>
+
+              {selectedEvent.stackTrace ? (
+                <details className="trace-inspector-disclosure trace-stacktrace-disclosure">
+                  <summary>
+                    <span><ChevronRight size={14} aria-hidden="true" />Stacktrace</span>
+                    <span>{selectedEvent.stackTraceTruncated ? '16KiB 일부' : '원문'}</span>
+                  </summary>
+                  <pre className="trace-stacktrace">{selectedEvent.stackTrace}</pre>
+                </details>
               ) : null}
-            </section>
+            </>
           ) : null}
 
           <section className="trace-inspector-section">

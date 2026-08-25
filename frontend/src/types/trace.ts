@@ -35,6 +35,8 @@ export interface TraceEvent {
   parentSpanId: string | null
   serviceName: string | null
   spanKind: string | null
+  stackTrace: string | null
+  stackTraceTruncated: boolean
 }
 
 export interface TraceDetail {

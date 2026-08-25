@@ -13,6 +13,7 @@ const failureEvent: TraceEvent = {
   errorType: 'SQLTimeoutException', errorMessage: 'query timed out',
   metadata: { productId: '1001', 'db.system.name': 'postgresql', 'db.operation.name': 'SELECT' },
   spanId: 'postgres', parentSpanId: 'service', serviceName: 'trace-lab', spanKind: 'CLIENT',
+  stackTrace: null, stackTraceTruncated: false,
 }
 
 const detail: TraceDetail = {
@@ -102,6 +103,68 @@ describe('Trace workspace presentation', () => {
     expect(inspector.getByText('상품 ID')).toBeInTheDocument()
     expect(inspector.getByText('전체 metadata').closest('details')).not.toHaveAttribute('open')
     expect(inspector.getByText('요청 응답').closest('details')).toHaveAttribute('open')
+  })
+
+  it('shows structured exception location and keeps a bounded stacktrace collapsed', () => {
+    const eventWithStackTrace: TraceEvent = {
+      ...failureEvent,
+      metadata: {
+        ...failureEvent.metadata,
+        'code.namespace': 'com.example.product.ProductService',
+        'code.function.name': 'lookupProduct',
+        'code.file.path': '~/workspace/ProductService.java',
+        'code.line.number': '73',
+      },
+      stackTrace: 'java.sql.SQLTimeoutException: query timed out\n\tat com.example.product.ProductService.lookupProduct(ProductService.java:73)',
+      stackTraceTruncated: true,
+    }
+    const selectedNode: GraphNodeState = {
+      id: 'postgres', component: 'POSTGRESQL', label: 'SELECT product', status: 'TIMEOUT',
+      durationMs: 25, active: true, visits: [eventWithStackTrace],
+    }
+    const { container } = render(
+      <TraceInspector
+        trace={{ ...detail, events: [eventWithStackTrace] }}
+        selectedNode={selectedNode}
+        selectedEvent={eventWithStackTrace}
+        primaryFailureEvent={eventWithStackTrace}
+        primaryFailureLabel="SELECT product"
+        onInspectPrimaryFailure={vi.fn()}
+      />,
+    )
+
+    const inspector = within(container)
+    const locationSection = inspector.getByText('오류 발생 위치').closest('section') as HTMLElement
+    const location = within(locationSection)
+    expect(location.getByText('com.example.product.ProductService')).toBeInTheDocument()
+    expect(location.getByText('lookupProduct')).toBeInTheDocument()
+    expect(location.getByText('~/workspace/ProductService.java')).toBeInTheDocument()
+    expect(location.getByText('73')).toBeInTheDocument()
+    const stackTraceDetails = inspector.getByText('Stacktrace').closest('details')
+    expect(stackTraceDetails).not.toHaveAttribute('open')
+    expect(inspector.getByText('16KiB 일부')).toBeInTheDocument()
+  })
+
+  it('explains when the agent did not provide code location or a stacktrace', () => {
+    const selectedNode: GraphNodeState = {
+      id: 'postgres', component: 'POSTGRESQL', label: 'SELECT product', status: 'TIMEOUT',
+      durationMs: 25, active: true, visits: [failureEvent],
+    }
+    const { container } = render(
+      <TraceInspector
+        trace={detail}
+        selectedNode={selectedNode}
+        selectedEvent={failureEvent}
+        primaryFailureEvent={failureEvent}
+        primaryFailureLabel="SELECT product"
+        onInspectPrimaryFailure={vi.fn()}
+      />,
+    )
+
+    const inspector = within(container)
+    expect(inspector.getByText('코드 위치가 수집되지 않았습니다.')).toBeInTheDocument()
+    expect(inspector.getByText('Agent가 stacktrace를 제공하지 않았습니다.')).toBeInTheDocument()
+    expect(inspector.queryByText('Stacktrace')).not.toBeInTheDocument()
   })
 
   it('distinguishes a propagated parent error from the actual failure span', () => {

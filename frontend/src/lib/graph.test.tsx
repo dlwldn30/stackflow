@@ -19,6 +19,8 @@ function event(overrides: Partial<TraceEvent>): TraceEvent {
     parentSpanId: null,
     serviceName: 'sample',
     spanKind: 'INTERNAL',
+    stackTrace: null,
+    stackTraceTruncated: false,
     ...overrides,
   }
 }
