@@ -1,7 +1,7 @@
 import type { GraphNodeState, TraceDetail, TraceEvent, TraceSummary } from '../../types/trace'
 
 export type TraceHistoryFilter = 'all' | 'success' | 'attention' | 'timeout'
-export type TraceOutcome = 'success' | 'recovered' | 'failure'
+export type TraceOutcome = 'success' | 'recovered' | 'failure' | 'collection_timeout'
 
 export interface TraceMetadataItem {
   key: string
@@ -35,6 +35,7 @@ const METADATA_LABELS: Record<string, string> = {
 }
 
 export function getTraceOutcome(trace: TraceDetail, failureEvent: TraceEvent | null): TraceOutcome {
+  if (trace.traceCollectionStatus === 'TIMED_OUT') return 'collection_timeout'
   if (trace.resultStatus === 'ERROR' || trace.resultStatus === 'TIMEOUT') return 'failure'
   return failureEvent ? 'recovered' : 'success'
 }
@@ -101,9 +102,16 @@ export function buildFailurePropagationPath(
 
 export function filterTraceHistory(traces: TraceSummary[], filter: TraceHistoryFilter): TraceSummary[] {
   if (filter === 'all') return traces
-  if (filter === 'success') return traces.filter((trace) => trace.resultStatus === 'SUCCESS')
-  if (filter === 'timeout') return traces.filter((trace) => trace.resultStatus === 'TIMEOUT')
-  return traces.filter((trace) => trace.resultStatus === 'WARNING' || trace.resultStatus === 'ERROR')
+  if (filter === 'success') return traces.filter((trace) =>
+    trace.resultStatus === 'SUCCESS' && trace.traceCollectionStatus !== 'TIMED_OUT',
+  )
+  if (filter === 'timeout') return traces.filter((trace) =>
+    trace.resultStatus === 'TIMEOUT' || trace.traceCollectionStatus === 'TIMED_OUT',
+  )
+  return traces.filter((trace) =>
+    trace.traceCollectionStatus !== 'TIMED_OUT'
+      && (trace.resultStatus === 'WARNING' || trace.resultStatus === 'ERROR'),
+  )
 }
 
 export function getKeyMetadata(metadata: Record<string, string>): TraceMetadataItem[] {
