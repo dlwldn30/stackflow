@@ -26,7 +26,9 @@ Analyze project
 }
 ```
 
-The response contains the detected build tool, service name, instrumented FQCNs, `OTEL_INSTRUMENTATION_METHODS_INCLUDE`, environment variables, and Gradle/Maven/JAR launch commands. Only public methods of analyzed Controller, Service, UseCase, Repository, Store, Cache, Gateway, and Client classes are added. Java Agent default Spring MVC, JDBC, Redis, and HTTP client instrumentation remains active even when no extra method is found.
+The response contains the detected build tool, service name, instrumented FQCNs, `OTEL_INSTRUMENTATION_METHODS_INCLUDE`, environment variables, and Gradle/Maven/JAR launch commands. Every validated Java source root reported by project analysis is scanned, including roots in submodules. Source roots outside the project, missing roots, and symlinks that escape the project are ignored. Duplicate FQCNs and public method names are merged deterministically.
+
+Only public methods of analyzed Controller, Service, UseCase, Repository, Store, Cache, Gateway, and Client classes are added. Java Agent default Spring MVC, JDBC, Redis, and HTTP client instrumentation remains active even when no extra method is found. Older analysis results without a source-root list fall back to the primary `sourceRoot` field.
 
 The Agent JAR is not downloaded automatically. Use the official OpenTelemetry Java Instrumentation release and keep the default local path or enter another path.
 

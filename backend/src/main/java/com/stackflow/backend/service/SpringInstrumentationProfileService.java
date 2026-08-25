@@ -7,15 +7,17 @@ import com.stackflow.backend.dto.ProjectStructureResponse;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -56,10 +58,15 @@ public class SpringInstrumentationProfileService {
 		String collectorBaseUrl = normalizeCollectorBaseUrl(request.collectorBaseUrl());
 		String agentPath = normalizeAgentPath(request.agentPath());
 		Set<String> eligibleClasses = collectEligibleClassNames(structure);
-		List<InstrumentedClass> instrumentedClasses = scanInstrumentedClasses(
-			projectRoot.resolve(structure.sourceRoot()).normalize(),
-			eligibleClasses
+		List<String> analyzedSourceRoots = structure.analysisCoverage() == null
+			? List.of()
+			: structure.analysisCoverage().sourceRoots();
+		List<Path> sourceRoots = resolveSourceRoots(
+			projectRoot,
+			analyzedSourceRoots,
+			structure.sourceRoot()
 		);
+		List<InstrumentedClass> instrumentedClasses = scanInstrumentedClasses(sourceRoots, eligibleClasses);
 		String methodsInclude = instrumentedClasses.stream()
 			.filter(item -> !item.methods().isEmpty())
 			.map(item -> item.qualifiedName() + "[" + String.join(",", item.methods()) + "]")
@@ -102,45 +109,104 @@ public class SpringInstrumentationProfileService {
 		return classes;
 	}
 
-	private List<InstrumentedClass> scanInstrumentedClasses(Path sourceRoot, Set<String> eligibleClasses) {
-		if (!Files.isDirectory(sourceRoot)) {
-			return List.of();
-		}
-		List<InstrumentedClass> classes = new ArrayList<>();
-		try (Stream<Path> paths = Files.walk(sourceRoot)) {
-			paths.filter(path -> path.toString().endsWith(".java"))
-				.forEach(path -> scanClass(path, eligibleClasses).ifPresent(classes::add));
+	List<Path> resolveSourceRoots(Path projectRoot, List<String> analyzedSourceRoots, String fallbackSourceRoot) {
+		Path normalizedProjectRoot = projectRoot.toAbsolutePath().normalize();
+		Path realProjectRoot;
+		try {
+			realProjectRoot = normalizedProjectRoot.toRealPath();
 		} catch (IOException exception) {
-			throw new IllegalArgumentException("Spring source files could not be read.", exception);
+			throw new IllegalArgumentException("projectPath must point to a readable directory.", exception);
 		}
-		return classes.stream()
-			.sorted(Comparator.comparing(InstrumentedClass::qualifiedName))
+
+		List<Path> sourceRoots = new ArrayList<>();
+		if (analyzedSourceRoots != null) {
+			analyzedSourceRoots.forEach(root -> resolveSourceRoot(
+				normalizedProjectRoot,
+				realProjectRoot,
+				root
+			).ifPresent(sourceRoots::add));
+		}
+		if (sourceRoots.isEmpty()) {
+			resolveSourceRoot(normalizedProjectRoot, realProjectRoot, fallbackSourceRoot)
+				.ifPresent(sourceRoots::add);
+		}
+		return sourceRoots.stream().distinct().toList();
+	}
+
+	private java.util.Optional<Path> resolveSourceRoot(
+		Path projectRoot,
+		Path realProjectRoot,
+		String sourceRoot
+	) {
+		if (sourceRoot == null || sourceRoot.isBlank()) {
+			return java.util.Optional.empty();
+		}
+		try {
+			Path configuredPath = Path.of(sourceRoot.trim());
+			Path candidate = configuredPath.isAbsolute()
+				? configuredPath.normalize()
+				: projectRoot.resolve(configuredPath).normalize();
+			if (!candidate.startsWith(projectRoot)
+				|| !candidate.endsWith(Path.of("src/main/java"))
+				|| !Files.isDirectory(candidate)) {
+				return java.util.Optional.empty();
+			}
+			Path realSourceRoot = candidate.toRealPath();
+			return realSourceRoot.startsWith(realProjectRoot)
+				? java.util.Optional.of(realSourceRoot)
+				: java.util.Optional.empty();
+		} catch (InvalidPathException | IOException | SecurityException exception) {
+			return java.util.Optional.empty();
+		}
+	}
+
+	private List<InstrumentedClass> scanInstrumentedClasses(
+		List<Path> sourceRoots,
+		Set<String> eligibleClasses
+	) {
+		Map<String, Set<String>> methodsByClass = new TreeMap<>();
+		for (Path sourceRoot : sourceRoots) {
+			try (Stream<Path> paths = Files.walk(sourceRoot)) {
+				List<Path> sourceFiles = paths.filter(Files::isRegularFile)
+					.filter(path -> path.toString().endsWith(".java"))
+					.sorted()
+					.toList();
+				for (Path sourceFile : sourceFiles) {
+					scanClass(sourceFile, eligibleClasses).ifPresent(item -> methodsByClass
+						.computeIfAbsent(item.qualifiedName(), ignored -> new TreeSet<>())
+						.addAll(item.methods()));
+				}
+			} catch (IOException exception) {
+				throw new IllegalArgumentException("Spring source files could not be read.", exception);
+			}
+		}
+		return methodsByClass.entrySet().stream()
+			.map(entry -> new InstrumentedClass(entry.getKey(), List.copyOf(entry.getValue())))
 			.toList();
 	}
 
-	private java.util.Optional<InstrumentedClass> scanClass(Path sourceFile, Set<String> eligibleClasses) {
-		try {
-			String source = Files.readString(sourceFile);
-			Matcher typeMatcher = TYPE_PATTERN.matcher(source);
-			if (!typeMatcher.find() || !eligibleClasses.contains(typeMatcher.group(1))) {
-				return java.util.Optional.empty();
-			}
-			String className = typeMatcher.group(1);
-			Matcher packageMatcher = PACKAGE_PATTERN.matcher(source);
-			String packageName = packageMatcher.find() ? packageMatcher.group(1) : "";
-			Set<String> methods = new LinkedHashSet<>();
-			Matcher methodMatcher = PUBLIC_METHOD_PATTERN.matcher(source);
-			while (methodMatcher.find()) {
-				String methodName = methodMatcher.group(1);
-				if (!methodName.equals("main") && !methodName.equals(className)) {
-					methods.add(methodName);
-				}
-			}
-			String qualifiedName = packageName.isBlank() ? className : packageName + "." + className;
-			return java.util.Optional.of(new InstrumentedClass(qualifiedName, methods.stream().sorted().toList()));
-		} catch (IOException exception) {
+	private java.util.Optional<InstrumentedClass> scanClass(
+		Path sourceFile,
+		Set<String> eligibleClasses
+	) throws IOException {
+		String source = Files.readString(sourceFile);
+		Matcher typeMatcher = TYPE_PATTERN.matcher(source);
+		if (!typeMatcher.find() || !eligibleClasses.contains(typeMatcher.group(1))) {
 			return java.util.Optional.empty();
 		}
+		String className = typeMatcher.group(1);
+		Matcher packageMatcher = PACKAGE_PATTERN.matcher(source);
+		String packageName = packageMatcher.find() ? packageMatcher.group(1) : "";
+		Set<String> methods = new LinkedHashSet<>();
+		Matcher methodMatcher = PUBLIC_METHOD_PATTERN.matcher(source);
+		while (methodMatcher.find()) {
+			String methodName = methodMatcher.group(1);
+			if (!methodName.equals("main") && !methodName.equals(className)) {
+				methods.add(methodName);
+			}
+		}
+		String qualifiedName = packageName.isBlank() ? className : packageName + "." + className;
+		return java.util.Optional.of(new InstrumentedClass(qualifiedName, methods.stream().sorted().toList()));
 	}
 
 	private Map<String, String> buildEnvironment(
