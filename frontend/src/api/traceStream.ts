@@ -7,6 +7,7 @@ import type {
 } from '../types/trace'
 
 type TraceTerminalStatus = 'completed' | 'error'
+export const TRACE_STREAM_CONNECT_TIMEOUT_MS = 5_000
 
 export interface TraceStreamHandlers {
   onStarted: (event: TraceStartedEvent) => void
@@ -25,26 +26,25 @@ export function connectTraceStream(traceId: string, handlers: TraceStreamHandler
     const stream = new EventSource(`/api/traces/${traceId}/stream`)
     let opened = false
     let resolved = false
-    const fallbackTimer = window.setTimeout(() => {
-      if (!resolved && stream.readyState !== EventSource.CLOSED) {
-        resolved = true
-        opened = true
-        resolve(stream)
-      }
-    }, 1_500)
+    const connectionTimer = window.setTimeout(() => {
+      stream.close()
+      finalizeReject(new Error('실시간 연결 실패: 5초 동안 연결 응답을 받지 못했습니다.'))
+    }, TRACE_STREAM_CONNECT_TIMEOUT_MS)
+
+    const clearConnectionTimer = () => window.clearTimeout(connectionTimer)
 
     const finalizeResolve = () => {
       if (resolved) return
       resolved = true
       opened = true
-      window.clearTimeout(fallbackTimer)
+      clearConnectionTimer()
       resolve(stream)
     }
 
     const finalizeReject = (error: Error) => {
       if (resolved) return
       resolved = true
-      window.clearTimeout(fallbackTimer)
+      clearConnectionTimer()
       reject(error)
     }
 
@@ -63,19 +63,23 @@ export function connectTraceStream(traceId: string, handlers: TraceStreamHandler
     }) as EventListener)
     stream.addEventListener('trace_completed', ((event: Event) => {
       terminalReceived = true
+      clearConnectionTimer()
       handlers.onTerminal(parseEvent<TraceTerminalEvent>(event), 'completed')
     }) as EventListener)
     stream.addEventListener('trace_failed', ((event: Event) => {
       terminalReceived = true
+      clearConnectionTimer()
       handlers.onTerminal(parseEvent<TraceTerminalEvent>(event), 'error')
     }) as EventListener)
     stream.addEventListener('stream_timeout', ((event: Event) => {
       connectionTimedOut = true
+      clearConnectionTimer()
       handlers.onConnectionTimeout(parseEvent<TraceStreamTimeoutEvent>(event))
       stream.close()
     }) as EventListener)
     stream.addEventListener('error', (() => {
       stream.close()
+      clearConnectionTimer()
       if (terminalReceived || connectionTimedOut) return
       if (!opened) {
         finalizeReject(new Error('실시간 연결을 열지 못했습니다. 세션이 만료됐거나 backend에 연결할 수 없습니다.'))

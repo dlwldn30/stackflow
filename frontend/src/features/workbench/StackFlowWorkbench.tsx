@@ -120,6 +120,7 @@ export function StackFlowWorkbench() {
     analyzeOnly,
     projectStatusContent,
     selectedDomainDisplayMode,
+    controllerBasePathSummary,
     hasIntegrationBoundary,
     demoTraceReady,
     externalTraceConfigured,
@@ -438,7 +439,12 @@ export function StackFlowWorkbench() {
                     </span>
                     <span>
                       <small>Base path</small>
-                      <strong>{selectedDomain.controllers.map((controller) => controller.basePath || '/').join(' · ') || '-'}</strong>
+                      <strong
+                        title={controllerBasePathSummary.fullLabel}
+                        aria-label={`Base path: ${controllerBasePathSummary.fullLabel}`}
+                      >
+                        {controllerBasePathSummary.label}
+                      </strong>
                     </span>
                     <span>
                       <small>Endpoint</small>

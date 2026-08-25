@@ -10,10 +10,10 @@ import { useProjectWorkspace } from './useProjectWorkspace'
 import { useRequestExecution } from './useRequestExecution'
 import { useTraceRuntime } from './useTraceRuntime'
 import type { ApiDefinition, ExternalRequestSnapshot } from '../types'
-import { buildFailurePropagationPath, filterTraceHistory, getDefaultInspectionEvent, getInspectorEvent, getTraceOutcome } from '../traceModel'
+import { buildFailurePropagationPath, filterTraceHistory, getDefaultInspectionEvent, getInspectorEvent, getTraceOutcome, upsertRecentTrace } from '../traceModel'
 import { EMPTY_API_DEFINITION, EMPTY_DOMAIN, FALLBACK_API_CATALOG, FALLBACK_PROJECT_STRUCTURE, PROJECT_STATUS_CONTENT, matchesTraceEndpoint } from '../fixtures'
 import { buildExternalRequestMessage, buildExternalTargetPreview, buildRequestMessage, createRequestEntry, filterApis, formatResponseBody, parseResponseBody, toEnabledEntries } from '../requestModel'
-import { buildCommonProjectLayers, buildDomainStructurePath, buildEstimatedFlow, buildProjectMetrics, compareEstimatedAndActualFlow, createPlaceholderTrace, fetchTraceWithRetry, flattenProjectApis, getApiMethodBadgeClassName, getApiMethodLabel, getDomainDisplayMode, groupProjectLayers, isConcreteMethodApi, isStackFlowRuntimeApi } from '../workbenchModel'
+import { buildCommonProjectLayers, buildDomainStructurePath, buildEstimatedFlow, buildProjectMetrics, compareEstimatedAndActualFlow, createPlaceholderTrace, fetchTraceWithRetry, flattenProjectApis, getApiMethodBadgeClassName, getApiMethodLabel, getControllerBasePathSummary, getDomainDisplayMode, groupProjectLayers, isConcreteMethodApi, isStackFlowRuntimeApi } from '../workbenchModel'
 
 export function useWorkbenchController() {
   const [activeView, setActiveView] = useState<ViewMode>('project')
@@ -102,6 +102,7 @@ export function useWorkbenchController() {
   const analyzeOnly = hasDetectedApis && !runtimeSupported && !externalRunnable
   const projectStatusContent = PROJECT_STATUS_CONTENT[projectStructure.analysisStatus]
   const selectedDomainDisplayMode = getDomainDisplayMode(selectedDomain, analysisTarget === 'sample')
+  const controllerBasePathSummary = getControllerBasePathSummary(selectedDomain.controllers)
   const hasIntegrationBoundary = selectedDomainDisplayMode?.tone === 'integration'
   const demoTraceReady = import.meta.env.VITE_DEMO_TRACE_READY === 'true'
     && projectPath.trim() === import.meta.env.VITE_DEFAULT_PROJECT_PATH
@@ -437,12 +438,12 @@ export function useWorkbenchController() {
         activeStreamRef.current = stream
         setStreamStatus('streaming')
         setRequestMessage('실시간 연결이 열렸습니다. API 요청을 실행합니다...')
-      } catch {
+      } catch (error) {
         if (activeRunIdRef.current !== runId) {
           return
         }
         setStreamStatus('error')
-        setRequestMessage('실시간 연결을 열지 못했습니다. 요청 후 최종 Trace를 불러옵니다...')
+        setRequestMessage(`${error instanceof Error ? error.message : '실시간 연결 실패'} 요청 후 최종 Trace를 불러옵니다...`)
       }
 
       const search = new URLSearchParams({ traceId })
@@ -481,20 +482,16 @@ export function useWorkbenchController() {
         setRequestState(response.ok ? 'idle' : 'error')
         setStreamStatus(response.ok ? 'completed' : 'error')
         setRequestMessage(buildRequestMessage(finalTrace.resultStatus, payload))
-        setRecentTraces((current) => {
-          const next = current.filter((item) => item.traceId !== finalTrace.traceId)
-          next.unshift({
-            traceId: finalTrace.traceId,
-            endpoint: finalTrace.endpoint,
-            scenario: finalTrace.scenario,
-            resultStatus: finalTrace.resultStatus,
-            httpStatus: finalTrace.httpStatus,
-            durationMs: finalTrace.durationMs,
-            startedAt: finalTrace.startedAt,
-            traceCollectionStatus: finalTrace.traceCollectionStatus,
-          })
-          return next.slice(0, 8)
-        })
+        setRecentTraces((current) => upsertRecentTrace(current, {
+          traceId: finalTrace.traceId,
+          endpoint: finalTrace.endpoint,
+          scenario: finalTrace.scenario,
+          resultStatus: finalTrace.resultStatus,
+          httpStatus: finalTrace.httpStatus,
+          durationMs: finalTrace.durationMs,
+          startedAt: finalTrace.startedAt,
+          traceCollectionStatus: finalTrace.traceCollectionStatus,
+        }))
       })
     } catch (error) {
       if (activeRunIdRef.current !== runId) {
@@ -613,12 +610,12 @@ export function useWorkbenchController() {
             return
           }
           activeStreamRef.current = stream
-        } catch {
+        } catch (error) {
           if (activeRunIdRef.current !== runId) {
             return
           }
           setStreamStatus('error')
-          setRequestMessage('Trace 실시간 연결을 열지 못했습니다. Agent와 수집 주소를 확인하세요.')
+          setRequestMessage(`${error instanceof Error ? error.message : '실시간 연결 실패'} Agent와 수집 주소를 확인하세요.`)
         }
       }
     } catch (error) {
@@ -766,7 +763,7 @@ export function useWorkbenchController() {
         }
         startTransition(() => {
           setStreamStatus('error')
-          setRequestMessage('실시간 연결이 종료되었습니다. 요청 결과는 최근 Trace에서 다시 확인하세요.')
+          setRequestMessage('실시간 연결 종료: 요청 결과는 최근 Trace에서 다시 확인하세요.')
         })
       },
     })
@@ -931,6 +928,7 @@ export function useWorkbenchController() {
     analyzeOnly,
     projectStatusContent,
     selectedDomainDisplayMode,
+    controllerBasePathSummary,
     hasIntegrationBoundary,
     demoTraceReady,
     externalTraceConfigured,

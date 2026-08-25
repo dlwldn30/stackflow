@@ -2,6 +2,7 @@ import type { GraphNodeState, TraceDetail, TraceEvent, TraceResponsePreview, Tra
 
 export type TraceHistoryFilter = 'all' | 'success' | 'attention' | 'timeout'
 export type TraceOutcome = 'success' | 'recovered' | 'failure' | 'collection_timeout'
+export const MAX_RECENT_TRACES = 25
 
 export interface TraceMetadataItem {
   key: string
@@ -131,6 +132,10 @@ export function filterTraceHistory(traces: TraceSummary[], filter: TraceHistoryF
     trace.traceCollectionStatus !== 'TIMED_OUT'
       && (trace.resultStatus === 'WARNING' || trace.resultStatus === 'ERROR'),
   )
+}
+
+export function upsertRecentTrace(traces: TraceSummary[], trace: TraceSummary): TraceSummary[] {
+  return [trace, ...traces.filter((item) => item.traceId !== trace.traceId)].slice(0, MAX_RECENT_TRACES)
 }
 
 export function getKeyMetadata(metadata: Record<string, string>): TraceMetadataItem[] {

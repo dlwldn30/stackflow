@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ComponentType, EventStatus, GraphNodeState, TraceDetail, TraceEvent, TraceSummary } from '../../types/trace'
-import { buildFailurePropagationPath, filterTraceHistory, getDefaultInspectionEvent, getInspectorEvent, getKeyMetadata, getTraceOutcome } from './traceModel'
+import { buildFailurePropagationPath, filterTraceHistory, getDefaultInspectionEvent, getInspectorEvent, getKeyMetadata, getTraceOutcome, MAX_RECENT_TRACES, upsertRecentTrace } from './traceModel'
 
 function event(
   spanId: string,
@@ -103,5 +103,19 @@ describe('trace inspection model', () => {
   it('translates curated metadata while retaining its original key', () => {
     expect(getKeyMetadata({ 'db.system.name': 'postgresql', private: 'hidden' }))
       .toEqual([{ key: 'db.system.name', label: '데이터베이스', value: 'postgresql' }])
+  })
+
+  it('keeps 25 recent traces with the newest unique trace first', () => {
+    const summaries: TraceSummary[] = Array.from({ length: 30 }, (_, index) => ({
+      traceId: `trace-${index}`, endpoint: '/test', scenario: 'normal', resultStatus: 'SUCCESS',
+      httpStatus: 200, durationMs: index, startedAt: new Date(index).toISOString(), traceCollectionStatus: 'COMPLETED',
+    }))
+    const replacement = { ...summaries[10], durationMs: 999 }
+
+    const updated = upsertRecentTrace(summaries, replacement)
+
+    expect(updated).toHaveLength(MAX_RECENT_TRACES)
+    expect(updated[0]).toEqual(replacement)
+    expect(updated.filter((item) => item.traceId === replacement.traceId)).toHaveLength(1)
   })
 })

@@ -44,6 +44,7 @@ describe('request model', () => {
   it('formats JSON and preserves non-JSON response bodies', () => {
     expect(formatResponseBody('{"ok":true}')).toBe('{\n  "ok": true\n}')
     expect(parseResponseBody('plain text')).toBe('plain text')
+    expect(formatResponseBody('{"partial":')).toBe('{"partial":')
   })
 
   it('creates stable entry fields with a generated id', () => {

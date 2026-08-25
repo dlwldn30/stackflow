@@ -1,5 +1,5 @@
 import { getTrace } from '../../api/stackflow'
-import type { ApiCatalogItem, HttpMethod, ProjectDomain, ProjectLayer, ProjectStructure, TraceDetail, TraceEvent } from '../../types/trace'
+import type { ApiCatalogItem, HttpMethod, ProjectController, ProjectDomain, ProjectLayer, ProjectStructure, TraceDetail, TraceEvent } from '../../types/trace'
 import type { ApiDefinition, ApiMethodLike, DomainDisplayMode, DomainStructureStep, EstimatedFlowStep, LayerGroup } from './types'
 
 export function flattenProjectApis(structure: ProjectStructure): ApiDefinition[] {
@@ -38,6 +38,17 @@ export function buildProjectMetrics(structure: ProjectStructure) {
     { id: 'controllers', label: 'Controller', value: `${controllerCount}`, detail: '요청 진입점' },
     { id: 'infrastructure', label: '인프라', value: `${infrastructureCount}`, detail: 'DB · Cache · Client' },
   ]
+}
+
+export function getControllerBasePathSummary(controllers: ProjectController[]) {
+  const paths = [...new Set(controllers.flatMap((controller) =>
+    controller.basePaths?.length ? controller.basePaths : [controller.basePath || '/'],
+  ))]
+  if (paths.length === 0) return { label: '-', fullLabel: '-' }
+  return {
+    label: paths.length === 1 ? paths[0] : `${paths[0]} 외 ${paths.length - 1}개`,
+    fullLabel: paths.join(' · '),
+  }
 }
 
 export function buildDomainStructurePath(groups: LayerGroup[], infrastructure: string[]): DomainStructureStep[] {
