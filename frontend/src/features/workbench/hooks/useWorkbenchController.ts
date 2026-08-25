@@ -1,962 +1,222 @@
-import { startTransition, useEffect, useMemo, useState } from 'react'
-import { analyzeProject, createInstrumentationProfile, createTraceSession, executeExternalRequest, getProjectStructure, getRecentTraces, selectProjectFolder } from '../../../api/stackflow'
-import { connectTraceStream } from '../../../api/traceStream'
+import { useEffect, useMemo, useState } from 'react'
 import { buildGraph, getNodeDetail } from '../../../lib/graph'
 import { buildWaterfall, getPrimaryFailureEvent } from '../../../lib/waterfall'
-import type { HttpMethod, ProductPayload, ProjectDomain, ProjectStructure } from '../../../types/trace'
+import type { EventStatus } from '../../../types/trace'
 import { EVENT_STATUS_LABEL, STREAM_STATUS_LABEL, TRACE_COLLECTION_STATUS_LABEL } from '../../../ui/copy'
+import type { StatusTone } from '../../../components/StatusBadge'
 import type { ViewMode } from '../../../ui/copy'
+import { EMPTY_API_DEFINITION, EMPTY_DOMAIN, FALLBACK_API_CATALOG, FALLBACK_PROJECT_STRUCTURE, PROJECT_STATUS_CONTENT } from '../fixtures'
+import { createRequestEntry, filterApis, formatResponseBody } from '../requestModel'
+import { buildFailurePropagationPath, filterTraceHistory, getDefaultInspectionEvent, getInspectorEvent, getTraceOutcome } from '../traceModel'
+import {
+  buildCommonProjectLayers,
+  buildDomainStructurePath,
+  buildEstimatedFlow,
+  buildProjectMetrics,
+  compareEstimatedAndActualFlow,
+  getApiMethodBadgeClassName,
+  getApiMethodLabel,
+  getControllerBasePathSummary,
+  getDomainDisplayMode,
+  groupProjectLayers,
+  isConcreteMethodApi,
+  isStackFlowRuntimeApi,
+} from '../workbenchModel'
+import { useProjectActions } from './useProjectActions'
 import { useProjectWorkspace } from './useProjectWorkspace'
+import { useRequestActions } from './useRequestActions'
 import { useRequestExecution } from './useRequestExecution'
+import { useTraceActions } from './useTraceActions'
 import { useTraceRuntime } from './useTraceRuntime'
-import type { ApiDefinition, ExternalRequestSnapshot } from '../types'
-import { buildFailurePropagationPath, filterTraceHistory, getDefaultInspectionEvent, getInspectorEvent, getTraceOutcome, upsertRecentTrace } from '../traceModel'
-import { EMPTY_API_DEFINITION, EMPTY_DOMAIN, FALLBACK_API_CATALOG, FALLBACK_PROJECT_STRUCTURE, PROJECT_STATUS_CONTENT, matchesTraceEndpoint } from '../fixtures'
-import { buildExternalRequestMessage, buildExternalTargetPreview, buildRequestMessage, createRequestEntry, filterApis, formatResponseBody, parseResponseBody, toEnabledEntries } from '../requestModel'
-import { buildCommonProjectLayers, buildDomainStructurePath, buildEstimatedFlow, buildProjectMetrics, compareEstimatedAndActualFlow, createPlaceholderTrace, fetchTraceWithRetry, flattenProjectApis, getApiMethodBadgeClassName, getApiMethodLabel, getControllerBasePathSummary, getDomainDisplayMode, groupProjectLayers, isConcreteMethodApi, isStackFlowRuntimeApi } from '../workbenchModel'
+import { useWorkbenchRunLifecycle } from './useWorkbenchRunLifecycle'
 
 export function useWorkbenchController() {
-  const [activeView, setActiveView] = useState<ViewMode>('project')
+  const [activeView, setActiveViewState] = useState<ViewMode>('project')
   const project = useProjectWorkspace(FALLBACK_PROJECT_STRUCTURE, FALLBACK_API_CATALOG)
   const request = useRequestExecution(createRequestEntry)
   const runtime = useTraceRuntime()
-  const {
-    projectPath, setProjectPath, folderPickerState, setFolderPickerState,
-    folderPickerMessage, setFolderPickerMessage, apiCatalog, setApiCatalog,
-    projectStructure, setProjectStructure, setCatalogSource,
-    analysisTarget, setAnalysisTarget, analysisState, setAnalysisState,
-    analysisMessage, setAnalysisMessage, selectedApiId, setSelectedApiId,
-    selectedDomainId, setSelectedDomainId, apiScope, setApiScope,
-    agentPath, setAgentPath, collectorBaseUrl, setCollectorBaseUrl,
-    instrumentationProfile, setInstrumentationProfile, profileState, setProfileState,
-    profileMessage, setProfileMessage, instrumentationStatus, resetInstrumentationProfile,
-  } = project
-  const {
-    productId, setProductId, targetBaseUrl, setTargetBaseUrl,
-    endpointSearch, setEndpointSearch,
-    queryParams, requestHeaders,
-    requestBody, setRequestBody, requestBodyError, setRequestBodyError,
-    externalRequestSnapshot, setExternalRequestSnapshot, scenario, setScenario,
-    requestOptionTab, setRequestOptionTab, requestState, setRequestState,
-    requestMessage, setRequestMessage, lastResponseBody, setLastResponseBody,
-    externalResponse, setExternalResponse, updateQueryParam, updateRequestHeader,
-    removeQueryParam, removeRequestHeader, addQueryParam, addRequestHeader,
-    resetForExternalProject, resetForSampleProject,
-    beginExternalRequest, completeExternalRequest, cancelActiveRequest,
-  } = request
-  const {
-    traceDetail, setTraceDetail, recentTraces, setRecentTraces,
-    selectedNodeId, setSelectedNodeId, traceViewTab, setTraceViewTab,
-    traceHistoryFilter, setTraceHistoryFilter,
-    streamStatus, setStreamStatus, traceCollectionStatus, setTraceCollectionStatus,
-    activeStreamRef, activeRunIdRef, flowInstanceRef, closeActiveStream, resetTraceRuntime,
-  } = runtime
+  const lifecycle = useWorkbenchRunLifecycle(request, runtime)
 
-  const graph = buildGraph(traceDetail)
-  const waterfall = buildWaterfall(traceDetail?.events ?? [])
-  const orderedTraceEvents = [...(traceDetail?.events ?? [])].sort((left, right) =>
-    Date.parse(left.startedAt) - Date.parse(right.startedAt),
-  )
-  const primaryFailureEvent = getPrimaryFailureEvent(traceDetail?.events ?? [])
+  const selectedDomain = project.projectStructure.domains.find((domain) => domain.id === project.selectedDomainId)
+    ?? project.projectStructure.domains[0]
+    ?? EMPTY_DOMAIN
+  const hasDetectedDomains = project.projectStructure.domains.length > 0
+  const hasDetectedApis = project.apiCatalog.length > 0
+  const domainApis = project.apiCatalog.filter((api) => api.domainId === selectedDomain.id)
+  const scopedApis = project.apiScope === 'all' ? project.apiCatalog : domainApis
+  const visibleApis = filterApis(scopedApis, request.endpointSearch)
+  const selectedApi = scopedApis.find((api) => api.id === project.selectedApiId) ?? scopedApis[0] ?? EMPTY_API_DEFINITION
+  const hasConcreteMethod = hasDetectedApis && isConcreteMethodApi(selectedApi)
+  const runtimeSupported = hasConcreteMethod
+    && project.analysisTarget === 'sample'
+    && isStackFlowRuntimeApi(selectedApi)
+  const externalRunnable = hasConcreteMethod && project.analysisTarget === 'external'
+  const analyzeOnly = hasDetectedApis && !runtimeSupported && !externalRunnable
+  const demoTraceReady = import.meta.env.VITE_DEMO_TRACE_READY === 'true'
+    && project.projectPath.trim() === import.meta.env.VITE_DEFAULT_PROJECT_PATH
+  const externalTraceConfigured = project.analysisTarget === 'external'
+    && (demoTraceReady || Boolean(project.instrumentationProfile))
+  const externalTraceVerified = project.analysisTarget === 'external'
+    && (demoTraceReady || project.instrumentationStatus.status?.connectionStatus === 'SPAN_RECEIVED')
+
+  const traceActions = useTraceActions({ project, request, runtime, lifecycle })
+  const requestActions = useRequestActions({
+    project, request, runtime, traceActions, lifecycle, selectedApi,
+    hasDetectedApis, runtimeSupported, externalRunnable, analyzeOnly,
+    externalTraceConfigured, setActiveView: setActiveViewState,
+  })
+  const projectActions = useProjectActions({
+    project, request, runtime, lifecycle, setActiveView: setActiveViewState,
+  })
+
+  const graph = buildGraph(runtime.traceDetail)
+  const waterfall = buildWaterfall(runtime.traceDetail?.events ?? [])
+  const orderedTraceEvents = [...(runtime.traceDetail?.events ?? [])].sort((left, right) =>
+    Date.parse(left.startedAt) - Date.parse(right.startedAt))
+  const primaryFailureEvent = getPrimaryFailureEvent(runtime.traceDetail?.events ?? [])
   const primaryFailureNodeId = primaryFailureEvent?.spanId ?? primaryFailureEvent?.component ?? null
-  const defaultInspectionEvent = getDefaultInspectionEvent(traceDetail, primaryFailureEvent)
+  const defaultInspectionEvent = getDefaultInspectionEvent(runtime.traceDetail, primaryFailureEvent)
   const defaultInspectionNodeId = defaultInspectionEvent?.spanId ?? defaultInspectionEvent?.component ?? null
-  const selectedNode = getNodeDetail(graph.states, selectedNodeId)
+  const selectedNode = getNodeDetail(graph.states, runtime.selectedNodeId)
     ?? getNodeDetail(graph.states, defaultInspectionNodeId)
   const inspectorEvent = getInspectorEvent(selectedNode)
   const primaryFailureLabel = primaryFailureEvent?.eventType
     ?? graph.states.find((state) => state.id === primaryFailureNodeId)?.label
     ?? primaryFailureEvent?.component
     ?? null
-  const traceOutcome = traceDetail ? getTraceOutcome(traceDetail, primaryFailureEvent) : null
-  const traceCollectionTimedOut = traceDetail?.traceCollectionStatus === 'TIMED_OUT'
-  const failurePropagationPath = buildFailurePropagationPath(traceDetail?.events ?? [], primaryFailureEvent)
-  const filteredRecentTraces = filterTraceHistory(recentTraces, traceHistoryFilter)
-
-  useEffect(() => {
-    setSelectedNodeId(null)
-  }, [traceDetail?.traceId, setSelectedNodeId])
-  const selectedDomain = projectStructure.domains.find((domain) => domain.id === selectedDomainId) ?? projectStructure.domains[0] ?? EMPTY_DOMAIN
-  const hasDetectedDomains = projectStructure.domains.length > 0
-  const hasDetectedApis = apiCatalog.length > 0
-  const domainApis = apiCatalog.filter((api) => api.domainId === selectedDomain.id)
-  const scopedApis = apiScope === 'all' ? apiCatalog : domainApis
-  const visibleApis = filterApis(scopedApis, endpointSearch)
-  const selectedApi = scopedApis.find((api) => api.id === selectedApiId) ?? scopedApis[0] ?? EMPTY_API_DEFINITION
-  const projectMetrics = buildProjectMetrics(projectStructure)
+  const traceOutcome = runtime.traceDetail ? getTraceOutcome(runtime.traceDetail, primaryFailureEvent) : null
+  const traceCollectionTimedOut = runtime.traceDetail?.traceCollectionStatus === 'TIMED_OUT'
+  const failurePropagationPath = buildFailurePropagationPath(runtime.traceDetail?.events ?? [], primaryFailureEvent)
+  const filteredRecentTraces = filterTraceHistory(runtime.recentTraces, runtime.traceHistoryFilter)
+  const projectMetrics = buildProjectMetrics(project.projectStructure)
   const domainLayerGroups = groupProjectLayers(selectedDomain.layers)
   const domainStructurePath = buildDomainStructurePath(domainLayerGroups, selectedDomain.infrastructure)
   const supportingDomainGroups = domainLayerGroups.filter((group) =>
-    (group.id === 'model' || group.id === 'support') && group.classes.length > 0,
-  )
-  const commonLayerGroups = groupProjectLayers(buildCommonProjectLayers(projectStructure))
+    (group.id === 'model' || group.id === 'support') && group.classes.length > 0)
+  const commonLayerGroups = groupProjectLayers(buildCommonProjectLayers(project.projectStructure))
   const commonClassCount = commonLayerGroups.reduce((sum, group) => sum + group.classes.length, 0)
   const activeRoute = graph.states.filter((state) => state.active)
   const estimatedFlow = hasDetectedApis ? buildEstimatedFlow(selectedApi, selectedDomain) : []
-  const traceComparison = traceDetail?.source === 'OPENTELEMETRY'
-    ? compareEstimatedAndActualFlow(estimatedFlow, traceDetail.events)
+  const traceComparison = runtime.traceDetail?.source === 'OPENTELEMETRY'
+    ? compareEstimatedAndActualFlow(estimatedFlow, runtime.traceDetail.events)
     : null
-  const hasConcreteMethod = hasDetectedApis && isConcreteMethodApi(selectedApi)
-  const runtimeSupported = hasDetectedApis && hasConcreteMethod && analysisTarget === 'sample' && isStackFlowRuntimeApi(selectedApi)
-  const externalRunnable = hasDetectedApis && hasConcreteMethod && analysisTarget === 'external'
-  const analyzeOnly = hasDetectedApis && !runtimeSupported && !externalRunnable
-  const projectStatusContent = PROJECT_STATUS_CONTENT[projectStructure.analysisStatus]
-  const selectedDomainDisplayMode = getDomainDisplayMode(selectedDomain, analysisTarget === 'sample')
+  const projectStatusContent = PROJECT_STATUS_CONTENT[project.projectStructure.analysisStatus]
+  const selectedDomainDisplayMode = getDomainDisplayMode(selectedDomain, project.analysisTarget === 'sample')
   const controllerBasePathSummary = getControllerBasePathSummary(selectedDomain.controllers)
   const hasIntegrationBoundary = selectedDomainDisplayMode?.tone === 'integration'
-  const demoTraceReady = import.meta.env.VITE_DEMO_TRACE_READY === 'true'
-    && projectPath.trim() === import.meta.env.VITE_DEFAULT_PROJECT_PATH
-  const externalTraceConfigured = analysisTarget === 'external' && (demoTraceReady || Boolean(instrumentationProfile))
-  const externalTraceVerified = analysisTarget === 'external'
-    && (demoTraceReady || instrumentationStatus.status?.connectionStatus === 'SPAN_RECEIVED')
-  const instrumentationCommand = instrumentationProfile
-    ? instrumentationProfile.commands[instrumentationProfile.buildTool.toLowerCase()]
-      ?? instrumentationProfile.commands.jar
+  const instrumentationCommand = project.instrumentationProfile
+    ? project.instrumentationProfile.commands[project.instrumentationProfile.buildTool.toLowerCase()]
+      ?? project.instrumentationProfile.commands.jar
     : null
   const runtimeModeLabel = runtimeSupported
     ? '요청·Trace 가능'
     : externalRunnable
       ? externalTraceVerified
         ? '요청 후 Trace 확인'
-        : externalTraceConfigured
-          ? 'Trace 설정됨 · 확인 전'
-          : '외부 API 요청'
+        : externalTraceConfigured ? 'Trace 설정됨 · 확인 전' : '외부 API 요청'
       : '정적 분석만 가능'
-  const traceDisplayStatus = streamStatus === 'connection_timeout'
-    ? STREAM_STATUS_LABEL[streamStatus]
+  const traceDisplayStatus = runtime.streamStatus === 'connection_timeout'
+    ? STREAM_STATUS_LABEL[runtime.streamStatus]
     : traceCollectionTimedOut
       ? TRACE_COLLECTION_STATUS_LABEL.TIMED_OUT
-      : traceDetail?.source === 'OPENTELEMETRY' && streamStatus !== 'idle'
-        ? TRACE_COLLECTION_STATUS_LABEL[traceCollectionStatus]
-        : traceDetail
-          ? EVENT_STATUS_LABEL[traceDetail.resultStatus]
-          : STREAM_STATUS_LABEL[streamStatus]
-  const traceDisplayTone = traceCollectionTimedOut
+      : runtime.traceDetail?.source === 'OPENTELEMETRY' && runtime.streamStatus !== 'idle'
+        ? TRACE_COLLECTION_STATUS_LABEL[runtime.traceCollectionStatus]
+        : runtime.traceDetail
+          ? EVENT_STATUS_LABEL[runtime.traceDetail.resultStatus]
+          : STREAM_STATUS_LABEL[runtime.streamStatus]
+  const traceDisplayTone: StatusTone = traceCollectionTimedOut
     ? 'warning'
-    : streamStatus === 'idle' && traceDetail
-      ? traceDetail.resultStatus === 'SUCCESS'
-        ? 'success'
-        : traceDetail.resultStatus === 'WARNING'
-          ? 'warning'
-          : 'error'
-      : streamStatus === 'completed'
-        ? 'success'
-        : streamStatus === 'error'
-          ? 'error'
-          : streamStatus === 'connection_timeout'
-            ? 'warning'
-            : streamStatus === 'idle'
-              ? 'neutral'
-              : 'info'
-  const currentResultStatus = externalResponse?.resultStatus ?? traceDetail?.resultStatus ?? 'IDLE'
-  const externalPath = selectedApi.buildPath(productId)
-  const externalTargetPreview = buildExternalTargetPreview(targetBaseUrl, externalPath, queryParams)
-  const bodyAllowed = hasConcreteMethod && ['POST', 'PUT', 'PATCH'].includes(selectedApi.method)
+    : runtime.streamStatus === 'idle' && runtime.traceDetail
+      ? runtime.traceDetail.resultStatus === 'SUCCESS' ? 'success'
+        : runtime.traceDetail.resultStatus === 'WARNING' ? 'warning' : 'error'
+      : runtime.streamStatus === 'completed' ? 'success'
+        : runtime.streamStatus === 'error' ? 'error'
+          : runtime.streamStatus === 'connection_timeout' ? 'warning'
+            : runtime.streamStatus === 'idle' ? 'neutral' : 'info'
   const selectedApiMethodLabel = getApiMethodLabel(selectedApi)
   const selectedApiMethodClassName = getApiMethodBadgeClassName(selectedApi)
-  const graphFitKey = `${traceDetail?.traceId ?? 'empty'}-${traceDetail?.events.length ?? 0}`
-  const formattedResponseBody = useMemo(() => {
-    if (!lastResponseBody) {
-      return null
-    }
+  const formattedResponseBody = useMemo(() => request.lastResponseBody
+    ? JSON.stringify(request.lastResponseBody, null, 2)
+    : null, [request.lastResponseBody])
+  const formattedExternalResponseBody = useMemo(() => request.externalResponse
+    ? formatResponseBody(request.externalResponse.responseBody)
+    : null, [request.externalResponse])
+  const graphFitKey = `${runtime.traceDetail?.traceId ?? 'empty'}-${runtime.traceDetail?.events.length ?? 0}`
+  const selectedTraceId = runtime.traceDetail?.traceId
+  const setSelectedNodeId = runtime.setSelectedNodeId
+  const currentResultStatus: EventStatus | 'IDLE' = request.externalResponse?.resultStatus
+    ?? runtime.traceDetail?.resultStatus
+    ?? 'IDLE'
 
-    return JSON.stringify(lastResponseBody, null, 2)
-  }, [lastResponseBody])
-
-  const formattedExternalResponseBody = useMemo(() => {
-    if (!externalResponse) {
-      return null
-    }
-
-    return formatResponseBody(externalResponse.responseBody)
-  }, [externalResponse])
-
-  /* oxlint-disable react-hooks/exhaustive-deps -- Initial loading runs once; refs are stable and graph updates use graphFitKey. */
+  /* oxlint-disable react-hooks/exhaustive-deps -- Initial loading runs once; action hooks own cancellation. */
   useEffect(() => {
-    void loadApiCatalog()
-    void loadRecentTraces()
-    return () => {
-      activeRunIdRef.current += 1
-      cancelActiveRequest()
-    }
+    void projectActions.loadApiCatalog()
+    void traceActions.loadRecentTraces()
+    return lifecycle.invalidateActiveRun
   }, [])
+  /* oxlint-enable react-hooks/exhaustive-deps */
 
+  useEffect(() => setSelectedNodeId(null), [selectedTraceId, setSelectedNodeId])
   useEffect(() => {
-    if (!flowInstanceRef.current) {
-      return
-    }
-
-    const frame = window.requestAnimationFrame(() => {
-      flowInstanceRef.current?.fitView({ padding: 0.14, duration: 180, includeHiddenNodes: true })
-    })
-    const settledFit = window.setTimeout(() => {
-      flowInstanceRef.current?.fitView({ padding: 0.14, duration: 0, includeHiddenNodes: true })
-    }, 180)
-
+    if (!runtime.flowInstanceRef.current) return
+    const frame = window.requestAnimationFrame(() => runtime.flowInstanceRef.current?.fitView({ padding: 0.14, duration: 180, includeHiddenNodes: true }))
+    const settledFit = window.setTimeout(() => runtime.flowInstanceRef.current?.fitView({ padding: 0.14, duration: 0, includeHiddenNodes: true }), 180)
     return () => {
       window.cancelAnimationFrame(frame)
       window.clearTimeout(settledFit)
     }
-  }, [graphFitKey])
-  /* oxlint-enable react-hooks/exhaustive-deps */
+  }, [graphFitKey, runtime.flowInstanceRef])
 
-  async function loadApiCatalog() {
-    const loadRunId = activeRunIdRef.current
-    try {
-      const defaultProjectPath = import.meta.env.VITE_DEFAULT_PROJECT_PATH
-      const structure = defaultProjectPath
-        ? await analyzeProject(defaultProjectPath)
-        : await getProjectStructure()
-      if (activeRunIdRef.current !== loadRunId) return
-      const analyzedCatalog = flattenProjectApis(structure)
-      applyProjectStructure(
-        structure,
-        analyzedCatalog,
-        structure.analysisMessage,
-        defaultProjectPath ? 'external' : 'sample',
-      )
-    } catch {
-      if (activeRunIdRef.current !== loadRunId) return
-      startTransition(() => {
-        setProjectStructure(FALLBACK_PROJECT_STRUCTURE)
-        setApiCatalog(FALLBACK_API_CATALOG)
-        setCatalogSource('fallback')
-        setAnalysisTarget('sample')
-        setAnalysisMessage('샘플 프로젝트를 표시하고 있습니다. 직접 분석하려면 프로젝트 경로를 입력하세요.')
-        setSelectedDomainId((current) =>
-          FALLBACK_PROJECT_STRUCTURE.domains.some((domain) => domain.id === current)
-            ? current
-            : FALLBACK_PROJECT_STRUCTURE.domains[0].id,
-        )
-        setSelectedApiId((current) => FALLBACK_API_CATALOG.some((api) => api.id === current) ? current : FALLBACK_API_CATALOG[0].id)
-      })
-    }
+  const setActiveView = (view: ViewMode) => {
+    if (view !== activeView) lifecycle.invalidateActiveRun()
+    setActiveViewState(view)
   }
 
-  async function analyzeProjectPath(pathOverride?: string) {
-    const requestedPath = pathOverride ?? projectPath
-    if (pathOverride === undefined && !requestedPath.trim()) {
-      setAnalysisState('error')
-      setAnalysisMessage('분석할 프로젝트 폴더를 선택하거나 절대 경로를 입력하세요. 데모는 별도 버튼으로 열 수 있습니다.')
-      return
-    }
-
-    invalidateActiveRun()
-    const analysisRunId = activeRunIdRef.current
-    setAnalysisState('loading')
-    setAnalysisMessage('프로젝트 파일과 Spring mapping을 읽고 있습니다...')
-    const nextAnalysisTarget = requestedPath.trim() === '' ? 'sample' : 'external'
-
-    try {
-      const structure = await analyzeProject(requestedPath)
-      if (activeRunIdRef.current !== analysisRunId) return
-      const analyzedCatalog = flattenProjectApis(structure)
-      applyProjectStructure(structure, analyzedCatalog, structure.analysisMessage, nextAnalysisTarget)
-      setAnalysisState(structure.analysisStatus === 'FAILED' ? 'error' : 'idle')
-      setActiveView('project')
-    } catch (error) {
-      if (activeRunIdRef.current !== analysisRunId) return
-      setAnalysisState('error')
-      setAnalysisMessage(error instanceof Error ? error.message : '프로젝트 분석에 실패했습니다.')
-    }
-  }
-
-  async function selectLocalProjectFolder() {
-    setFolderPickerState('loading')
-    setFolderPickerMessage('폴더 선택창을 여는 중입니다...')
-
-    try {
-      const selection = await selectProjectFolder()
-      if (!selection.supported) {
-        setFolderPickerState('error')
-        setFolderPickerMessage(selection.message)
-        return
-      }
-      if (!selection.selected || !selection.projectPath) {
-        setFolderPickerState('idle')
-        setFolderPickerMessage(selection.message)
-        return
-      }
-
-      setProjectPath(selection.projectPath)
-      setFolderPickerState('idle')
-      setFolderPickerMessage('선택한 경로가 입력되었습니다. 프로젝트 분석을 실행하세요.')
-    } catch (error) {
-      setFolderPickerState('error')
-      setFolderPickerMessage(error instanceof Error ? error.message : '폴더 선택창을 열지 못했습니다.')
-    }
-  }
-
-  function applyProjectStructure(
-    structure: ProjectStructure,
-    analyzedCatalog: ApiDefinition[],
-    message: string,
-    target: 'sample' | 'external',
-  ) {
-    invalidateActiveRun()
-
-    startTransition(() => {
-      setProjectStructure(structure)
-      setApiCatalog(analyzedCatalog)
-      setCatalogSource('analyzed')
-      setAnalysisTarget(target)
-      setApiScope(target === 'external' ? 'all' : 'domain')
-      setAnalysisMessage(message)
-      setSelectedDomainId((current) => structure.domains.some((domain) => domain.id === current) ? current : (structure.domains[0]?.id ?? EMPTY_DOMAIN.id))
-      setSelectedApiId((current) => analyzedCatalog.some((api) => api.id === current) ? current : (analyzedCatalog[0]?.id ?? EMPTY_API_DEFINITION.id))
-      if (target === 'external') {
-        resetInstrumentationProfile()
-        resetTraceRuntime()
-        resetForExternalProject()
-      }
-      if (target === 'sample') {
-        resetForSampleProject()
-      }
-    })
-  }
-
-  async function generateInstrumentationProfile() {
-    if (analysisTarget !== 'external' || !projectPath.trim()) {
-      setProfileState('error')
-      setProfileMessage('먼저 외부 Spring 프로젝트 경로를 분석하세요.')
-      return
-    }
-
-    setProfileState('loading')
-    setProfileMessage('분석된 클래스와 public method로 Agent 실행 설정을 만들고 있습니다...')
-    try {
-      const profile = await createInstrumentationProfile({
-        projectPath: projectPath.trim(),
-        collectorBaseUrl: collectorBaseUrl.trim(),
-        agentPath: agentPath.trim(),
-      })
-      setInstrumentationProfile(profile)
-      setProfileState('idle')
-      setProfileMessage('명령을 터미널에서 실행해 대상 앱을 Agent와 함께 재시작하세요.')
-    } catch (error) {
-      setProfileState('error')
-      setProfileMessage(error instanceof Error ? error.message : '실행 Trace 설정 생성에 실패했습니다.')
-    }
-  }
-
-  function selectDomain(domain: ProjectDomain) {
-    if (domain.id === EMPTY_DOMAIN.id) {
-      return
-    }
-    if (domain.id !== selectedDomain.id) {
-      invalidateActiveRun()
-    }
-    setSelectedDomainId(domain.id)
-    setApiScope('domain')
-    setActiveView('project')
-    const nextApi = apiCatalog.find((api) => api.domainId === domain.id)
-    if (nextApi) {
-      setSelectedApiId(nextApi.id)
-      setExternalResponse(null)
-    }
-  }
-
-  function selectApi(api: ApiDefinition) {
-    if (api.id !== selectedApi.id) {
-      invalidateActiveRun()
-      setTraceDetail(null)
-      setSelectedNodeId(null)
-      setStreamStatus('idle')
-      setTraceCollectionStatus('DISABLED')
-      setExternalResponse(null)
-      setExternalRequestSnapshot(null)
-      setLastResponseBody(null)
-      setRequestState('idle')
-      setRequestMessage('선택한 API의 요청을 작성하세요.')
-    }
-    setSelectedApiId(api.id)
-    setSelectedDomainId(api.domainId)
-    setActiveView('api')
-  }
-
-  async function loadRecentTraces() {
-    try {
-      const traces = await getRecentTraces()
-      startTransition(() => setRecentTraces(traces))
-    } catch {
-      // Recent history is optional while the backend is starting.
-    }
-  }
-
-  async function runRequest() {
-    if (!hasDetectedApis) {
-      setActiveView('project')
-      setRequestState('error')
-      setStreamStatus('idle')
-      setRequestMessage('현재 분석 결과에는 실행할 REST API가 없습니다.')
-      return
-    }
-
-    if (analyzeOnly) {
-      setActiveView('api')
-      setRequestState('error')
-      setStreamStatus('idle')
-      setRequestMessage(
-        selectedApi.methodSpecified
-          ? '이 API는 정적 분석만 가능합니다. Product API를 선택하면 실제 Trace를 확인할 수 있습니다.'
-          : '정적 분석에서 endpoint는 찾았지만 HTTP method가 명시되지 않았습니다. 소스에서 method를 먼저 확인하세요.',
-      )
-      return
-    }
-
-    if (!runtimeSupported) {
-      await runExternalRequest()
-      return
-    }
-
-    invalidateActiveRun()
-    const runId = activeRunIdRef.current
-    const requestMethod = selectedApi.method as HttpMethod
-    setRequestState('loading')
-    setStreamStatus('connecting')
-    setActiveView('runtime')
-    setRequestMessage('Trace 세션을 만들고 실시간 연결을 여는 중입니다...')
-    setLastResponseBody(null)
-    setExternalResponse(null)
-
-    try {
-      const session = await createTraceSession()
-      const traceId = session.traceId
-      const endpoint = selectedApi.buildPath(productId)
-
-      startTransition(() => {
-        setTraceDetail(createPlaceholderTrace(traceId, selectedApiMethodLabel, endpoint, scenario))
-        setSelectedNodeId(null)
-      })
-
-      try {
-        const stream = await openTraceStream(traceId, runId)
-        if (activeRunIdRef.current !== runId) {
-          stream.close()
-          return
-        }
-        activeStreamRef.current = stream
-        setStreamStatus('streaming')
-        setRequestMessage('실시간 연결이 열렸습니다. API 요청을 실행합니다...')
-      } catch (error) {
-        if (activeRunIdRef.current !== runId) {
-          return
-        }
-        setStreamStatus('error')
-        setRequestMessage(`${error instanceof Error ? error.message : '실시간 연결 실패'} 요청 후 최종 Trace를 불러옵니다...`)
-      }
-
-      const search = new URLSearchParams({ traceId })
-      if (scenario !== 'normal') {
-        search.set('scenario', scenario)
-      }
-
-      const response = await fetch(`${endpoint}?${search.toString()}`, { method: requestMethod })
-      const payload = (await response.json()) as ProductPayload
-
-      if (activeRunIdRef.current !== runId) {
-        return
-      }
-
-      setLastResponseBody(payload)
-
-      if (!payload.traceId) {
-        throw new Error('응답에서 Trace ID를 받지 못했습니다.')
-      }
-
-      const finalTrace = await fetchTraceWithRetry(payload.traceId)
-      if (activeRunIdRef.current !== runId) {
-        return
-      }
-
-      startTransition(() => {
-        setTraceDetail(finalTrace)
-        const failureEvent = getPrimaryFailureEvent(finalTrace.events)
-        setSelectedNodeId(
-          failureEvent?.spanId
-            ?? failureEvent?.component
-            ?? finalTrace.events.at(-1)?.spanId
-            ?? finalTrace.events.at(-1)?.component
-            ?? null,
-        )
-        setRequestState(response.ok ? 'idle' : 'error')
-        setStreamStatus(response.ok ? 'completed' : 'error')
-        setRequestMessage(buildRequestMessage(finalTrace.resultStatus, payload))
-        setRecentTraces((current) => upsertRecentTrace(current, {
-          traceId: finalTrace.traceId,
-          endpoint: finalTrace.endpoint,
-          scenario: finalTrace.scenario,
-          resultStatus: finalTrace.resultStatus,
-          httpStatus: finalTrace.httpStatus,
-          durationMs: finalTrace.durationMs,
-          startedAt: finalTrace.startedAt,
-          traceCollectionStatus: finalTrace.traceCollectionStatus,
-        }))
-      })
-    } catch (error) {
-      if (activeRunIdRef.current !== runId) {
-        return
-      }
-      setRequestState('error')
-      setStreamStatus('error')
-      setRequestMessage(error instanceof Error ? error.message : '요청 실행 중 오류가 발생했습니다.')
-    }
-  }
-
-  async function runExternalRequest() {
-    if (!externalRunnable) {
-      setActiveView('api')
-      setRequestState('error')
-      setStreamStatus('idle')
-      setRequestMessage(
-        selectedApi.methodSpecified
-          ? '이 샘플 API는 정적 분석만 제공합니다. Product API를 선택하면 샘플 Trace를 실행할 수 있습니다.'
-          : 'endpoint의 HTTP method가 명시되지 않았습니다. 소스에서 method를 확인한 뒤 요청하세요.',
-      )
-      return
-    }
-
-    const normalizedTargetBaseUrl = targetBaseUrl.trim()
-    const requestMethod = selectedApi.method as HttpMethod
-    if (!normalizedTargetBaseUrl) {
-      setActiveView('api')
-      setRequestState('error')
-      setStreamStatus('idle')
-      setRequestMessage('외부 API를 요청하려면 대상 기본 URL을 입력하세요.')
-      return
-    }
-
-    const captureTrace = externalTraceConfigured
-    invalidateActiveRun()
-    const runId = activeRunIdRef.current
-    setActiveView('api')
-    setRequestState('loading')
-    setStreamStatus('idle')
-    setTraceCollectionStatus(captureTrace ? 'PENDING' : 'DISABLED')
-    setTraceDetail(null)
-    setSelectedNodeId(null)
-    setLastResponseBody(null)
-    setExternalResponse(null)
-    setExternalRequestSnapshot(null)
-    setRequestBodyError(null)
-
-    const nextRequestBody = bodyAllowed ? requestBody.trim() : ''
-    if (nextRequestBody) {
-      try {
-        JSON.parse(nextRequestBody)
-      } catch {
-        setRequestState('error')
-        setRequestBodyError('요청 본문은 올바른 JSON 형식이어야 합니다.')
-        setRequestMessage('JSON 요청 본문을 수정한 뒤 다시 실행하세요.')
-        return
-      }
-    }
-
-    const requestSnapshot: ExternalRequestSnapshot = {
-      method: requestMethod,
-      targetUrl: externalTargetPreview,
-      queryParams,
-      headers: requestHeaders,
-      requestBody: nextRequestBody,
-    }
-
-    setRequestMessage(`${selectedApiMethodLabel} ${externalTargetPreview} 요청 중...`)
-
-    const requestAbortController = beginExternalRequest()
-    try {
-      const payload = await executeExternalRequest({
-        targetBaseUrl: normalizedTargetBaseUrl,
-        method: requestMethod,
-        path: externalPath,
-        queryParams: toEnabledEntries(queryParams),
-        headers: toEnabledEntries(requestHeaders),
-        requestBody: nextRequestBody || null,
-        captureTrace,
-      }, requestAbortController.signal)
-      completeExternalRequest(requestAbortController)
-      if (activeRunIdRef.current !== runId) {
-        return
-      }
-      setExternalResponse(payload)
-      setLastResponseBody(parseResponseBody(payload.responseBody))
-      setExternalRequestSnapshot(requestSnapshot)
-      setRequestState(payload.resultStatus === 'SUCCESS' ? 'idle' : 'error')
-      setTraceCollectionStatus(payload.traceCollectionStatus)
-      setRequestMessage(buildExternalRequestMessage(payload))
-
-      if (payload.traceId) {
-        if (activeRunIdRef.current !== runId) {
-          return
-        }
-        const traceId = payload.traceId
-        setTraceDetail(createPlaceholderTrace(
-          traceId,
-          selectedApiMethodLabel,
-          externalPath,
-          'external-opentelemetry',
-          'OPENTELEMETRY',
-          instrumentationProfile?.serviceName ?? projectStructure.projectName,
-        ))
-        setStreamStatus('connecting')
-        setActiveView('runtime')
-        setRequestMessage('외부 요청은 완료됐습니다. OpenTelemetry span을 기다리고 있습니다...')
-        try {
-          if (activeRunIdRef.current !== runId) {
-            return
-          }
-          const stream = await openTraceStream(traceId, runId)
-          if (activeRunIdRef.current !== runId) {
-            stream.close()
-            return
-          }
-          activeStreamRef.current = stream
-        } catch (error) {
-          if (activeRunIdRef.current !== runId) {
-            return
-          }
-          setStreamStatus('error')
-          setRequestMessage(`${error instanceof Error ? error.message : '실시간 연결 실패'} Agent와 수집 주소를 확인하세요.`)
-        }
-      }
-    } catch (error) {
-      completeExternalRequest(requestAbortController)
-      if (activeRunIdRef.current !== runId || error instanceof Error && error.name === 'AbortError') {
-        return
-      }
-      setRequestState('error')
-      setRequestMessage(error instanceof Error ? error.message : '외부 API 요청 중 오류가 발생했습니다.')
-    }
-  }
-
-  async function openTraceStream(traceId: string, runId: number) {
-    return connectTraceStream(traceId, {
-      onStarted: (payload) => {
-        if (activeRunIdRef.current !== runId) {
-          return
-        }
-        startTransition(() => {
-          setStreamStatus('streaming')
-          setTraceDetail((current) => {
-            if (!current || current.traceId !== payload.traceId) {
-              return current
-            }
-
-            return {
-              ...current,
-              method: payload.method,
-              endpoint: payload.endpoint,
-              scenario: payload.scenario,
-              startedAt: payload.timestamp,
-            }
-          })
-          setRequestMessage('실행 이벤트를 수집하고 있습니다...')
-        })
-      },
-      onTraceEvent: (payload) => {
-        if (activeRunIdRef.current !== runId) {
-          return
-        }
-        startTransition(() => {
-          setTraceDetail((current) => {
-            if (!current || current.traceId !== payload.traceId) {
-              return current
-            }
-
-            return {
-              ...current,
-              events: current.events.some((event) =>
-                event.eventId === payload.eventId || Boolean(payload.spanId && event.spanId === payload.spanId),
-              ) ? current.events : [...current.events, payload],
-              endedAt: payload.endedAt,
-            }
-          })
-        })
-      },
-      onCollectionStatus: (payload) => {
-        if (activeRunIdRef.current !== runId) {
-          return
-        }
-        setTraceCollectionStatus(payload.status)
-        setTraceDetail((current) => current && current.traceId === payload.traceId
-          ? { ...current, traceCollectionStatus: payload.status }
-          : current)
-        if (payload.status === 'PENDING') {
-          setStreamStatus('connecting')
-        } else if (payload.status === 'COLLECTING') {
-          setStreamStatus('streaming')
-        } else if (payload.status === 'COMPLETED') {
-          setStreamStatus('completed')
-        } else if (payload.status === 'TIMED_OUT') {
-          setStreamStatus('error')
-        }
-        setRequestMessage(payload.message)
-        if (payload.status === 'TIMED_OUT') {
-          void fetchTraceWithRetry(payload.traceId).then((detail) => {
-            if (activeRunIdRef.current !== runId) return
-            setTraceDetail(detail)
-            const failureEvent = getPrimaryFailureEvent(detail.events)
-            setSelectedNodeId(
-              failureEvent?.spanId
-                ?? failureEvent?.component
-                ?? detail.events[0]?.spanId
-                ?? detail.events[0]?.component
-                ?? null,
-            )
-            void loadRecentTraces()
-          }).catch(() => undefined)
-        }
-      },
-      onTerminal: (payload, nextStatus) => {
-        if (activeRunIdRef.current !== runId) {
-          return
-        }
-        startTransition(() => {
-          setStreamStatus(nextStatus)
-          setTraceDetail((current) => {
-            if (!current || current.traceId !== payload.traceId) {
-              return current
-            }
-
-            return {
-              ...current,
-              endedAt: payload.timestamp,
-              durationMs: payload.durationMs,
-              httpStatus: payload.httpStatus,
-              resultStatus: payload.resultStatus,
-              traceCollectionStatus: current.source === 'OPENTELEMETRY'
-                ? 'COMPLETED'
-                : current.traceCollectionStatus,
-            }
-          })
-          setRequestMessage(
-            nextStatus === 'completed'
-              ? 'Trace 수집이 완료됐습니다. 상세 결과를 정리합니다...'
-              : `${payload.errorType ?? '알 수 없는 지점'}에서 Trace가 실패했습니다. 상세 결과를 정리합니다...`,
-          )
-        })
-        void fetchTraceWithRetry(payload.traceId).then((detail) => {
-          if (activeRunIdRef.current !== runId) return
-          setTraceDetail(detail)
-          const failureEvent = getPrimaryFailureEvent(detail.events)
-          setSelectedNodeId(
-            failureEvent?.spanId
-              ?? failureEvent?.component
-              ?? detail.events[0]?.spanId
-              ?? detail.events[0]?.component
-              ?? null,
-          )
-          void loadRecentTraces()
-        }).catch(() => undefined)
-      },
-      onConnectionTimeout: (payload) => {
-        if (activeRunIdRef.current !== runId) {
-          return
-        }
-        startTransition(() => {
-          setStreamStatus('connection_timeout')
-          setRequestMessage(`${payload.message} Trace 수집 시간 초과와는 별개입니다.`)
-        })
-      },
-      onDisconnected: () => {
-        if (activeRunIdRef.current !== runId) {
-          return
-        }
-        startTransition(() => {
-          setStreamStatus('error')
-          setRequestMessage('실시간 연결 종료: 요청 결과는 최근 Trace에서 다시 확인하세요.')
-        })
-      },
-    })
-  }
-
-  async function selectTrace(traceId: string) {
-    invalidateActiveRun()
-    const selectionRunId = activeRunIdRef.current
-    const detail = await fetchTraceWithRetry(traceId)
-    if (activeRunIdRef.current !== selectionRunId) return
-    const matchingApi = apiCatalog.find((api) => matchesTraceEndpoint(api, detail))
-    startTransition(() => {
-      setTraceDetail(detail)
-      setSelectedNodeId(null)
-      setTraceCollectionStatus(detail.traceCollectionStatus)
-      if (matchingApi) {
-        setSelectedApiId(matchingApi.id)
-        setSelectedDomainId(matchingApi.domainId)
-      }
-      setLastResponseBody(null)
-      setStreamStatus('idle')
-      setRequestState('idle')
-      setRequestMessage(`기록에서 Trace ${detail.traceId.slice(0, 8)}를 불러왔습니다.`)
-    })
-  }
-
-  function invalidateActiveRun() {
-    activeRunIdRef.current += 1
-    cancelActiveRequest()
-    closeActiveStream()
-  }
-
-  function navigateToView(view: ViewMode) {
-    if (view !== activeView) {
-      invalidateActiveRun()
-    }
-    setActiveView(view)
-  }
   return {
-    activeView,
-    setActiveView: navigateToView,
-    project,
-    request,
-    runtime,
-    projectPath,
-    setProjectPath,
-    folderPickerState,
-    setFolderPickerState,
-    folderPickerMessage,
-    setFolderPickerMessage,
-    apiCatalog,
-    setApiCatalog,
-    projectStructure,
-    setProjectStructure,
-    setCatalogSource,
-    analysisTarget,
-    setAnalysisTarget,
-    analysisState,
-    setAnalysisState,
-    analysisMessage,
-    setAnalysisMessage,
-    selectedApiId,
-    setSelectedApiId,
-    selectedDomainId,
-    setSelectedDomainId,
-    apiScope,
-    setApiScope,
-    agentPath,
-    setAgentPath,
-    collectorBaseUrl,
-    setCollectorBaseUrl,
-    instrumentationProfile,
-    setInstrumentationProfile,
-    profileState,
-    setProfileState,
-    profileMessage,
-    setProfileMessage,
-    instrumentationStatus,
-    resetInstrumentationProfile,
-    productId,
-    setProductId,
-    targetBaseUrl,
-    setTargetBaseUrl,
-    endpointSearch,
-    setEndpointSearch,
-    queryParams,
-    requestHeaders,
-    requestBody,
-    setRequestBody,
-    requestBodyError,
-    setRequestBodyError,
-    externalRequestSnapshot,
-    setExternalRequestSnapshot,
-    scenario,
-    setScenario,
-    requestOptionTab,
-    setRequestOptionTab,
-    requestState,
-    setRequestState,
-    requestMessage,
-    setRequestMessage,
-    lastResponseBody,
-    setLastResponseBody,
-    externalResponse,
-    setExternalResponse,
-    updateQueryParam,
-    updateRequestHeader,
-    removeQueryParam,
-    removeRequestHeader,
-    addQueryParam,
-    addRequestHeader,
-    resetForExternalProject,
-    resetForSampleProject,
-    traceDetail,
-    setTraceDetail,
-    recentTraces,
-    setRecentTraces,
-    selectedNodeId,
-    setSelectedNodeId,
-    traceViewTab,
-    setTraceViewTab,
-    traceHistoryFilter,
-    setTraceHistoryFilter,
-    streamStatus,
-    setStreamStatus,
-    traceCollectionStatus,
-    setTraceCollectionStatus,
-    activeStreamRef,
-    activeRunIdRef,
-    flowInstanceRef,
-    closeActiveStream,
-    resetTraceRuntime,
-    graph,
-    waterfall,
-    orderedTraceEvents,
-    primaryFailureEvent,
-    primaryFailureNodeId,
-    selectedNode,
-    inspectorEvent,
-    primaryFailureLabel,
-    traceOutcome,
-    failurePropagationPath,
-    filteredRecentTraces,
-    selectedDomain,
-    hasDetectedDomains,
-    hasDetectedApis,
-    domainApis,
-    visibleApis,
-    selectedApi,
-    projectMetrics,
-    domainLayerGroups,
-    domainStructurePath,
-    supportingDomainGroups,
-    commonLayerGroups,
-    commonClassCount,
-    activeRoute,
-    estimatedFlow,
-    traceComparison,
-    hasConcreteMethod,
-    runtimeSupported,
-    externalRunnable,
-    analyzeOnly,
-    projectStatusContent,
-    selectedDomainDisplayMode,
-    controllerBasePathSummary,
-    hasIntegrationBoundary,
-    demoTraceReady,
-    externalTraceConfigured,
-    externalTraceVerified,
-    instrumentationCommand,
-    runtimeModeLabel,
-    traceDisplayStatus,
-    traceDisplayTone,
-    currentResultStatus,
-    externalPath,
-    externalTargetPreview,
-    bodyAllowed,
-    selectedApiMethodLabel,
-    selectedApiMethodClassName,
-    graphFitKey,
-    formattedResponseBody,
-    formattedExternalResponseBody,
-    loadApiCatalog,
-    analyzeProjectPath,
-    selectLocalProjectFolder,
-    applyProjectStructure,
-    generateInstrumentationProfile,
-    selectDomain,
-    selectApi,
-    loadRecentTraces,
-    runRequest,
-    runExternalRequest,
-    openTraceStream,
-    selectTrace,
-  } as const
+    shell: {
+      activeView, setActiveView,
+      projectName: project.projectStructure.projectName,
+      projectStatus: project.projectStructure.analysisStatus,
+      analysisTarget: project.analysisTarget,
+      hasDetectedApis,
+      requestReady: hasDetectedApis && hasConcreteMethod,
+      traceId: runtime.traceDetail?.traceId ?? null,
+      traceResultStatus: currentResultStatus,
+      traceDisplayStatus,
+      traceEventCount: runtime.traceDetail?.events.length ?? 0,
+    },
+    projectView: {
+      ...project, ...projectActions,
+      setActiveView, selectApi: requestActions.selectApi,
+      setExternalResponse: request.setExternalResponse,
+      selectedDomain, hasDetectedDomains, hasDetectedApis, projectMetrics,
+      domainLayerGroups, domainStructurePath, supportingDomainGroups,
+      commonLayerGroups, commonClassCount, selectedApi, selectedApiMethodLabel,
+      selectedDomainDisplayMode, controllerBasePathSummary, projectStatusContent,
+      runtimeModeLabel, externalRunnable, demoTraceReady, externalTraceConfigured,
+      externalTraceVerified, instrumentationCommand,
+    },
+    requestView: {
+      ...project, ...request, ...requestActions,
+      setActiveView, selectedDomain, domainApis, visibleApis, selectedApi,
+      hasDetectedApis, hasConcreteMethod, runtimeSupported, externalRunnable, analyzeOnly,
+      externalTraceConfigured, externalTraceVerified, hasIntegrationBoundary,
+      estimatedFlow, runtimeModeLabel, selectedApiMethodLabel,
+      selectedApiMethodClassName, formattedResponseBody, formattedExternalResponseBody,
+      traceDetail: runtime.traceDetail,
+      traceCollectionStatus: runtime.traceCollectionStatus,
+    },
+    traceView: {
+      ...runtime, selectTrace: traceActions.selectTrace,
+      setActiveView,
+      graph, waterfall, orderedTraceEvents, primaryFailureEvent, primaryFailureNodeId,
+      selectedNode, inspectorEvent, primaryFailureLabel, traceOutcome,
+      failurePropagationPath, filteredRecentTraces, activeRoute, traceComparison,
+      traceDisplayTone, traceDisplayStatus, selectedApi, selectedDomain,
+      analysisTarget: project.analysisTarget,
+      runtimeSupported, externalTraceConfigured, selectedApiMethodLabel,
+    },
+  }
 }
+
+export type WorkbenchController = ReturnType<typeof useWorkbenchController>

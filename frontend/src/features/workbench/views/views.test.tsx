@@ -1,20 +1,50 @@
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
-import { ProjectView } from './ProjectView'
-import { RequestView } from './RequestView'
-import { TraceView } from './TraceView'
+import { cleanup, render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { StackFlowWorkbench } from '../StackFlowWorkbench'
+
+const mocks = vi.hoisted(() => ({
+  activeView: 'project' as 'project' | 'api' | 'runtime',
+}))
+
+vi.mock('../hooks/useWorkbenchController', () => ({
+  useWorkbenchController: () => ({
+    shell: {
+      activeView: mocks.activeView,
+      setActiveView: vi.fn(),
+      projectName: 'backend',
+      projectStatus: 'SUCCESS',
+      analysisTarget: 'sample',
+      hasDetectedApis: true,
+      requestReady: true,
+      traceId: mocks.activeView === 'runtime' ? 'trace-1' : null,
+      traceResultStatus: 'IDLE',
+      traceDisplayStatus: '대기',
+      traceEventCount: 0,
+    },
+    projectView: {},
+    requestView: {},
+    traceView: {},
+  }),
+}))
+vi.mock('./ProjectView', () => ({ ProjectView: () => <div>프로젝트 화면</div> }))
+vi.mock('./RequestView', () => ({ RequestView: () => <div>요청 화면</div> }))
+vi.mock('./TraceView', () => ({ TraceView: () => <div>Trace 화면</div> }))
 
 describe('workflow view boundaries', () => {
-  it('renders only active view content', () => {
-    render(
-      <>
-        <ProjectView active>프로젝트 화면</ProjectView>
-        <RequestView active={false}>요청 화면</RequestView>
-        <TraceView active={false}>Trace 화면</TraceView>
-      </>,
-    )
-    expect(screen.getByText('프로젝트 화면')).toBeInTheDocument()
-    expect(screen.queryByText('요청 화면')).not.toBeInTheDocument()
-    expect(screen.queryByText('Trace 화면')).not.toBeInTheDocument()
+  afterEach(cleanup)
+
+  beforeEach(() => {
+    mocks.activeView = 'project'
+  })
+
+  it.each([
+    ['project', '프로젝트 화면'],
+    ['api', '요청 화면'],
+    ['runtime', 'Trace 화면'],
+  ] as const)('renders only the %s view', (activeView, expectedText) => {
+    mocks.activeView = activeView
+    render(<StackFlowWorkbench />)
+    expect(screen.getByText(expectedText)).toBeInTheDocument()
+    expect(screen.queryAllByText(/^(프로젝트 화면|요청 화면|Trace 화면)$/)).toHaveLength(1)
   })
 })
