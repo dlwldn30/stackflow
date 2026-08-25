@@ -161,6 +161,7 @@ v0.1은 다음 경계 안에서 동작합니다.
 - 기본 설정은 loopback target만 허용합니다. Docker 데모에서만 내부 네트워크 target을 명시적으로 허용하고 모든 host 포트는 `127.0.0.1`에만 바인딩합니다.
 - SQL statement, HTTP header, query, request/response body는 Trace metadata에 저장하지 않습니다.
 - HTTP method·route, DB system·operation·namespace, exception type 등 허용 key만 최대 2KB로 저장합니다.
+- Span exception event가 제공한 stacktrace는 metadata와 분리해 UTF-8 16KiB까지만 저장하며 사용자 홈 경로는 `~`로 축약합니다.
 - OTLP 요청은 5MB로 제한하고 StackFlow가 시작하지 않은 trace ID는 저장하지 않습니다.
 
 ## 검증

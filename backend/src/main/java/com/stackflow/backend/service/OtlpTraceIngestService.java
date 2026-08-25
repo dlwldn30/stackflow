@@ -11,6 +11,7 @@ import io.opentelemetry.proto.trace.v1.Span;
 import com.stackflow.backend.domain.ComponentType;
 import com.stackflow.backend.domain.EventStatus;
 import com.stackflow.backend.domain.TraceEvent;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -27,6 +28,7 @@ public class OtlpTraceIngestService {
 
 	private static final int MAX_ATTRIBUTES = 64;
 	private static final int MAX_ATTRIBUTE_VALUE_LENGTH = 2048;
+	private static final int MAX_STACK_TRACE_BYTES = 16 * 1024;
 	private static final Set<String> BLOCKED_ATTRIBUTE_PARTS = Set.of(
 		"header", "cookie", "query", "body", "statement", "authorization", "token", "password", "secret"
 	);
@@ -84,17 +86,16 @@ public class OtlpTraceIngestService {
 
 	private TraceEvent toTraceEvent(String serviceName, Span span) {
 		Map<String, String> metadata = sanitizeAttributes(span.getAttributesList());
+		ExceptionDetail exceptionDetail = selectExceptionDetail(span.getEventsList());
 		String exceptionType = metadata.get("error.type");
 		String exceptionMessage = span.getStatus().getMessage().isBlank() ? null : truncate(span.getStatus().getMessage());
-		for (Span.Event event : span.getEventsList()) {
-			Map<String, String> eventAttributes = toAttributeMap(event.getAttributesList());
-			if (exceptionType == null) {
-				exceptionType = eventAttributes.get("exception.type");
-			}
-			if (exceptionMessage == null) {
-				exceptionMessage = truncate(eventAttributes.get("exception.message"));
-			}
+		if (exceptionType == null && exceptionDetail != null) {
+			exceptionType = truncate(exceptionDetail.type());
 		}
+		if (exceptionMessage == null && exceptionDetail != null) {
+			exceptionMessage = truncate(exceptionDetail.message());
+		}
+		TruncatedValue stackTrace = sanitizeStackTrace(exceptionDetail == null ? null : exceptionDetail.stackTrace());
 		EventStatus status = toEventStatus(span, exceptionType, exceptionMessage);
 		Instant startedAt = toInstant(span.getStartTimeUnixNano());
 		Instant endedAt = toInstant(Math.max(span.getStartTimeUnixNano(), span.getEndTimeUnixNano()));
@@ -113,8 +114,31 @@ public class OtlpTraceIngestService {
 			hex(span.getSpanId()),
 			span.getParentSpanId().isEmpty() ? null : hex(span.getParentSpanId()),
 			serviceName,
-			span.getKind().name().replace("SPAN_KIND_", "")
+			span.getKind().name().replace("SPAN_KIND_", ""),
+			stackTrace.value(),
+			stackTrace.truncated()
 		);
+	}
+
+	private ExceptionDetail selectExceptionDetail(List<Span.Event> events) {
+		ExceptionDetail latest = null;
+		ExceptionDetail latestWithStackTrace = null;
+		for (Span.Event event : events) {
+			Map<String, String> attributes = toExceptionAttributeMap(event.getAttributesList());
+			if (!event.getName().equalsIgnoreCase("exception") && attributes.isEmpty()) {
+				continue;
+			}
+			ExceptionDetail candidate = new ExceptionDetail(
+				attributes.get("exception.type"),
+				attributes.get("exception.message"),
+				attributes.get("exception.stacktrace")
+			);
+			latest = candidate;
+			if (candidate.stackTrace() != null && !candidate.stackTrace().isBlank()) {
+				latestWithStackTrace = candidate;
+			}
+		}
+		return latestWithStackTrace != null ? latestWithStackTrace : latest;
 	}
 
 	private ComponentType classifyComponent(Span span, Map<String, String> attributes) {
@@ -158,7 +182,7 @@ public class OtlpTraceIngestService {
 		return Map.copyOf(sanitized);
 	}
 
-	private Map<String, String> toAttributeMap(List<KeyValue> attributes) {
+	private Map<String, String> toExceptionAttributeMap(List<KeyValue> attributes) {
 		Map<String, String> values = new LinkedHashMap<>();
 		for (KeyValue attribute : attributes) {
 			if (attribute.getKey().startsWith("exception.")) {
@@ -166,6 +190,32 @@ public class OtlpTraceIngestService {
 			}
 		}
 		return values;
+	}
+
+	private TruncatedValue sanitizeStackTrace(String value) {
+		if (value == null || value.isBlank()) {
+			return new TruncatedValue(null, false);
+		}
+		String home = System.getProperty("user.home", "");
+		String sanitized = home.isBlank() ? value : value.replace(home, "~");
+		byte[] bytes = sanitized.getBytes(StandardCharsets.UTF_8);
+		if (bytes.length <= MAX_STACK_TRACE_BYTES) {
+			return new TruncatedValue(sanitized, false);
+		}
+		StringBuilder limited = new StringBuilder();
+		int byteCount = 0;
+		for (int offset = 0; offset < sanitized.length();) {
+			int codePoint = sanitized.codePointAt(offset);
+			String character = new String(Character.toChars(codePoint));
+			int characterBytes = character.getBytes(StandardCharsets.UTF_8).length;
+			if (byteCount + characterBytes > MAX_STACK_TRACE_BYTES) {
+				break;
+			}
+			limited.append(character);
+			byteCount += characterBytes;
+			offset += Character.charCount(codePoint);
+		}
+		return new TruncatedValue(limited.toString(), true);
 	}
 
 	private boolean isAllowedAttribute(String key) {
@@ -236,5 +286,11 @@ public class OtlpTraceIngestService {
 
 	private String hex(ByteString value) {
 		return HexFormat.of().formatHex(value.toByteArray());
+	}
+
+	private record ExceptionDetail(String type, String message, String stackTrace) {
+	}
+
+	private record TruncatedValue(String value, boolean truncated) {
 	}
 }

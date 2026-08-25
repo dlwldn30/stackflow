@@ -52,7 +52,8 @@ The target Java Agent continues the injected trace and exports OTLP HTTP/protobu
 - service name, span name, span kind
 - start/end timestamp and duration
 - success/error/timeout state and exception summary
-- allowlisted HTTP, network, code, RPC, database, exception, and OTel metadata
+- allowlisted HTTP, network, code, RPC, database, and OTel metadata
+- exception stacktrace stored separately from metadata when an OTLP span exception event provides one
 
 Spans are deduplicated by span ID and ordered by start timestamp. A SERVER span marks the trace as eligible for completion after a short quiet period so late spans in the same export cycle can be merged.
 
@@ -61,6 +62,8 @@ Spans are deduplicated by span ID and ordered by start timestamp. A SERVER span 
 - Maximum OTLP request size: 5 MB.
 - Maximum stored attribute value: 2 KB.
 - Maximum stored attributes per span: 64.
+- Exception stacktraces are limited to 16 KiB of valid UTF-8 after the current user's home path is shortened to `~`.
+- `exception.stacktrace` is not duplicated into the metadata map. The Trace event reports separately whether the stacktrace was truncated.
 - Request headers, query values, request bodies, and database statements are not stored.
 - Trace details may retain a response preview for JSON, `application/*+json`, and `text/*` responses only. Empty, binary, unsupported, and malformed JSON bodies are discarded.
 - JSON keys containing authorization, token, password, secret, cookie, or session are recursively replaced with `[REDACTED]`, ignoring case and `_`, `-`, `.` separators.
@@ -93,5 +96,6 @@ Sample traces retain the fixed StackFlow component graph. OpenTelemetry traces u
 - One local Spring Boot JVM.
 - JVM restart is required; dynamic attach is not supported.
 - No cross-service distributed trace UI.
+- No OTLP Logs ingestion. Exception details are collected only from exception events attached to OTLP spans.
 - No authentication, durable storage, sampling administration, or production retention.
 - Libraries outside Java Agent support may produce partial traces.

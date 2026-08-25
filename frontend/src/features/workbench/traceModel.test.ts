@@ -25,6 +25,8 @@ function event(
     parentSpanId,
     serviceName: 'trace-lab',
     spanKind,
+    stackTrace: null,
+    stackTraceTruncated: false,
   }
 }
 

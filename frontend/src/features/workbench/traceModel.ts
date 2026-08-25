@@ -10,6 +10,13 @@ export interface TraceMetadataItem {
   value: string
 }
 
+const CODE_LOCATION_LABELS: Record<string, string> = {
+  'code.namespace': '클래스',
+  'code.function.name': '메서드',
+  'code.file.path': '소스 파일',
+  'code.line.number': '라인',
+}
+
 const METADATA_LABELS: Record<string, string> = {
   productId: '상품 ID',
   scenario: '시나리오',
@@ -142,4 +149,10 @@ export function getKeyMetadata(metadata: Record<string, string>): TraceMetadataI
   return Object.entries(metadata)
     .filter(([key]) => key in METADATA_LABELS)
     .map(([key, value]) => ({ key, label: METADATA_LABELS[key], value }))
+}
+
+export function getExceptionLocation(metadata: Record<string, string>): TraceMetadataItem[] {
+  return Object.entries(CODE_LOCATION_LABELS)
+    .filter(([key]) => Boolean(metadata[key]))
+    .map(([key, label]) => ({ key, label, value: metadata[key] }))
 }

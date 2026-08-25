@@ -26,6 +26,8 @@ function event(
     parentSpanId,
     serviceName: 'test',
     spanKind: 'INTERNAL',
+    stackTrace: null,
+    stackTraceTruncated: false,
   }
 }
 
