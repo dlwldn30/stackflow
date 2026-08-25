@@ -455,6 +455,21 @@
 }
 
 @media (max-width: 720px) {
+  .workspace--runtime,
+  .workspace--runtime > *,
+  .trace-inspector,
+  .trace-inspector-disclosure,
+  .trace-inspector-disclosure .metadata-list,
+  .trace-inspector-disclosure .response-body {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .trace-inspector-disclosure .metadata-list,
+  .trace-inspector-disclosure .response-body {
+    overflow: auto;
+  }
+
   .trace-outcome__metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

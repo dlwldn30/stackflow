@@ -415,8 +415,26 @@
 }
 
 .request-result-panel .response-body {
+  width: 100%;
+  max-width: 100%;
   max-height: 360px;
   margin-top: 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.response-truncated-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border: 1px solid #f1c27d;
+  border-radius: 4px;
+  background: #fff8e8;
+  color: #9a5b00;
+  padding: 2px 7px;
+  font-size: 0.61rem;
+  font-weight: 750;
 }
 
 .request-flow-panel {
@@ -611,6 +629,25 @@
 }
 
 @media (max-width: 720px) {
+  .workspace--api,
+  .workspace--api > *,
+  .request-composer,
+  .request-result-panel,
+  .request-result-panel .response-body {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .request-result-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .request-result-head > div:last-child {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
   .request-composer {
     border: 0;
     border-radius: 0;

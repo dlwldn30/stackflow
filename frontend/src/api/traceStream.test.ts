@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { connectTraceStream, type TraceStreamHandlers } from './traceStream'
+import { connectTraceStream, TRACE_STREAM_CONNECT_TIMEOUT_MS, type TraceStreamHandlers } from './traceStream'
 
 describe('Trace EventSource client', () => {
   beforeEach(() => {
@@ -7,7 +7,36 @@ describe('Trace EventSource client', () => {
     vi.stubGlobal('EventSource', MockEventSource)
   })
 
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it('does not resolve before open or stream_ready', async () => {
+    vi.useFakeTimers()
+    const connection = connectTraceStream('trace-pending', createHandlers())
+    const stream = MockEventSource.instances[0]
+    let resolved = false
+    void connection.then(() => { resolved = true })
+
+    await vi.advanceTimersByTimeAsync(1_500)
+    expect(resolved).toBe(false)
+
+    stream.dispatch('stream_ready', { traceId: 'trace-pending' })
+    await expect(connection).resolves.toBe(stream)
+  })
+
+  it('rejects and closes the stream after five seconds without connection evidence', async () => {
+    vi.useFakeTimers()
+    const connection = connectTraceStream('trace-timeout', createHandlers())
+    const stream = MockEventSource.instances[0]
+    const rejection = expect(connection).rejects.toThrow('실시간 연결 실패')
+
+    await vi.advanceTimersByTimeAsync(TRACE_STREAM_CONNECT_TIMEOUT_MS)
+
+    await rejection
+    expect(stream.closed).toBe(true)
+  })
 
   it('reports a server connection timeout without treating the following error as a disconnect', async () => {
     const handlers = createHandlers()

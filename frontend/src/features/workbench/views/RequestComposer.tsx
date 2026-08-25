@@ -250,6 +250,9 @@ export function RequestComposer(props: RequestComposerProps) {
                   Trace에서 보기 <ExternalLink size={14} aria-hidden="true" />
                 </button>
               ) : null}
+              {externalResponse?.responseBodyTruncated ? (
+                <span className="response-truncated-badge" role="status">1MiB 일부</span>
+              ) : null}
             </div>
           </div>
           {externalRunnable ? (
