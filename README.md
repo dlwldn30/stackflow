@@ -62,7 +62,7 @@ Compose를 실행한 상태에서 UI로 요청하거나 아래 자동 검증을 
 | Cache miss | Redis miss → PostgreSQL → Redis save | 응답 `DATABASE`, Redis·PostgreSQL span |
 | Cache hit | Redis hit | 응답 `CACHE`, PostgreSQL span 없음 |
 | Redis 장애 | Redis 오류 → PostgreSQL fallback | 응답 `DATABASE_FALLBACK`, Trace `WARNING` |
-| 실제 DB timeout | `pg_sleep` → JDBC query timeout | HTTP 504, 약 1초 실패 PostgreSQL span |
+| 실제 DB timeout | `pg_sleep` → JDBC query timeout | HTTP 504, 약 1초 실패 PostgreSQL span, 예외 stacktrace |
 
 실제 DB timeout endpoint:
 
@@ -71,6 +71,17 @@ GET /lab/products/{productId}/database-timeout
 ```
 
 즉시 예외를 만드는 `GET /lab/products/database-error`는 실제 timeout과 구분되는 **모의 DB 오류**입니다.
+
+### 실제 오류 원인 확인
+
+`GET /lab/products/{productId}/database-timeout`을 실행하면 Trace 화면에서 다음 근거를 순서대로 확인할 수 있습니다.
+
+1. 결과 요약에서 HTTP 504와 전체 소요 시간을 확인합니다.
+2. `주요 실패 원인`에서 PostgreSQL 예외와 Controller까지의 오류 전파 경로를 확인합니다.
+3. Waterfall에서 약 1초가 걸린 PostgreSQL span을 병목으로 확인합니다.
+4. 오른쪽 Inspector에서 제한된 stacktrace와 정제된 응답 JSON을 확인합니다.
+
+![PostgreSQL timeout 오류 상세](docs/images/trace-exception.png)
 
 ## 동작 구조
 
@@ -105,6 +116,8 @@ flowchart LR
 - 활성 capture에 속한 trace만 저장하는 인메모리 세션 경계
 - span 부모·자식 관계 기반 Waterfall·Node Graph·이벤트 보기
 - exclusive time 기준 병목 span 3개와 인프라 원인 span 우선 선택
+- 실패 원인부터 Controller까지의 오류 전파 경로와 예외 stacktrace 표시
+- 최근 Trace 재조회가 가능한 JSON·text 응답 미리보기와 민감 key 제거
 - Redis, PostgreSQL, JDBC, HTTP Client span 분류
 - 허용 목록 기반 metadata 저장과 SQL statement·header·body 차단
 
@@ -140,7 +153,7 @@ VITE_API_TARGET=http://localhost:18080 npm run dev
 
 ## 지원 범위
 
-v0.1은 다음 경계 안에서 동작합니다.
+현재 v0.1.x는 다음 경계 안에서 동작합니다.
 
 - Java 기반 Spring Boot, 단일 로컬 JVM
 - Spring MVC, JDBC, Lettuce 등 Java Agent가 지원하는 자동 계측
@@ -160,6 +173,7 @@ v0.1은 다음 경계 안에서 동작합니다.
 - 사용자가 넣은 `traceparent`, `tracestate`는 제거하고 StackFlow가 만든 correlation 값만 사용합니다.
 - 기본 설정은 loopback target만 허용합니다. Docker 데모에서만 내부 네트워크 target을 명시적으로 허용하고 모든 host 포트는 `127.0.0.1`에만 바인딩합니다.
 - SQL statement, HTTP header, query, request/response body는 Trace metadata에 저장하지 않습니다.
+- JSON·text 응답은 Trace metadata와 분리된 미리보기로 최대 64KiB만 저장하며 민감한 JSON key는 재귀적으로 제거합니다.
 - HTTP method·route, DB system·operation·namespace, exception type 등 허용 key만 최대 2KB로 저장합니다.
 - Span exception event가 제공한 stacktrace는 metadata와 분리해 UTF-8 16KiB까지만 저장하며 사용자 홈 경로는 `~`로 축약합니다.
 - OTLP 요청은 5MB로 제한하고 StackFlow가 시작하지 않은 trace ID는 저장하지 않습니다.

@@ -300,12 +300,14 @@ Limits:
 - Prefer small vertical slices over broad incomplete platform features.
 - Keep tests tied to user-visible behavior.
 
-## Next Recommended Code Task
+## Current Status And Next Task
 
-Implement the UI split:
+The UI now separates the workflow into three evidence stages:
 
-- `Project Map`: static structure.
-- `API Flow`: estimated API path.
-- `Runtime Trace`: actual SSE trace.
+- `Project`: static Spring structure and analysis coverage.
+- `Request`: API input, execution target, and HTTP response.
+- `Trace`: actual OTLP Waterfall, failure propagation, response preview, and exception detail.
 
-This should happen before adding deeper static analysis. The reason is that better analysis data will still be confusing if the UI does not clearly separate structure, estimate, and runtime evidence.
+The next compatibility task is to normalize both legacy and current OpenTelemetry code semantic keys. In particular, the Java Agent can emit `code.function` while the current Inspector also expects `code.function.name`. Supporting both keys will keep class and method location summaries accurate across Agent versions.
+
+After that compatibility fix, validate one non-demo Spring Boot project end to end and publish the verified state as `v0.1.1`.
