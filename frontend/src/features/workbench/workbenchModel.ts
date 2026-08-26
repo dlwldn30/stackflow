@@ -1,6 +1,7 @@
 import { getTrace } from '../../api/stackflow'
 import type { ApiCatalogItem, HttpMethod, ProjectController, ProjectDomain, ProjectLayer, ProjectStructure, TraceDetail, TraceEvent } from '../../types/trace'
 import type { ApiDefinition, ApiMethodLike, DomainDisplayMode, DomainStructureStep, EstimatedFlowStep, LayerGroup } from './types'
+import { resolveCodeLocation } from './traceModel'
 
 export function flattenProjectApis(structure: ProjectStructure): ApiDefinition[] {
   return structure.domains.flatMap((domain) =>
@@ -316,7 +317,8 @@ export function matchesEstimatedStep(step: EstimatedFlowStep, event: TraceEvent)
     Gateway: ['GATEWAY', 'HTTP_CLIENT'],
   }
   const normalizedLabel = step.label.toLowerCase()
-  const eventEvidence = [event.eventType, event.metadata['code.namespace'], event.metadata['code.function.name']]
+  const codeLocation = resolveCodeLocation(event.metadata)
+  const eventEvidence = [event.eventType, codeLocation.className, codeLocation.functionName]
     .filter(Boolean)
     .join(' ')
     .toLowerCase()
