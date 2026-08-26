@@ -1,5 +1,3 @@
-import { MarkerType } from '@xyflow/react'
-import type { Edge, Node } from '@xyflow/react'
 import type { ComponentType, EventStatus, GraphNodeState, TraceDetail, TraceEvent } from '../types/trace'
 
 const COMPONENT_ORDER: ComponentType[] = [
@@ -27,77 +25,13 @@ const LABELS: Record<ComponentType, string> = {
   INTERNAL: 'Internal',
 }
 
-const BADGES: Record<ComponentType, string> = {
-  CLIENT: 'CL',
-  CONTROLLER: 'CTL',
-  SERVICE: 'SVC',
-  REDIS: 'RDS',
-  REPOSITORY: 'REP',
-  MYSQL: 'SQL',
-  POSTGRESQL: 'PG',
-  RESPONSE: 'RES',
-  GATEWAY: 'GTW',
-  HTTP_CLIENT: 'HTTP',
-  DATABASE: 'DB',
-  INTERNAL: 'INT',
-}
-
-const DESCRIPTIONS: Record<ComponentType, string> = {
-  CLIENT: '요청 시작',
-  CONTROLLER: 'HTTP 진입점',
-  SERVICE: 'Business rule',
-  REDIS: 'Cache 분기',
-  REPOSITORY: 'Data access',
-  MYSQL: 'Persistence',
-  POSTGRESQL: 'PostgreSQL 호출',
-  RESPONSE: '최종 응답',
-  GATEWAY: '외부 연동 경계',
-  HTTP_CLIENT: '외부 HTTP 호출',
-  DATABASE: '데이터베이스 호출',
-  INTERNAL: '계측된 메서드',
-}
-
-const POSITIONS: Record<ComponentType, { x: number; y: number }> = {
-  CLIENT: { x: 10, y: 190 },
-  CONTROLLER: { x: 225, y: 72 },
-  SERVICE: { x: 225, y: 306 },
-  REDIS: { x: 490, y: 72 },
-  REPOSITORY: { x: 490, y: 306 },
-  MYSQL: { x: 755, y: 306 },
-  POSTGRESQL: { x: 755, y: 306 },
-  RESPONSE: { x: 1000, y: 190 },
-  GATEWAY: { x: 755, y: 72 },
-  HTTP_CLIENT: { x: 1000, y: 72 },
-  DATABASE: { x: 755, y: 306 },
-  INTERNAL: { x: 490, y: 190 },
-}
-
-const BASE_EDGES = [
-  ['CLIENT', 'CONTROLLER'],
-  ['CONTROLLER', 'SERVICE'],
-  ['SERVICE', 'REDIS'],
-  ['SERVICE', 'REPOSITORY'],
-  ['REDIS', 'REPOSITORY'],
-  ['REPOSITORY', 'MYSQL'],
-  ['MYSQL', 'REDIS'],
-  ['REDIS', 'RESPONSE'],
-  ['MYSQL', 'RESPONSE'],
-  ['SERVICE', 'RESPONSE'],
-] as const satisfies readonly (readonly [ComponentType, ComponentType])[]
-
 const STATUS_PRIORITY: EventStatus[] = ['TIMEOUT', 'ERROR', 'WARNING', 'SUCCESS', 'SKIPPED']
 
-function isFailureStatus(status: EventStatus | 'IDLE' | undefined): boolean {
-  return status === 'ERROR' || status === 'TIMEOUT'
-}
-
 export function buildGraph(trace: TraceDetail | null): {
-  nodes: Node[]
-  edges: Edge[]
   states: GraphNodeState[]
 } {
   if (trace?.source === 'OPENTELEMETRY') {
-    return buildSpanGraph(trace.events)
+    return { states: buildSpanStates(trace.events) }
   }
 
   const orderedEvents = sortEventsByStartTime(trace?.events ?? [])
@@ -105,87 +39,12 @@ export function buildGraph(trace: TraceDetail | null): {
     createNodeState(component, orderedEvents.filter((event) => event.component === component)),
   )
 
-  const statesById = new Map(states.map((state) => [state.id, state]))
-  const componentPath = buildComponentPath(orderedEvents)
-  const activeEdges = new Set(componentPath.map(([source, target]) => `${source}-${target}`))
-
-  const nodes: Node[] = states.map((state) => ({
-    id: state.id,
-    position: POSITIONS[state.component],
-    data: {
-      label: (
-        <div className="flow-node__body">
-          <div className="flow-node__topline">
-            <span className="flow-node__badge">{BADGES[state.component]}</span>
-            <span className="flow-node__status-dot" />
-          </div>
-          <span className="flow-node__kicker">{state.component}</span>
-          <span className="flow-node__title">{state.label}</span>
-          <span className="flow-node__description">{DESCRIPTIONS[state.component]}</span>
-          <span className="flow-node__meta">
-            {state.active ? `${state.durationMs}ms · 이벤트 ${state.visits.length}개` : '호출되지 않음'}
-          </span>
-        </div>
-      ),
-    },
-    className: `flow-node flow-node--${state.status.toLowerCase()}${state.active ? ' is-active' : ''}`,
-    draggable: false,
-    selectable: true,
-  }))
-
-  const edges: Edge[] = BASE_EDGES.map(([source, target]) => {
-    const sourceState = statesById.get(source)
-    const targetState = statesById.get(target)
-    const edgeId = `${source}-${target}`
-    const active = activeEdges.has(edgeId)
-    const failed = active && (isFailureStatus(sourceState?.status) || isFailureStatus(targetState?.status))
-
-    return {
-      id: edgeId,
-      source,
-      target,
-      type: 'smoothstep',
-      animated: active && Boolean(sourceState?.active && targetState?.active),
-      className: `flow-edge${active ? ' is-active' : ''}${failed ? ' is-failed' : ''}`,
-      markerEnd: {
-        type: MarkerType.ArrowClosed,
-        width: active ? 18 : 14,
-        height: active ? 18 : 14,
-        color: failed ? '#c2413c' : active ? '#1f7a55' : '#9aa6b5',
-      },
-      zIndex: active ? 8 : 1,
-      interactionWidth: 24,
-    }
-  })
-
-  return { nodes, edges, states }
+  return { states }
 }
 
-function buildSpanGraph(events: TraceEvent[]): {
-  nodes: Node[]
-  edges: Edge[]
-  states: GraphNodeState[]
-} {
+function buildSpanStates(events: TraceEvent[]): GraphNodeState[] {
   const spanEvents = sortEventsByStartTime(events).filter((event) => event.spanId)
-  const eventsBySpanId = new Map(spanEvents.map((event) => [event.spanId as string, event]))
-  const depthCache = new Map<string, number>()
-
-  const getDepth = (spanId: string, visited = new Set<string>()): number => {
-    const cached = depthCache.get(spanId)
-    if (cached !== undefined) return cached
-    if (visited.has(spanId)) return 0
-
-    const event = eventsBySpanId.get(spanId)
-    const parentId = event?.parentSpanId
-    const depth = parentId && eventsBySpanId.has(parentId)
-      ? getDepth(parentId, new Set(visited).add(spanId)) + 1
-      : 0
-    depthCache.set(spanId, depth)
-    return depth
-  }
-
-  const rowByDepth = new Map<number, number>()
-  const states = spanEvents.map((event) => ({
+  return spanEvents.map((event) => ({
     id: event.spanId as string,
     component: event.component,
     label: event.eventType,
@@ -194,59 +53,6 @@ function buildSpanGraph(events: TraceEvent[]): {
     active: true,
     visits: [event],
   } satisfies GraphNodeState))
-
-  const nodes: Node[] = states.map((state) => {
-    const event = state.visits[0]
-    const depth = getDepth(state.id)
-    const row = rowByDepth.get(depth) ?? 0
-    rowByDepth.set(depth, row + 1)
-    return {
-      id: state.id,
-      position: { x: depth * 270, y: row * 160 },
-      data: {
-        label: (
-          <div className="flow-node__body">
-            <div className="flow-node__topline">
-              <span className="flow-node__badge">{BADGES[state.component]}</span>
-              <span className="flow-node__status-dot" />
-            </div>
-            <span className="flow-node__kicker">{event.spanKind ?? state.component}</span>
-            <span className="flow-node__title">{state.label}</span>
-            <span className="flow-node__description">{event.serviceName ?? DESCRIPTIONS[state.component]}</span>
-            <span className="flow-node__meta">{state.durationMs}ms</span>
-          </div>
-        ),
-      },
-      className: `flow-node flow-node--${state.status.toLowerCase()} is-active`,
-      draggable: false,
-      selectable: true,
-    }
-  })
-
-  const edges: Edge[] = spanEvents.flatMap((event) => {
-    if (!event.spanId || !event.parentSpanId || !eventsBySpanId.has(event.parentSpanId)) {
-      return []
-    }
-    const failed = isFailureStatus(event.status)
-    return [{
-      id: `${event.parentSpanId}-${event.spanId}`,
-      source: event.parentSpanId,
-      target: event.spanId,
-      type: 'smoothstep',
-      animated: false,
-      className: `flow-edge is-active${failed ? ' is-failed' : ''}`,
-      markerEnd: {
-        type: MarkerType.ArrowClosed,
-        width: 18,
-        height: 18,
-        color: failed ? '#c2413c' : '#1f7a55',
-      },
-      zIndex: 8,
-      interactionWidth: 24,
-    }]
-  })
-
-  return { nodes, edges, states }
 }
 
 export function getNodeDetail(states: GraphNodeState[], nodeId: string | null): GraphNodeState | null {
@@ -283,18 +89,6 @@ function createNodeState(component: ComponentType, events: TraceEvent[]): GraphN
     active: true,
     visits: events,
   }
-}
-
-function buildComponentPath(events: TraceEvent[]): Array<[ComponentType, ComponentType]> {
-  const path: Array<[ComponentType, ComponentType]> = []
-  for (let index = 0; index < events.length - 1; index += 1) {
-    const current = events[index]
-    const next = events[index + 1]
-    if (current.component !== next.component) {
-      path.push([current.component, next.component])
-    }
-  }
-  return path
 }
 
 function sortEventsByStartTime(events: TraceEvent[]) {

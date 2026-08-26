@@ -12,7 +12,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@xyflow/react": "^12.8.6",
     "lucide-react": "^1.33.0",
     "picomatch": "^4.0.5",
     "react": "^19.2.7",

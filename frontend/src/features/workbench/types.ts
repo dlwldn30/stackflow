@@ -9,7 +9,7 @@ export type AnalysisTarget = 'sample' | 'external'
 export type AsyncState = 'idle' | 'loading' | 'error'
 export type ApiScope = 'all' | 'domain'
 export type RequestOptionTab = 'query' | 'headers' | 'body'
-export type TraceViewTab = 'timeline' | 'graph' | 'events'
+export type TraceViewTab = 'timeline' | 'events'
 
 export type StateFields<Model> = {
   [Key in keyof Model as Model[Key] extends (...args: never[]) => unknown ? never : Key]: Model[Key]

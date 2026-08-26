@@ -49,7 +49,7 @@ export function TraceInspector({
       </div>
 
       {!selectedNode || !selectedEvent ? (
-        <p className="empty-copy trace-inspector-empty">Waterfall, 그래프 또는 이벤트 목록에서 확인할 span을 선택하세요.</p>
+        <p className="empty-copy trace-inspector-empty">타임라인 또는 이벤트 목록에서 확인할 span을 선택하세요.</p>
       ) : (
         <>
           <section className="trace-inspector-summary">

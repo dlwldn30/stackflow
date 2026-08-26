@@ -95,7 +95,6 @@ export function useWorkbenchController() {
     (group.id === 'model' || group.id === 'support') && group.classes.length > 0)
   const commonLayerGroups = groupProjectLayers(buildCommonProjectLayers(project.projectStructure))
   const commonClassCount = commonLayerGroups.reduce((sum, group) => sum + group.classes.length, 0)
-  const activeRoute = graph.states.filter((state) => state.active)
   const estimatedFlow = hasDetectedApis ? buildEstimatedFlow(selectedApi, selectedDomain) : []
   const traceComparison = runtime.traceDetail?.source === 'OPENTELEMETRY'
     ? compareEstimatedAndActualFlow(estimatedFlow, runtime.traceDetail.events)
@@ -141,7 +140,6 @@ export function useWorkbenchController() {
   const formattedExternalResponseBody = useMemo(() => request.externalResponse
     ? formatResponseBody(request.externalResponse.responseBody)
     : null, [request.externalResponse])
-  const graphFitKey = `${runtime.traceDetail?.traceId ?? 'empty'}-${runtime.traceDetail?.events.length ?? 0}`
   const selectedTraceId = runtime.traceDetail?.traceId
   const setSelectedNodeId = runtime.setSelectedNodeId
   const currentResultStatus: EventStatus | 'IDLE' = request.externalResponse?.resultStatus
@@ -157,16 +155,6 @@ export function useWorkbenchController() {
   /* oxlint-enable react-hooks/exhaustive-deps */
 
   useEffect(() => setSelectedNodeId(null), [selectedTraceId, setSelectedNodeId])
-  useEffect(() => {
-    if (!runtime.flowInstanceRef.current) return
-    const frame = window.requestAnimationFrame(() => runtime.flowInstanceRef.current?.fitView({ padding: 0.14, duration: 180, includeHiddenNodes: true }))
-    const settledFit = window.setTimeout(() => runtime.flowInstanceRef.current?.fitView({ padding: 0.14, duration: 0, includeHiddenNodes: true }), 180)
-    return () => {
-      window.cancelAnimationFrame(frame)
-      window.clearTimeout(settledFit)
-    }
-  }, [graphFitKey, runtime.flowInstanceRef])
-
   const setActiveView = (view: ViewMode) => {
     if (view !== activeView) lifecycle.invalidateActiveRun()
     setActiveViewState(view)
@@ -209,9 +197,9 @@ export function useWorkbenchController() {
     traceView: {
       ...runtime, selectTrace: traceActions.selectTrace,
       setActiveView,
-      graph, waterfall, orderedTraceEvents, primaryFailureEvent, primaryFailureNodeId,
+      waterfall, orderedTraceEvents, primaryFailureEvent, primaryFailureNodeId,
       selectedNode, inspectorEvent, primaryFailureLabel, traceOutcome,
-      failurePropagationPath, filteredRecentTraces, activeRoute, traceComparison,
+      failurePropagationPath, filteredRecentTraces, traceComparison,
       traceDisplayTone, traceDisplayStatus, selectedApi, selectedDomain,
       analysisTarget: project.analysisTarget,
       runtimeSupported, externalTraceConfigured, selectedApiMethodLabel,

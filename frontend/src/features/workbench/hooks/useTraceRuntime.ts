@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ReactFlowInstance } from '@xyflow/react'
 import type { TraceCollectionStatus, TraceDetail, TraceSummary } from '../../../types/trace'
 import type { StreamStatus } from '../../../ui/copy'
 import type { ActionFields, StateFields, TraceViewTab } from '../types'
@@ -15,7 +14,6 @@ export function useTraceRuntime() {
   const [traceCollectionStatus, setTraceCollectionStatus] = useState<TraceCollectionStatus>('DISABLED')
   const activeStreamRef = useRef<EventSource | null>(null)
   const activeRunIdRef = useRef(0)
-  const flowInstanceRef = useRef<ReactFlowInstance | null>(null)
 
   const closeActiveStream = useCallback(() => {
     activeStreamRef.current?.close()
@@ -42,7 +40,6 @@ export function useTraceRuntime() {
     traceCollectionStatus, setTraceCollectionStatus,
     activeStreamRef,
     activeRunIdRef,
-    flowInstanceRef,
     closeActiveStream,
     resetTraceRuntime,
   }

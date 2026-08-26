@@ -114,7 +114,7 @@ flowchart LR
 - OpenTelemetry Java Agent 실행 profile 생성
 - W3C `traceparent` 강제 주입과 OTLP HTTP/protobuf 수집
 - 활성 capture에 속한 trace만 저장하는 인메모리 세션 경계
-- span 부모·자식 관계 기반 Waterfall·Node Graph·이벤트 보기
+- span 부모·자식 관계 기반 Waterfall·이벤트 보기
 - exclusive time 기준 병목 span 3개와 인프라 원인 span 우선 선택
 - 실패 원인부터 Controller까지의 오류 전파 경로와 예외 stacktrace 표시
 - 최근 Trace 재조회가 가능한 JSON·text 응답 미리보기와 민감 key 제거
@@ -195,7 +195,7 @@ GitHub Actions는 backend, Trace Lab, frontend, 실제 Docker Compose E2E를 PR�
 
 ```text
 backend/             Spring 분석, 요청 프록시, OTLP 수집, Trace API
-frontend/            React 작업창, Request editor, Waterfall·Graph UI
+frontend/            React 작업창, Request editor, Waterfall·Trace Inspector
 examples/trace-lab/  Redis·PostgreSQL 정상/장애 실험용 Spring Boot 앱
 docs/                분석 규칙, 외부 Trace 설계, 개발 규칙
 scripts/             재현 가능한 Docker 데모 검증
