@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ComponentType, EventStatus, GraphNodeState, TraceDetail, TraceEvent, TraceSummary } from '../../types/trace'
-import { buildFailurePropagationPath, filterTraceHistory, getDefaultInspectionEvent, getInspectorEvent, getKeyMetadata, getTraceOutcome, MAX_RECENT_TRACES, upsertRecentTrace } from './traceModel'
+import { buildFailurePropagationPath, filterTraceHistory, getDefaultInspectionEvent, getExceptionLocation, getInspectorEvent, getKeyMetadata, getTraceOutcome, MAX_RECENT_TRACES, resolveCodeLocation, upsertRecentTrace } from './traceModel'
 
 function event(
   spanId: string,
@@ -105,6 +105,55 @@ describe('trace inspection model', () => {
   it('translates curated metadata while retaining its original key', () => {
     expect(getKeyMetadata({ 'db.system.name': 'postgresql', private: 'hidden' }))
       .toEqual([{ key: 'db.system.name', label: '데이터베이스', value: 'postgresql' }])
+  })
+
+  it('resolves legacy code attributes without changing their source keys', () => {
+    const metadata = {
+      'code.namespace': 'com.example.product.ProductService',
+      'code.function': 'lookupProduct',
+      'code.filepath': '/workspace/ProductService.java',
+      'code.lineno': '73',
+    }
+
+    expect(resolveCodeLocation(metadata)).toEqual({
+      className: 'com.example.product.ProductService',
+      functionName: 'lookupProduct',
+      filePath: '/workspace/ProductService.java',
+      lineNumber: '73',
+    })
+    expect(Object.keys(metadata)).toEqual([
+      'code.namespace', 'code.function', 'code.filepath', 'code.lineno',
+    ])
+  })
+
+  it('splits a stable fully-qualified function name into class and method', () => {
+    expect(getExceptionLocation({
+      'code.function.name': 'com.example.product.ProductService.lookupProduct',
+      'code.file.path': '/workspace/ProductService.java',
+      'code.line.number': '73',
+    })).toEqual([
+      { key: 'class', label: '클래스', value: 'com.example.product.ProductService' },
+      { key: 'method', label: '메서드', value: 'lookupProduct' },
+      { key: 'file', label: '소스 파일', value: '/workspace/ProductService.java' },
+      { key: 'line', label: '라인', value: '73' },
+    ])
+  })
+
+  it('prefers stable code attributes when legacy attributes are also present', () => {
+    expect(resolveCodeLocation({
+      'code.namespace': 'com.example.product.ProductService',
+      'code.function.name': 'com.example.product.ProductService.findCurrent',
+      'code.function': 'findLegacy',
+      'code.file.path': '/workspace/Current.java',
+      'code.filepath': '/workspace/Legacy.java',
+      'code.line.number': '42',
+      'code.lineno': '12',
+    })).toEqual({
+      className: 'com.example.product.ProductService',
+      functionName: 'findCurrent',
+      filePath: '/workspace/Current.java',
+      lineNumber: '42',
+    })
   })
 
   it('keeps 25 recent traces with the newest unique trace first', () => {

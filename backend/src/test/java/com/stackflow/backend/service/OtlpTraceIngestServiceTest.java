@@ -41,8 +41,11 @@ class OtlpTraceIngestServiceTest {
 			))
 				.addAttributes(attribute("code.namespace", "com.example.order.OrderService"))
 				.addAttributes(attribute("code.function.name", "findOrder"))
+				.addAttributes(attribute("code.function", "findOrderLegacy"))
 				.addAttributes(attribute("code.file.path", home + "/workspace/OrderService.java"))
+				.addAttributes(attribute("code.filepath", home + "/legacy/OrderService.java"))
 				.addAttributes(attribute("code.line.number", "42"))
+				.addAttributes(attribute("code.lineno", "41"))
 				.addEvents(exceptionEvent(
 					"java.lang.IllegalStateException",
 					"order lookup failed",
@@ -64,7 +67,10 @@ class OtlpTraceIngestServiceTest {
 			assertEquals("order lookup failed", event.errorMessage());
 			assertEquals("com.example.order.OrderService", event.metadata().get("code.namespace"));
 			assertEquals("findOrder", event.metadata().get("code.function.name"));
+			assertEquals("findOrderLegacy", event.metadata().get("code.function"));
+			assertEquals(home + "/legacy/OrderService.java", event.metadata().get("code.filepath"));
 			assertEquals("42", event.metadata().get("code.line.number"));
+			assertEquals("41", event.metadata().get("code.lineno"));
 			assertTrue(event.stackTrace().contains("~/workspace/OrderService.java:42"));
 			assertFalse(event.metadata().containsKey("exception.stacktrace"));
 			assertFalse(event.stackTraceTruncated());

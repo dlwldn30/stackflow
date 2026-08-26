@@ -105,15 +105,15 @@ describe('Trace workspace presentation', () => {
     expect(inspector.getByText('요청 응답').closest('details')).toHaveAttribute('open')
   })
 
-  it('shows structured exception location and keeps a bounded stacktrace collapsed', () => {
+  it('shows legacy exception location metadata and keeps a bounded stacktrace collapsed', () => {
     const eventWithStackTrace: TraceEvent = {
       ...failureEvent,
       metadata: {
         ...failureEvent.metadata,
         'code.namespace': 'com.example.product.ProductService',
-        'code.function.name': 'lookupProduct',
-        'code.file.path': '~/workspace/ProductService.java',
-        'code.line.number': '73',
+        'code.function': 'lookupProduct',
+        'code.filepath': '~/workspace/ProductService.java',
+        'code.lineno': '73',
       },
       stackTrace: 'java.sql.SQLTimeoutException: query timed out\n\tat com.example.product.ProductService.lookupProduct(ProductService.java:73)',
       stackTraceTruncated: true,

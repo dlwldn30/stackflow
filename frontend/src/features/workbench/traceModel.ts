@@ -10,13 +10,6 @@ export interface TraceMetadataItem {
   value: string
 }
 
-const CODE_LOCATION_LABELS: Record<string, string> = {
-  'code.namespace': '클래스',
-  'code.function.name': '메서드',
-  'code.file.path': '소스 파일',
-  'code.line.number': '라인',
-}
-
 const METADATA_LABELS: Record<string, string> = {
   productId: '상품 ID',
   scenario: '시나리오',
@@ -152,7 +145,28 @@ export function getKeyMetadata(metadata: Record<string, string>): TraceMetadataI
 }
 
 export function getExceptionLocation(metadata: Record<string, string>): TraceMetadataItem[] {
-  return Object.entries(CODE_LOCATION_LABELS)
-    .filter(([key]) => Boolean(metadata[key]))
-    .map(([key, label]) => ({ key, label, value: metadata[key] }))
+  const location = resolveCodeLocation(metadata)
+  return [
+    { key: 'class', label: '클래스', value: location.className },
+    { key: 'method', label: '메서드', value: location.functionName },
+    { key: 'file', label: '소스 파일', value: location.filePath },
+    { key: 'line', label: '라인', value: location.lineNumber },
+  ].filter((item): item is TraceMetadataItem => Boolean(item.value))
+}
+
+export function resolveCodeLocation(metadata: Record<string, string>) {
+  const stableFunction = metadata['code.function.name']?.trim() ?? ''
+  const legacyFunction = metadata['code.function']?.trim() ?? ''
+  const namespace = metadata['code.namespace']?.trim() ?? ''
+  const qualifiedFunction = stableFunction || legacyFunction
+  const separatorIndex = qualifiedFunction.lastIndexOf('.')
+  const derivedClassName = separatorIndex > 0 ? qualifiedFunction.slice(0, separatorIndex) : ''
+  const derivedFunctionName = separatorIndex > 0 ? qualifiedFunction.slice(separatorIndex + 1) : qualifiedFunction
+
+  return {
+    className: namespace || derivedClassName,
+    functionName: derivedFunctionName,
+    filePath: metadata['code.file.path']?.trim() || metadata['code.filepath']?.trim() || '',
+    lineNumber: metadata['code.line.number']?.trim() || metadata['code.lineno']?.trim() || '',
+  }
 }
