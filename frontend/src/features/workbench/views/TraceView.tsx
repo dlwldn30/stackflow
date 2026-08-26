@@ -195,7 +195,7 @@ export function TraceView({ model }: TraceViewProps) {
                   nodesConnectable={false}
                   nodesDraggable={false}
                   elementsSelectable
-                  minZoom={0.35}
+                  minZoom={0.15}
                   maxZoom={1.35}
                   proOptions={{ hideAttribution: true }}
                 >

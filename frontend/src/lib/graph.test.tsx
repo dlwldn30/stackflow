@@ -89,8 +89,25 @@ describe('buildGraph', () => {
 
     expect(graph.nodes.map((node) => node.id)).toEqual(['root-span', 'child-span'])
     expect(graph.edges).toEqual(expect.arrayContaining([
-      expect.objectContaining({ source: 'root-span', target: 'child-span' }),
+      expect.objectContaining({ source: 'root-span', target: 'child-span', zIndex: 0 }),
     ]))
+    expect(graph.nodes[0]).toMatchObject({ sourcePosition: 'right', targetPosition: 'left' })
+    expect(graph.nodes[1].position.x).toBeGreaterThan(graph.nodes[0].position.x)
+  })
+
+  it('centers a parent between child branches without sharing a node row', () => {
+    const graph = buildGraph(trace('OPENTELEMETRY', [
+      event({ eventId: 'root', spanId: 'root-span', spanKind: 'SERVER' }),
+      event({ eventId: 'child-a', spanId: 'child-a', parentSpanId: 'root-span' }),
+      event({ eventId: 'child-b', spanId: 'child-b', parentSpanId: 'root-span' }),
+    ]))
+
+    const root = graph.nodes.find((node) => node.id === 'root-span')
+    const childA = graph.nodes.find((node) => node.id === 'child-a')
+    const childB = graph.nodes.find((node) => node.id === 'child-b')
+
+    expect(childA?.position.y).not.toBe(childB?.position.y)
+    expect(root?.position.y).toBe(((childA?.position.y ?? 0) + (childB?.position.y ?? 0)) / 2)
   })
 
   it('marks an OpenTelemetry edge into a failed child span as failed', () => {
