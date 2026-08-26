@@ -189,6 +189,8 @@ cd .. && docker compose config && ./scripts/verify-demo.sh
 
 GitHub Actions는 backend, Trace Lab, frontend, 실제 Docker Compose E2E를 PR마다 실행합니다.
 
+비데모 Spring Boot 3.4.1 프로젝트에서도 Java 224개, Controller 15개, REST endpoint 42개를 분석하고 `Controller → Redis PING` 실제 Trace를 수집했습니다. 자세한 근거는 [v0.1.1 외부 프로젝트 검증](docs/v0.1.1-external-project-validation.md)에 기록했습니다.
+
 ## 저장소 구성
 
 ```text
@@ -204,6 +206,7 @@ scripts/             재현 가능한 Docker 데모 검증
 - [외부 Runtime Trace 설계](docs/external-runtime-tracing-design.md)
 - [StackFlow 정적 분석 규칙](docs/stackflow-analysis-convention.md)
 - [Trace Lab 실험 방법](examples/trace-lab/README.md)
+- [v0.1.1 외부 프로젝트 검증](docs/v0.1.1-external-project-validation.md)
 - [개발 규칙](docs/development-convention.md)
 
 ## 라이선스
