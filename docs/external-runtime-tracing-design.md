@@ -57,6 +57,19 @@ The target Java Agent continues the injected trace and exports OTLP HTTP/protobu
 
 Spans are deduplicated by span ID and ordered by start timestamp. A SERVER span marks the trace as eligible for completion after a short quiet period so late spans in the same export cycle can be merged.
 
+### Code Attribute Compatibility
+
+StackFlow preserves the original OTLP metadata keys and normalizes them only for UI display. Current stable function, file, and line keys take precedence when both forms are present.
+
+| Display value | Current key | Legacy fallback |
+| --- | --- | --- |
+| Function | `code.function.name` | `code.function` |
+| Source file | `code.file.path` | `code.filepath` |
+| Line | `code.line.number` | `code.lineno` |
+| Class | explicit `code.namespace`, otherwise the prefix of fully-qualified `code.function.name` | - |
+
+For Java spans, a fully-qualified `code.function.name` is split at the final `.` for the Inspector's class and method labels. Automatic JDBC or Redis spans without code attributes remain explicitly unidentified rather than inheriting a location from a parent span or stacktrace.
+
 ## Data Safety
 
 - Maximum OTLP request size: 5 MB.
