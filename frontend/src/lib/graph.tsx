@@ -1,4 +1,4 @@
-import { MarkerType } from '@xyflow/react'
+import { MarkerType, Position } from '@xyflow/react'
 import type { Edge, Node } from '@xyflow/react'
 import type { ComponentType, EventStatus, GraphNodeState, TraceDetail, TraceEvent } from '../types/trace'
 
@@ -168,23 +168,7 @@ function buildSpanGraph(events: TraceEvent[]): {
 } {
   const spanEvents = sortEventsByStartTime(events).filter((event) => event.spanId)
   const eventsBySpanId = new Map(spanEvents.map((event) => [event.spanId as string, event]))
-  const depthCache = new Map<string, number>()
-
-  const getDepth = (spanId: string, visited = new Set<string>()): number => {
-    const cached = depthCache.get(spanId)
-    if (cached !== undefined) return cached
-    if (visited.has(spanId)) return 0
-
-    const event = eventsBySpanId.get(spanId)
-    const parentId = event?.parentSpanId
-    const depth = parentId && eventsBySpanId.has(parentId)
-      ? getDepth(parentId, new Set(visited).add(spanId)) + 1
-      : 0
-    depthCache.set(spanId, depth)
-    return depth
-  }
-
-  const rowByDepth = new Map<number, number>()
+  const positions = buildSpanTreePositions(spanEvents, eventsBySpanId)
   const states = spanEvents.map((event) => ({
     id: event.spanId as string,
     component: event.component,
@@ -197,12 +181,11 @@ function buildSpanGraph(events: TraceEvent[]): {
 
   const nodes: Node[] = states.map((state) => {
     const event = state.visits[0]
-    const depth = getDepth(state.id)
-    const row = rowByDepth.get(depth) ?? 0
-    rowByDepth.set(depth, row + 1)
     return {
       id: state.id,
-      position: { x: depth * 270, y: row * 160 },
+      position: positions.get(state.id) ?? { x: 0, y: 0 },
+      sourcePosition: Position.Right,
+      targetPosition: Position.Left,
       data: {
         label: (
           <div className="flow-node__body">
@@ -241,12 +224,66 @@ function buildSpanGraph(events: TraceEvent[]): {
         height: 18,
         color: failed ? '#c2413c' : '#1f7a55',
       },
-      zIndex: 8,
-      interactionWidth: 24,
+      zIndex: 0,
+      interactionWidth: 16,
     }]
   })
 
   return { nodes, edges, states }
+}
+
+function buildSpanTreePositions(
+  events: TraceEvent[],
+  eventsBySpanId: Map<string, TraceEvent>,
+): Map<string, { x: number; y: number }> {
+  const horizontalGap = 280
+  const verticalGap = 170
+  const childrenByParent = new Map<string, string[]>()
+
+  for (const event of events) {
+    if (!event.spanId || !event.parentSpanId || !eventsBySpanId.has(event.parentSpanId)) continue
+    const children = childrenByParent.get(event.parentSpanId) ?? []
+    children.push(event.spanId)
+    childrenByParent.set(event.parentSpanId, children)
+  }
+
+  const roots = events
+    .filter((event) => event.spanId && (!event.parentSpanId || !eventsBySpanId.has(event.parentSpanId)))
+    .map((event) => event.spanId as string)
+  const positions = new Map<string, { x: number; y: number }>()
+  const positioned = new Set<string>()
+  let nextLeafRow = 0
+
+  const placeSpan = (spanId: string, depth: number, ancestors: Set<string>): number => {
+    const existing = positions.get(spanId)
+    if (existing) return existing.y
+
+    if (ancestors.has(spanId)) {
+      const y = nextLeafRow * verticalGap
+      nextLeafRow += 1
+      positions.set(spanId, { x: depth * horizontalGap, y })
+      positioned.add(spanId)
+      return y
+    }
+
+    const children = (childrenByParent.get(spanId) ?? []).filter((childId) => !positioned.has(childId))
+    const nextAncestors = new Set(ancestors).add(spanId)
+    const childRows = children.map((childId) => placeSpan(childId, depth + 1, nextAncestors))
+    const y = childRows.length > 0
+      ? childRows.reduce((sum, childY) => sum + childY, 0) / childRows.length
+      : nextLeafRow++ * verticalGap
+
+    positions.set(spanId, { x: depth * horizontalGap, y })
+    positioned.add(spanId)
+    return y
+  }
+
+  roots.forEach((spanId) => placeSpan(spanId, 0, new Set()))
+  events.forEach((event) => {
+    if (event.spanId && !positioned.has(event.spanId)) placeSpan(event.spanId, 0, new Set())
+  })
+
+  return positions
 }
 
 export function getNodeDetail(states: GraphNodeState[], nodeId: string | null): GraphNodeState | null {
