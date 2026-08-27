@@ -52,6 +52,7 @@ export interface TraceDetail {
   events: TraceEvent[]
   source: TraceSource
   serviceName: string | null
+  serviceNames: string[]
   traceCollectionStatus: TraceCollectionStatus
   responsePreview: TraceResponsePreview | null
 }

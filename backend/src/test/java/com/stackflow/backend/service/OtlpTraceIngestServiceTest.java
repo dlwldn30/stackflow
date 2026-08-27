@@ -20,6 +20,7 @@ import io.opentelemetry.proto.trace.v1.Span;
 import io.opentelemetry.proto.trace.v1.Status;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.time.Duration;
 import java.util.HexFormat;
 import org.junit.jupiter.api.Test;
 
@@ -28,7 +29,7 @@ class OtlpTraceIngestServiceTest {
 	@Test
 	void storesCodeLocationAndPrefersTheLatestExceptionEventWithAStackTrace() throws Exception {
 		TraceService traceService = new TraceService(new TraceStreamService());
-		ExternalTraceService externalTraceService = new ExternalTraceService(traceService);
+		ExternalTraceService externalTraceService = new ExternalTraceService(traceService, Duration.ofMillis(30));
 		OtlpTraceIngestService ingestService = new OtlpTraceIngestService(externalTraceService, new InstrumentationProfileRegistry());
 		ExternalTraceService.TraceCaptureContext capture = externalTraceService.startCapture("GET", "/orders/1001");
 		long startNanos = Instant.now().toEpochMilli() * 1_000_000L;
@@ -36,7 +37,7 @@ class OtlpTraceIngestServiceTest {
 		try {
 			externalTraceService.recordHttpResponse(capture.traceId(), 500, 12);
 			Span failedSpan = Span.newBuilder(span(
-				capture.traceId(), "0123456789abcdef", null, "OrderService.findOrder",
+				capture.traceId(), "0123456789abcdef", capture.parentSpanId(), "OrderService.findOrder",
 				Span.SpanKind.SPAN_KIND_SERVER, startNanos, 12
 			))
 				.addAttributes(attribute("code.namespace", "com.example.order.OrderService"))
@@ -82,7 +83,7 @@ class OtlpTraceIngestServiceTest {
 	@Test
 	void limitsStackTraceAtUtf8BoundaryAndMarksItAsTruncated() throws Exception {
 		TraceService traceService = new TraceService(new TraceStreamService());
-		ExternalTraceService externalTraceService = new ExternalTraceService(traceService);
+		ExternalTraceService externalTraceService = new ExternalTraceService(traceService, Duration.ofMillis(30));
 		OtlpTraceIngestService ingestService = new OtlpTraceIngestService(externalTraceService, new InstrumentationProfileRegistry());
 		ExternalTraceService.TraceCaptureContext capture = externalTraceService.startCapture("GET", "/orders/timeout");
 		long startNanos = Instant.now().toEpochMilli() * 1_000_000L;
@@ -90,7 +91,7 @@ class OtlpTraceIngestServiceTest {
 		try {
 			externalTraceService.recordHttpResponse(capture.traceId(), 500, 12);
 			Span failedSpan = Span.newBuilder(span(
-				capture.traceId(), "1123456789abcdef", null, "OrderService.timeout",
+				capture.traceId(), "1123456789abcdef", capture.parentSpanId(), "OrderService.timeout",
 				Span.SpanKind.SPAN_KIND_SERVER, startNanos, 12
 			))
 				.addEvents(exceptionEvent("java.lang.RuntimeException", "실패", stackTrace))
@@ -116,7 +117,7 @@ class OtlpTraceIngestServiceTest {
 	@Test
 	void convertsOtlpSpansIntoParentChildRuntimeTrace() throws Exception {
 		TraceService traceService = new TraceService(new TraceStreamService());
-		ExternalTraceService externalTraceService = new ExternalTraceService(traceService);
+		ExternalTraceService externalTraceService = new ExternalTraceService(traceService, Duration.ofMillis(30));
 		OtlpTraceIngestService ingestService = new OtlpTraceIngestService(externalTraceService, new InstrumentationProfileRegistry());
 		ExternalTraceService.TraceCaptureContext capture = externalTraceService.startCapture("GET", "/orders");
 		String traceId = capture.traceId();
@@ -134,6 +135,7 @@ class OtlpTraceIngestServiceTest {
 			Span serverSpan = Span.newBuilder()
 				.setTraceId(bytes(traceId))
 				.setSpanId(bytes(serverSpanId))
+				.setParentSpanId(bytes(capture.parentSpanId()))
 				.setName("GET /orders")
 				.setKind(Span.SpanKind.SPAN_KIND_SERVER)
 				.setStartTimeUnixNano(startNanos)
@@ -184,7 +186,7 @@ class OtlpTraceIngestServiceTest {
 	@Test
 	void ignoresSpansForTraceIdsThatStackFlowDidNotStart() {
 		TraceService traceService = new TraceService(new TraceStreamService());
-		ExternalTraceService externalTraceService = new ExternalTraceService(traceService);
+		ExternalTraceService externalTraceService = new ExternalTraceService(traceService, Duration.ofMillis(30));
 		OtlpTraceIngestService ingestService = new OtlpTraceIngestService(externalTraceService, new InstrumentationProfileRegistry());
 		String unknownTraceId = "0123456789abcdef0123456789abcdef";
 		long startNanos = Instant.now().toEpochMilli() * 1_000_000L;
@@ -207,14 +209,14 @@ class OtlpTraceIngestServiceTest {
 	@Test
 	void readsLegacySemanticKeysAndErrorTypeWithoutLeakingSensitiveMetadata() throws Exception {
 		TraceService traceService = new TraceService(new TraceStreamService());
-		ExternalTraceService externalTraceService = new ExternalTraceService(traceService);
+		ExternalTraceService externalTraceService = new ExternalTraceService(traceService, Duration.ofMillis(30));
 		OtlpTraceIngestService ingestService = new OtlpTraceIngestService(externalTraceService, new InstrumentationProfileRegistry());
 		ExternalTraceService.TraceCaptureContext capture = externalTraceService.startCapture("GET", "/legacy");
 		long startNanos = Instant.now().toEpochMilli() * 1_000_000L;
 		try {
 			externalTraceService.recordHttpResponse(capture.traceId(), 504, 1_200);
 			Span serverSpan = Span.newBuilder(span(
-				capture.traceId(), "5123456789abcdef", null, "GET /legacy",
+				capture.traceId(), "5123456789abcdef", capture.parentSpanId(), "GET /legacy",
 				Span.SpanKind.SPAN_KIND_SERVER, startNanos, 1_200
 			))
 				.addAttributes(attribute("http.method", "GET"))
@@ -250,7 +252,7 @@ class OtlpTraceIngestServiceTest {
 	@Test
 	void classifiesPostgresqlAndRedisDatabaseSpans() throws Exception {
 		TraceService traceService = new TraceService(new TraceStreamService());
-		ExternalTraceService externalTraceService = new ExternalTraceService(traceService);
+		ExternalTraceService externalTraceService = new ExternalTraceService(traceService, Duration.ofMillis(30));
 		OtlpTraceIngestService ingestService = new OtlpTraceIngestService(externalTraceService, new InstrumentationProfileRegistry());
 		ExternalTraceService.TraceCaptureContext capture = externalTraceService.startCapture("GET", "/lab/products/1001");
 		String traceId = capture.traceId();
@@ -258,7 +260,7 @@ class OtlpTraceIngestServiceTest {
 		long startNanos = Instant.now().toEpochMilli() * 1_000_000L;
 		try {
 			externalTraceService.recordHttpResponse(traceId, 200, 30);
-			Span serverSpan = span(traceId, serverSpanId, null, "GET /lab/products/1001", Span.SpanKind.SPAN_KIND_SERVER, startNanos, 30);
+			Span serverSpan = span(traceId, serverSpanId, capture.parentSpanId(), "GET /lab/products/1001", Span.SpanKind.SPAN_KIND_SERVER, startNanos, 30);
 			Span redisSpan = Span.newBuilder(span(
 				traceId, "2123456789abcdef", serverSpanId, "GET", Span.SpanKind.SPAN_KIND_CLIENT, startNanos + 1_000_000L, 4
 			)).addAttributes(attribute("db.system.name", "redis")).build();
@@ -304,7 +306,7 @@ class OtlpTraceIngestServiceTest {
 	@Test
 	void marksKnownProfileAsSeenWithoutStoringUntrackedTrace() {
 		TraceService traceService = new TraceService(new TraceStreamService());
-		ExternalTraceService externalTraceService = new ExternalTraceService(traceService);
+		ExternalTraceService externalTraceService = new ExternalTraceService(traceService, Duration.ofMillis(30));
 		InstrumentationProfileRegistry profileRegistry = new InstrumentationProfileRegistry();
 		String profileId = profileRegistry.register("order-app").profileId();
 		OtlpTraceIngestService ingestService = new OtlpTraceIngestService(externalTraceService, profileRegistry);
@@ -336,7 +338,7 @@ class OtlpTraceIngestServiceTest {
 	@Test
 	void ignoresUnknownProfileId() {
 		TraceService traceService = new TraceService(new TraceStreamService());
-		ExternalTraceService externalTraceService = new ExternalTraceService(traceService);
+		ExternalTraceService externalTraceService = new ExternalTraceService(traceService, Duration.ofMillis(30));
 		InstrumentationProfileRegistry profileRegistry = new InstrumentationProfileRegistry();
 		OtlpTraceIngestService ingestService = new OtlpTraceIngestService(externalTraceService, profileRegistry);
 		long startNanos = Instant.now().toEpochMilli() * 1_000_000L;
@@ -362,7 +364,7 @@ class OtlpTraceIngestServiceTest {
 	@Test
 	void doesNotConfirmAProfileFromAnEmptyResourceBatch() {
 		TraceService traceService = new TraceService(new TraceStreamService());
-		ExternalTraceService externalTraceService = new ExternalTraceService(traceService);
+		ExternalTraceService externalTraceService = new ExternalTraceService(traceService, Duration.ofMillis(30));
 		InstrumentationProfileRegistry profileRegistry = new InstrumentationProfileRegistry();
 		String profileId = profileRegistry.register("order-app").profileId();
 		OtlpTraceIngestService ingestService = new OtlpTraceIngestService(externalTraceService, profileRegistry);

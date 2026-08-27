@@ -14,14 +14,14 @@ class InstrumentationControllerTest {
 	void returnsRegisteredProfileStatus() {
 		InstrumentationProfileRegistry registry = new InstrumentationProfileRegistry();
 		String profileId = registry.register("order-app").profileId();
-		InstrumentationController controller = new InstrumentationController(null, registry);
+		InstrumentationController controller = new InstrumentationController(null, registry, null);
 
 		assertEquals(profileId, controller.getProfileStatus(profileId).profileId());
 	}
 
 	@Test
 	void returnsNotFoundForUnknownOrExpiredProfile() {
-		InstrumentationController controller = new InstrumentationController(null, new InstrumentationProfileRegistry());
+		InstrumentationController controller = new InstrumentationController(null, new InstrumentationProfileRegistry(), null);
 
 		ResponseStatusException exception = assertThrows(
 			ResponseStatusException.class,

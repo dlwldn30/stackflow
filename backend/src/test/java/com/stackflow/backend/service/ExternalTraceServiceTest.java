@@ -23,6 +23,52 @@ import org.junit.jupiter.api.Test;
 class ExternalTraceServiceTest {
 
 	@Test
+	void keepsEntryServiceAndMergesOutOfOrderServiceBatches() throws InterruptedException {
+		TraceStreamService streamService = new TraceStreamService();
+		TraceService traceService = new TraceService(streamService);
+		ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+		ExternalTraceService service = new ExternalTraceService(
+			traceService,
+			Clock.systemUTC(),
+			scheduler,
+			Duration.ofDays(1),
+			Duration.ofMillis(80)
+		);
+		try {
+			ExternalTraceService.TraceCaptureContext capture = service.startCapture("GET", "/orders/1");
+			Instant now = Instant.now();
+			service.acceptSpans(capture.traceId(), "order-service", List.of(traceEvent(
+				capture,
+				"order-server",
+				capture.parentSpanId(),
+				"order-service",
+				"SERVER",
+				now.plusMillis(20)
+			)));
+			service.recordHttpResponse(capture.traceId(), 200, 50);
+			Thread.sleep(30);
+			service.acceptSpans(capture.traceId(), "product-service", List.of(traceEvent(
+				capture,
+				"product-server",
+				"order-client",
+				"product-service",
+				"SERVER",
+				now
+			)));
+
+			Thread.sleep(140);
+
+			Trace trace = traceService.getTrace(capture.traceId());
+			assertEquals("order-service", trace.serviceName());
+			assertEquals(List.of("order-service", "product-service"), trace.serviceNames());
+			assertEquals(List.of("product-server", "order-server"), trace.events().stream().map(TraceEvent::spanId).toList());
+		} finally {
+			service.shutdown();
+			streamService.shutdown();
+		}
+	}
+
+	@Test
 	void waitsForHttpResponseWhenServerSpanArrivesFirst() throws InterruptedException {
 		TraceStreamService streamService = new TraceStreamService();
 		TraceService traceService = new TraceService(streamService);
@@ -50,7 +96,7 @@ class ExternalTraceServiceTest {
 				null,
 				Map.of(),
 				"server-span",
-				null,
+				capture.parentSpanId(),
 				"order-app",
 				"SERVER"
 			)));
@@ -185,5 +231,32 @@ class ExternalTraceServiceTest {
 			service.shutdown();
 			streamService.shutdown();
 		}
+	}
+
+	private TraceEvent traceEvent(
+		ExternalTraceService.TraceCaptureContext capture,
+		String spanId,
+		String parentSpanId,
+		String serviceName,
+		String spanKind,
+		Instant startedAt
+	) {
+		return new TraceEvent(
+			spanId,
+			capture.traceId(),
+			ComponentType.CONTROLLER,
+			spanId,
+			EventStatus.SUCCESS,
+			startedAt,
+			startedAt.plusMillis(10),
+			10,
+			null,
+			null,
+			Map.of(),
+			spanId,
+			parentSpanId,
+			serviceName,
+			spanKind
+		);
 	}
 }

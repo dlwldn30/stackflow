@@ -35,7 +35,7 @@ function trace(resultStatus: EventStatus, events: TraceEvent[]): TraceDetail {
     traceId: 'trace', method: 'GET', endpoint: '/lab/products/1001', scenario: 'normal',
     startedAt: new Date(0).toISOString(), endedAt: new Date(10).toISOString(), durationMs: 10,
     httpStatus: resultStatus === 'ERROR' || resultStatus === 'TIMEOUT' ? 504 : 200,
-    resultStatus, events, source: 'OPENTELEMETRY', serviceName: 'trace-lab', traceCollectionStatus: 'COMPLETED',
+    resultStatus, events, source: 'OPENTELEMETRY', serviceName: 'trace-lab', serviceNames: ['trace-lab'], traceCollectionStatus: 'COMPLETED',
     responsePreview: null,
   }
 }

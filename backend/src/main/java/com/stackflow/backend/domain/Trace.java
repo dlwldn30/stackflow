@@ -16,6 +16,7 @@ public record Trace(
 	List<TraceEvent> events,
 	TraceSource source,
 	String serviceName,
+	List<String> serviceNames,
 	TraceCollectionStatus traceCollectionStatus,
 	TraceResponsePreview responsePreview
 ) {
@@ -44,6 +45,7 @@ public record Trace(
 			events,
 			TraceSource.SAMPLE,
 			"stackflow-sample",
+			List.of("stackflow-sample"),
 			TraceCollectionStatus.DISABLED,
 			null
 		);

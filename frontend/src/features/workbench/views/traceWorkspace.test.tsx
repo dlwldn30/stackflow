@@ -20,6 +20,7 @@ const detail: TraceDetail = {
   traceId: 'trace', method: 'GET', endpoint: '/lab/products/1001/database-timeout', scenario: 'timeout',
   startedAt: new Date(0).toISOString(), endedAt: new Date(25).toISOString(), durationMs: 25,
   httpStatus: 504, resultStatus: 'TIMEOUT', events: [failureEvent], source: 'OPENTELEMETRY', serviceName: 'trace-lab',
+  serviceNames: ['trace-lab'],
   traceCollectionStatus: 'COMPLETED',
   responsePreview: { contentType: 'application/json', body: '{"status":504}', truncated: false },
 }
