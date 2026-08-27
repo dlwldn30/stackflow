@@ -1,6 +1,6 @@
 spring:
   application:
-    name: trace-lab
+    name: product-service
   datasource:
     url: ${TRACE_LAB_DB_URL:jdbc:postgresql://localhost:15432/trace_lab}
     username: ${TRACE_LAB_DB_USER:trace_lab}

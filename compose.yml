@@ -9,7 +9,7 @@ services:
     ports:
       - "127.0.0.1:18080:18080"
     volumes:
-      - ./examples/trace-lab:/workspace/trace-lab:ro
+      - ./examples/distributed-trace-lab:/workspace/distributed-trace-lab:ro
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:18080/api/project/structure"]
       interval: 3s
@@ -20,8 +20,8 @@ services:
     build:
       context: ./frontend
       args:
-        VITE_DEFAULT_PROJECT_PATH: /workspace/trace-lab
-        VITE_DEFAULT_TARGET_BASE_URL: http://trace-lab:8091
+        VITE_DEFAULT_PROJECT_PATH: /workspace/distributed-trace-lab/order-service
+        VITE_DEFAULT_TARGET_BASE_URL: http://order-service:8092
         VITE_DEMO_TRACE_READY: "true"
     depends_on:
       backend:
@@ -34,9 +34,9 @@ services:
       timeout: 3s
       retries: 20
 
-  trace-lab:
+  product-service:
     build:
-      context: ./examples/trace-lab
+      context: ./examples/distributed-trace-lab/product-service
     depends_on:
       backend:
         condition: service_healthy
@@ -50,12 +50,13 @@ services:
       TRACE_LAB_DB_PASSWORD: ""
       TRACE_LAB_REDIS_HOST: redis
       TRACE_LAB_REDIS_PORT: "6379"
-      OTEL_SERVICE_NAME: trace-lab
+      OTEL_SERVICE_NAME: product-service
       OTEL_EXPORTER_OTLP_ENDPOINT: http://backend:18080
       OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
       OTEL_TRACES_EXPORTER: otlp
       OTEL_METRICS_EXPORTER: none
       OTEL_LOGS_EXPORTER: none
+      OTEL_BSP_SCHEDULE_DELAY: "500"
       OTEL_INSTRUMENTATION_METHODS_INCLUDE: com.stackflow.tracelab.product.controller.ProductController[getProduct,getProducts,evictProductCache,triggerDatabaseError,triggerDatabaseTimeout];com.stackflow.tracelab.product.service.ProductService[getProduct,getProducts,evictProductCache,triggerDatabaseError,triggerDatabaseTimeout];com.stackflow.tracelab.product.repository.ProductRepositoryService[findById,findAll,triggerDatabaseError,triggerDatabaseTimeout];com.stackflow.tracelab.product.cache.ProductCacheService[findById,save,evict]
     ports:
       - "127.0.0.1:8091:8091"
@@ -63,6 +64,32 @@ services:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8091/lab/products"]
       interval: 3s
       timeout: 3s
+      retries: 30
+
+  order-service:
+    build:
+      context: ./examples/distributed-trace-lab/order-service
+    depends_on:
+      backend:
+        condition: service_healthy
+      product-service:
+        condition: service_healthy
+    environment:
+      PRODUCT_SERVICE_BASE_URL: http://product-service:8091
+      OTEL_SERVICE_NAME: order-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://backend:18080
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
+      OTEL_BSP_SCHEDULE_DELAY: "500"
+      OTEL_INSTRUMENTATION_METHODS_INCLUDE: com.stackflow.orderlab.order.controller.OrderController[getOrder,triggerProductTimeout];com.stackflow.orderlab.order.service.OrderService[getOrder,triggerProductTimeout];com.stackflow.orderlab.order.client.ProductClient[getProduct,triggerDatabaseTimeout]
+    ports:
+      - "127.0.0.1:8092:8092"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8092/lab/orders/2001"]
+      interval: 3s
+      timeout: 5s
       retries: 30
 
   postgres:

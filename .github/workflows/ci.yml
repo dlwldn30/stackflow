@@ -22,9 +22,9 @@ jobs:
 
   trace-lab:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: examples/trace-lab
+    strategy:
+      matrix:
+        service: [order-service, product-service]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -32,7 +32,7 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: gradle
-      - run: ./gradlew test --no-daemon
+      - run: ./examples/distributed-trace-lab/${{ matrix.service }}/gradlew -p examples/distributed-trace-lab/${{ matrix.service }} test --no-daemon
 
   frontend:
     runs-on: ubuntu-latest

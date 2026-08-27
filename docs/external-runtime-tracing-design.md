@@ -114,9 +114,9 @@ Sample traces retain the fixed StackFlow component graph. OpenTelemetry traces u
 
 ## Current Limits
 
-- Workspace analysis and Agent profile generation support up to ten local Spring Boot projects; the bundled distributed runtime demo is delivered separately.
+- Workspace analysis and Agent profile generation support up to ten local Spring Boot projects; the bundled demo runs Order and Product as two local JVMs.
 - JVM restart is required; dynamic attach is not supported.
-- No cross-service distributed trace UI.
+- Cross-service spans are collected, but service-grouped Waterfall and graph presentation is not implemented yet.
 - No OTLP Logs ingestion. Exception details are collected only from exception events attached to OTLP spans.
 - No authentication, durable storage, sampling administration, or production retention.
 - Libraries outside Java Agent support may produce partial traces.

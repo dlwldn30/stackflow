@@ -1,4 +1,4 @@
-# Redis·PostgreSQL Trace Lab
+# Product Service Trace Lab
 
 StackFlow의 정적 분석과 실제 OpenTelemetry Trace를 검증하기 위한 독립 Spring Boot 앱입니다.
 
@@ -15,11 +15,11 @@ docker compose up --build --wait
 | --- | --- |
 | StackFlow UI | `http://localhost:5173` |
 | StackFlow backend | `http://localhost:18080` |
-| Trace Lab | `http://localhost:8091` |
+| Product Service | `http://localhost:8091` |
 | PostgreSQL | `localhost:15432` |
 | Redis | `localhost:16379` |
 
-Demo Compose는 Trace Lab에 OpenTelemetry Java Agent를 적용하고 backend의 `/v1/traces`로 span을 전송합니다.
+Demo Compose는 Product Service에 OpenTelemetry Java Agent를 적용하고 backend의 `/v1/traces`로 span을 전송합니다.
 
 ## 실험 API
 
@@ -55,11 +55,11 @@ docker compose start redis
 PostgreSQL과 Redis만 실행합니다.
 
 ```bash
-cd examples/trace-lab
+cd examples/distributed-trace-lab/product-service
 docker compose up -d --wait
 ```
 
-StackFlow에서 이 디렉터리를 분석하고 `실행 Trace 설정`의 Gradle 명령으로 앱을 시작합니다. 기본 앱 주소는 `http://localhost:8091`입니다.
+StackFlow에서 이 디렉터리를 분석하고 `실행 Trace 설정`의 Gradle 명령으로 앱을 시작합니다. 기본 앱 주소는 `http://localhost:8091`입니다. 두 서비스 실험은 상위 workspace의 README를 따릅니다.
 
 정리:
 
