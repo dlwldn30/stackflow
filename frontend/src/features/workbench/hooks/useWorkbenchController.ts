@@ -40,6 +40,10 @@ export function useWorkbenchController() {
   const selectedDomain = project.projectStructure.domains.find((domain) => domain.id === project.selectedDomainId)
     ?? project.projectStructure.domains[0]
     ?? EMPTY_DOMAIN
+  const workspaceServices = project.workspace?.services ?? []
+  const selectedService = workspaceServices.find((service) => service.serviceId === project.selectedServiceId)
+    ?? workspaceServices[0]
+    ?? null
   const hasDetectedDomains = project.projectStructure.domains.length > 0
   const hasDetectedApis = project.apiCatalog.length > 0
   const domainApis = project.apiCatalog.filter((api) => api.domainId === selectedDomain.id)
@@ -89,6 +93,13 @@ export function useWorkbenchController() {
   const failurePropagationPath = buildFailurePropagationPath(runtime.traceDetail?.events ?? [], primaryFailureEvent)
   const filteredRecentTraces = filterTraceHistory(runtime.recentTraces, runtime.traceHistoryFilter)
   const projectMetrics = buildProjectMetrics(project.projectStructure)
+  const workspaceMetrics = {
+    services: workspaceServices.length,
+    domains: workspaceServices.reduce((sum, service) => sum + service.structure.domains.length, 0),
+    apis: workspaceServices.reduce((sum, service) => sum + service.structure.analysisCoverage.detectedEndpoints, 0),
+  }
+  const receivedAgentCount = workspaceServices.filter((service) =>
+    project.workspaceInstrumentationStatuses[service.serviceId]?.connectionStatus === 'SPAN_RECEIVED').length
   const domainLayerGroups = groupProjectLayers(selectedDomain.layers)
   const domainStructurePath = buildDomainStructurePath(domainLayerGroups, selectedDomain.infrastructure)
   const supportingDomainGroups = domainLayerGroups.filter((group) =>
@@ -97,9 +108,19 @@ export function useWorkbenchController() {
   const commonClassCount = commonLayerGroups.reduce((sum, group) => sum + group.classes.length, 0)
   const activeRoute = graph.states.filter((state) => state.active)
   const estimatedFlow = hasDetectedApis ? buildEstimatedFlow(selectedApi, selectedDomain) : []
+  const selectedRuntimeServiceName = selectedService
+    ? normalizeServiceName(selectedService.structure.projectName)
+    : runtime.traceDetail?.serviceName
   const traceComparison = runtime.traceDetail?.source === 'OPENTELEMETRY'
-    ? compareEstimatedAndActualFlow(estimatedFlow, runtime.traceDetail.events)
+    ? compareEstimatedAndActualFlow(
+        estimatedFlow,
+        runtime.traceDetail.events.filter((event) => !selectedRuntimeServiceName || event.serviceName === selectedRuntimeServiceName),
+      )
     : null
+  const traceServiceGroups = (runtime.traceDetail?.serviceNames ?? []).map((serviceName) => ({
+    serviceName,
+    events: runtime.traceDetail?.events.filter((event) => event.serviceName === serviceName) ?? [],
+  }))
   const projectStatusContent = PROJECT_STATUS_CONTENT[project.projectStructure.analysisStatus]
   const selectedDomainDisplayMode = getDomainDisplayMode(selectedDomain, project.analysisTarget === 'sample')
   const controllerBasePathSummary = getControllerBasePathSummary(selectedDomain.controllers)
@@ -190,6 +211,7 @@ export function useWorkbenchController() {
       setActiveView, selectApi: requestActions.selectApi,
       setExternalResponse: request.setExternalResponse,
       selectedDomain, hasDetectedDomains, hasDetectedApis, projectMetrics,
+      workspaceServices, selectedService, workspaceMetrics, receivedAgentCount,
       domainLayerGroups, domainStructurePath, supportingDomainGroups,
       commonLayerGroups, commonClassCount, selectedApi, selectedApiMethodLabel,
       selectedDomainDisplayMode, controllerBasePathSummary, projectStatusContent,
@@ -212,6 +234,7 @@ export function useWorkbenchController() {
       graph, waterfall, orderedTraceEvents, primaryFailureEvent, primaryFailureNodeId,
       selectedNode, inspectorEvent, primaryFailureLabel, traceOutcome,
       failurePropagationPath, filteredRecentTraces, activeRoute, traceComparison,
+      traceServiceGroups,
       traceDisplayTone, traceDisplayStatus, selectedApi, selectedDomain,
       analysisTarget: project.analysisTarget,
       runtimeSupported, externalTraceConfigured, selectedApiMethodLabel,
@@ -220,3 +243,7 @@ export function useWorkbenchController() {
 }
 
 export type WorkbenchController = ReturnType<typeof useWorkbenchController>
+
+function normalizeServiceName(value: string) {
+  return value.trim().toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').replaceAll(/^-|-$/g, '')
+}

@@ -83,6 +83,8 @@ GET /lab/products/{productId}/database-timeout
 3. Waterfall에서 약 1초가 걸린 PostgreSQL span을 병목으로 확인합니다.
 4. 오른쪽 Inspector에서 제한된 stacktrace와 정제된 응답 JSON을 확인합니다.
 
+Workspace 루트를 분석하면 서비스 목록이 도메인보다 먼저 표시됩니다. Trace Waterfall의 `서비스 경계` 행과 그래프의 서비스 영역은 정적 추측이 아니라 실제 `parentSpanId`와 `service.name`을 기준으로 생성됩니다.
+
 ![PostgreSQL timeout 오류 상세](docs/images/trace-exception.png)
 
 ## 동작 구조

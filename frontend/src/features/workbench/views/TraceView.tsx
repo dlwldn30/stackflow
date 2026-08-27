@@ -22,7 +22,7 @@ export function TraceView({ model }: TraceViewProps) {
     traceOutcome, primaryFailureEvent, primaryFailureLabel,
     failurePropagationPath, primaryFailureNodeId, setSelectedNodeId,
     traceViewTab, setTraceViewTab, waterfall, graph, flowInstanceRef,
-    activeRoute, traceComparison, orderedTraceEvents, selectedNode,
+    activeRoute, traceComparison, traceServiceGroups, orderedTraceEvents, selectedNode,
     inspectorEvent,
   } = model
 
@@ -129,11 +129,11 @@ export function TraceView({ model }: TraceViewProps) {
                   </div>
                   <div>
                     <span className="section-label">실제 OpenTelemetry span</span>
-                    {traceComparison.actual.map((item) => (
-                      <p key={item.id} className={item.expected ? 'is-matched' : 'is-unexpected'}>
-                        <strong>{item.label}</strong>
-                        <span>{item.expected ? '예상 흐름과 일치' : '예상에 없던 실제 호출'}</span>
-                      </p>
+                    {traceServiceGroups.map((group) => (
+                      <div key={group.serviceName} className="trace-comparison__service">
+                        <strong>{group.serviceName}</strong>
+                        <span>{group.events.length}개 span · 서비스 관계는 Runtime에서 확인</span>
+                      </div>
                     ))}
                   </div>
                 </section>
@@ -156,7 +156,7 @@ export function TraceView({ model }: TraceViewProps) {
               <div className="graph-toolbar">
                 <div>
                   <span>{traceDetail.events.length}개 실행 이벤트</span>
-                  <strong>{activeRoute.length > 0 ? activeRoute.map((state) => state.label).join(' → ') : '실행된 경로가 없습니다'}</strong>
+                  <strong>{activeRoute.length > 0 ? activeRoute.map((state) => `${state.visits[0]?.serviceName ?? 'unknown'} / ${state.label}`).join(' → ') : '실행된 경로가 없습니다'}</strong>
                 </div>
                 <div className="legend-strip" aria-label="그래프 상태 범례">
                   <span className="legend-chip legend-chip--success">성공</span>
@@ -211,6 +211,7 @@ export function TraceView({ model }: TraceViewProps) {
                   <header>
                     <span>시작</span>
                     <span>Span</span>
+                    <span>서비스</span>
                     <span>구성 요소</span>
                     <span>소요 시간</span>
                     <span>상태</span>
@@ -224,6 +225,7 @@ export function TraceView({ model }: TraceViewProps) {
                     >
                       <span>{new Date(event.startedAt).toLocaleTimeString('ko-KR', { hour12: false, fractionalSecondDigits: 3 })}</span>
                       <strong>{event.eventType}</strong>
+                      <span>{event.serviceName ?? '-'}</span>
                       <span>{event.component}</span>
                       <span>{event.durationMs}ms</span>
                       <StatusBadge tone={event.status === 'SUCCESS' ? 'success' : event.status === 'WARNING' ? 'warning' : 'error'}>

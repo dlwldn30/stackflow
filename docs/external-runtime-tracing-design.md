@@ -95,6 +95,8 @@ This is a local development feature, not an authenticated production collector.
 
 ## UI States
 
+For workspace traces, the UI keeps service selection above domain and endpoint selection. Waterfall rows include the emitting service and mark a boundary only when a parent and child span have different `service.name` values. The graph groups nodes by service and labels cross-service edges; failure coloring takes precedence over the boundary color.
+
 External trace collection uses these explicit states:
 
 - `Agent 설정 필요`: no instrumentation profile has been generated.

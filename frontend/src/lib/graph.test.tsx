@@ -88,12 +88,14 @@ describe('buildGraph', () => {
       event({ eventId: 'child', spanId: 'child-span', parentSpanId: 'root-span', component: 'POSTGRESQL' }),
     ]))
 
-    expect(graph.nodes.map((node) => node.id)).toEqual(['root-span', 'child-span'])
+    expect(graph.nodes.filter((node) => !node.id.startsWith('service-area:')).map((node) => node.id)).toEqual(['root-span', 'child-span'])
     expect(graph.edges).toEqual(expect.arrayContaining([
       expect.objectContaining({ source: 'root-span', target: 'child-span', zIndex: 0 }),
     ]))
-    expect(graph.nodes[0]).toMatchObject({ sourcePosition: 'right', targetPosition: 'left' })
-    expect(graph.nodes[1].position.x).toBeGreaterThan(graph.nodes[0].position.x)
+    const root = graph.nodes.find((node) => node.id === 'root-span')!
+    const child = graph.nodes.find((node) => node.id === 'child-span')!
+    expect(root).toMatchObject({ sourcePosition: 'right', targetPosition: 'left' })
+    expect(child.position.x).toBeGreaterThan(root.position.x)
   })
 
   it('centers a parent between child branches without sharing a node row', () => {
@@ -127,5 +129,22 @@ describe('buildGraph', () => {
       className: 'flow-edge is-active is-failed',
       markerEnd: { color: '#c2413c' },
     })
+  })
+
+  it('labels cross-service edges and keeps a failure edge red', () => {
+    const graph = buildGraph(trace('OPENTELEMETRY', [
+      event({ eventId: 'order-client', spanId: 'order-client', serviceName: 'order-service', component: 'HTTP_CLIENT' }),
+      event({
+        eventId: 'product-server', spanId: 'product-server', parentSpanId: 'order-client',
+        serviceName: 'product-service', component: 'CONTROLLER', status: 'ERROR',
+      }),
+    ]))
+
+    expect(graph.edges[0]).toMatchObject({
+      className: 'flow-edge is-active is-failed is-cross-service',
+      label: 'order-service → product-service',
+      markerEnd: { color: '#c2413c' },
+    })
+    expect(graph.nodes.filter((node) => node.id.startsWith('service-area:'))).toHaveLength(2)
   })
 })

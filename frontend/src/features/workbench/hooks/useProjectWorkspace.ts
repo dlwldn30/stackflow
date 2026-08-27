@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useInstrumentationStatus } from '../../../hooks/useInstrumentationStatus'
-import type { InstrumentationProfile, ProjectStructure } from '../../../types/trace'
+import { useWorkspaceInstrumentationStatus } from '../../../hooks/useWorkspaceInstrumentationStatus'
+import type { InstrumentationProfile, ProjectStructure, WorkspaceAnalysis, WorkspaceServiceProfile } from '../../../types/trace'
 import type { ActionFields, AnalysisTarget, ApiDefinition, ApiScope, AsyncState, StateFields } from '../types'
 
 export function useProjectWorkspace(
@@ -12,6 +13,9 @@ export function useProjectWorkspace(
   const [folderPickerMessage, setFolderPickerMessage] = useState('Finder에서 프로젝트 폴더를 선택할 수 있습니다.')
   const [apiCatalog, setApiCatalog] = useState<ApiDefinition[]>(initialCatalog)
   const [projectStructure, setProjectStructure] = useState<ProjectStructure>(initialStructure)
+  const [workspace, setWorkspace] = useState<WorkspaceAnalysis | null>(null)
+  const [selectedServiceId, setSelectedServiceId] = useState<string | null>(null)
+  const [workspaceProfiles, setWorkspaceProfiles] = useState<WorkspaceServiceProfile[]>([])
   const [catalogSource, setCatalogSource] = useState<'analyzed' | 'fallback'>('fallback')
   const [analysisTarget, setAnalysisTarget] = useState<AnalysisTarget>('sample')
   const [analysisState, setAnalysisState] = useState<AsyncState>('idle')
@@ -25,9 +29,11 @@ export function useProjectWorkspace(
   const [profileState, setProfileState] = useState<AsyncState>('idle')
   const [profileMessage, setProfileMessage] = useState('Agent 경로와 수집 주소를 확인한 뒤 실행 명령을 생성하세요.')
   const instrumentationStatus = useInstrumentationStatus(instrumentationProfile)
+  const workspaceInstrumentationStatuses = useWorkspaceInstrumentationStatus(workspaceProfiles)
 
   const resetInstrumentationProfile = () => {
     setInstrumentationProfile(null)
+    setWorkspaceProfiles([])
     setProfileState('idle')
     setProfileMessage('Agent 경로와 수집 주소를 확인한 뒤 실행 명령을 생성하세요.')
   }
@@ -38,6 +44,9 @@ export function useProjectWorkspace(
     folderPickerMessage, setFolderPickerMessage,
     apiCatalog, setApiCatalog,
     projectStructure, setProjectStructure,
+    workspace, setWorkspace,
+    selectedServiceId, setSelectedServiceId,
+    workspaceProfiles, setWorkspaceProfiles,
     catalogSource, setCatalogSource,
     analysisTarget, setAnalysisTarget,
     analysisState, setAnalysisState,
@@ -51,6 +60,7 @@ export function useProjectWorkspace(
     profileState, setProfileState,
     profileMessage, setProfileMessage,
     instrumentationStatus,
+    workspaceInstrumentationStatuses,
     resetInstrumentationProfile,
   }
 }

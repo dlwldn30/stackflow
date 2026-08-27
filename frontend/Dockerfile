@@ -4,7 +4,7 @@ WORKDIR /workspace
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
-ARG VITE_DEFAULT_PROJECT_PATH=/workspace/distributed-trace-lab/order-service
+ARG VITE_DEFAULT_PROJECT_PATH=/workspace/distributed-trace-lab
 ARG VITE_DEFAULT_TARGET_BASE_URL=http://order-service:8092
 ARG VITE_DEMO_TRACE_READY=true
 ENV VITE_DEFAULT_PROJECT_PATH=$VITE_DEFAULT_PROJECT_PATH

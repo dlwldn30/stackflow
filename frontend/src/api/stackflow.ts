@@ -7,6 +7,8 @@ import type {
   TraceDetail,
   TraceSessionResponse,
   TraceSummary,
+  WorkspaceAnalysis,
+  WorkspaceInstrumentationProfile,
 } from '../types/trace'
 
 export type ProjectFolderSelection = {
@@ -37,6 +39,13 @@ export const analyzeProject = (projectPath: string) =>
     body: JSON.stringify({ projectPath }),
   }, '프로젝트 분석 요청에 실패했습니다.').then(normalizeProjectStructure)
 
+export const analyzeWorkspace = (workspacePath: string) =>
+  requestJson<WorkspaceAnalysis>('/api/project/workspace/analyze', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspacePath }),
+  }, 'Workspace 분석 요청에 실패했습니다.')
+
 export const selectProjectFolder = () =>
   requestJson<ProjectFolderSelection>('/api/project/folder/select', { method: 'POST' }, '폴더 선택 요청에 실패했습니다.')
 
@@ -49,6 +58,16 @@ export const createInstrumentationProfile = (payload: {
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(payload),
 }, '실행 Trace 설정을 생성하지 못했습니다.')
+
+export const createWorkspaceInstrumentationProfile = (payload: {
+  workspacePath: string
+  collectorBaseUrl: string
+  agentPath: string
+}) => requestJson<WorkspaceInstrumentationProfile>('/api/instrumentation/workspace-profile', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(payload),
+}, 'Workspace 실행 Trace 설정을 생성하지 못했습니다.')
 
 export const getInstrumentationProfileStatus = (profileId: string) =>
   requestJson<InstrumentationProfileStatus>(

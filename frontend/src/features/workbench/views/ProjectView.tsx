@@ -1,4 +1,4 @@
-import { AlertCircle, ArrowRight, Boxes, Braces, CheckCircle2, ChevronRight, Database, FolderOpen, Network, ScanSearch } from 'lucide-react'
+import { AlertCircle, ArrowRight, Boxes, Braces, CheckCircle2, ChevronRight, Database, FolderOpen, Network, ScanSearch, Server } from 'lucide-react'
 import { StatusBadge } from '../../../components/StatusBadge'
 import { PROJECT_STATUS_LABEL } from '../../../ui/copy'
 import type { WorkbenchController } from '../hooks/useWorkbenchController'
@@ -30,6 +30,8 @@ export function ProjectView({ model }: ProjectViewProps) {
     selectedApiMethodLabel, selectedDomainDisplayMode,
     controllerBasePathSummary, projectStatusContent, demoTraceReady,
     externalTraceVerified, instrumentationCommand,
+    workspaceServices, selectedService, workspaceMetrics, receivedAgentCount,
+    workspaceProfiles, workspaceInstrumentationStatuses, selectService,
   } = model
 
   return (
@@ -104,7 +106,9 @@ export function ProjectView({ model }: ProjectViewProps) {
                       {analysisState === 'error'
                         ? analysisMessage
                         : projectStructure.analysisStatus === 'SUCCESS'
-                          ? `도메인 ${projectStructure.domains.length}개 · API ${apiCatalog.length}개`
+                          ? workspaceServices.length > 0
+                            ? `서비스 ${workspaceMetrics.services}개 · 도메인 ${workspaceMetrics.domains}개 · API ${workspaceMetrics.apis}개`
+                            : `도메인 ${projectStructure.domains.length}개 · API ${apiCatalog.length}개`
                           : PROJECT_STATUS_LABEL[projectStructure.analysisStatus]}
                     </strong>
                   </div>
@@ -121,6 +125,37 @@ export function ProjectView({ model }: ProjectViewProps) {
                   </details>
                 </div>
               </div>
+
+              {workspaceServices.length > 0 ? (
+                <div className="service-compact">
+                  <div className="section-row service-compact__head">
+                    <span className="section-label">서비스</span>
+                    <span>{workspaceServices.length}개 JVM</span>
+                  </div>
+                  <div className="service-list">
+                    {workspaceServices.map((service, index) => {
+                      const status = workspaceInstrumentationStatuses[service.serviceId]
+                      return (
+                        <button
+                          key={service.serviceId}
+                          type="button"
+                          className={`service-item service-item--${index % 3}${selectedService?.serviceId === service.serviceId ? ' is-selected' : ''}`}
+                          onClick={() => selectService(service)}
+                        >
+                          <Server size={16} aria-hidden="true" />
+                          <span>
+                            <strong>{service.structure.projectName}</strong>
+                            <small>{service.relativePath} · API {service.structure.analysisCoverage.detectedEndpoints}개</small>
+                          </span>
+                          <StatusBadge tone={status?.connectionStatus === 'SPAN_RECEIVED' || demoTraceReady ? 'success' : 'neutral'}>
+                            {status?.connectionStatus === 'SPAN_RECEIVED' ? 'Span 확인' : demoTraceReady ? '데모 설정' : PROJECT_STATUS_LABEL[service.structure.analysisStatus]}
+                          </StatusBadge>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ) : null}
 
               <div className="domain-compact">
                 <div className="section-row domain-compact__head">
@@ -277,13 +312,19 @@ export function ProjectView({ model }: ProjectViewProps) {
                   </div>
                   <div className="map-endpoint-list">
                     {selectedDomain.endpoints.length > 0 ? (
-                      selectedDomain.endpoints.map((endpoint) => (
+                      selectedDomain.endpoints.map((endpoint) => {
+                        const endpointApi = apiCatalog.find((api) =>
+                          api.pathTemplate === endpoint.path
+                            && api.controller === endpoint.controller
+                            && api.handler === endpoint.handler)
+                        const endpointId = endpointApi?.id ?? endpoint.id
+                        return (
                         <button
-                          key={endpoint.id}
+                          key={endpointId}
                           type="button"
-                          className={`map-endpoint-card${selectedApi.id === endpoint.id ? ' is-selected' : ''}`}
+                          className={`map-endpoint-card${selectedApi.id === endpointId ? ' is-selected' : ''}`}
                           onClick={() => {
-                            setSelectedApiId(endpoint.id)
+                            setSelectedApiId(endpointId)
                             setExternalResponse(null)
                           }}
                         >
@@ -295,7 +336,8 @@ export function ProjectView({ model }: ProjectViewProps) {
                           </span>
                           <ChevronRight size={16} aria-hidden="true" />
                         </button>
-                      ))
+                        )
+                      })
                     ) : (
                       <p className="empty-copy">{projectStatusContent.emptyEndpointMessage}</p>
                     )}
@@ -325,7 +367,7 @@ export function ProjectView({ model }: ProjectViewProps) {
                   <summary>
                     <span>
                       <strong>실행 Trace 설정</strong>
-                      <small>Java Agent 재실행 명령</small>
+                      <small>{workspaceServices.length > 1 ? demoTraceReady ? `${workspaceServices.length}개 Agent 데모 설정됨` : `${workspaceServices.length}개 중 ${receivedAgentCount}개 Agent span 수신` : 'Java Agent 재실행 명령'}</small>
                     </span>
                     <StatusBadge tone={demoTraceReady || externalTraceVerified ? 'success' : profileState === 'error' || instrumentationStatus.state === 'error' ? 'error' : instrumentationProfile ? 'warning' : 'neutral'}>
                       {demoTraceReady
@@ -386,7 +428,7 @@ export function ProjectView({ model }: ProjectViewProps) {
                         ) : null}
                       </>
                     )}
-                    {instrumentationProfile && instrumentationCommand ? (
+                    {instrumentationProfile && instrumentationCommand && workspaceProfiles.length <= 1 ? (
                       <div className="instrumentation-profile">
                         <div className="evidence-grid">
                           <span><strong>Build</strong>{instrumentationProfile.buildTool}</span>
@@ -399,6 +441,26 @@ export function ProjectView({ model }: ProjectViewProps) {
                           <p>{instrumentationProfile.instrumentedClasses.join('\n') || '추가 method 계측 대상 없음'}</p>
                           <pre className="instrumentation-command">{Object.entries(instrumentationProfile.environment).map(([key, value]) => `${key}=${value}`).join('\n')}</pre>
                         </details>
+                      </div>
+                    ) : null}
+                    {workspaceProfiles.length > 1 ? (
+                      <div className="workspace-profile-list" aria-label="서비스별 Agent 실행 설정">
+                        {workspaceProfiles.map((item, index) => {
+                          const status = workspaceInstrumentationStatuses[item.serviceId]
+                          const command = item.profile.commands[item.profile.buildTool.toLowerCase()] ?? item.profile.commands.jar
+                          return (
+                            <details key={item.serviceId} className={`workspace-profile workspace-profile--${index % 3}`}>
+                              <summary>
+                                <span><strong>{item.profile.serviceName}</strong><small>{item.relativePath}</small></span>
+                                <StatusBadge tone={status?.connectionStatus === 'SPAN_RECEIVED' ? 'success' : 'warning'}>
+                                  {status?.connectionStatus === 'SPAN_RECEIVED' ? 'Span 수신 확인' : 'Agent 확인 전'}
+                                </StatusBadge>
+                              </summary>
+                              <p className="workspace-profile__directory">실행 위치: {item.workingDirectory}</p>
+                              <pre className="instrumentation-command">{command}</pre>
+                            </details>
+                          )
+                        })}
                       </div>
                     ) : null}
                   </div>

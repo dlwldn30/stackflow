@@ -9,6 +9,7 @@ function event(
   endMs: number,
   component: ComponentType = 'SERVICE',
   status: EventStatus = 'SUCCESS',
+  serviceName = 'test',
 ): TraceEvent {
   return {
     eventId: spanId,
@@ -24,7 +25,7 @@ function event(
     metadata: {},
     spanId,
     parentSpanId,
-    serviceName: 'test',
+    serviceName,
     spanKind: 'INTERNAL',
     stackTrace: null,
     stackTraceTruncated: false,
@@ -56,6 +57,21 @@ describe('buildWaterfall', () => {
 
     expect(model.bottlenecks[0].id).toBe('database')
     expect(model.bottlenecks[0].exclusiveMs).toBe(60)
+  })
+
+  it('marks a boundary only when a child span belongs to another service', () => {
+    const model = buildWaterfall([
+      event('order-client', null, 0, 100, 'HTTP_CLIENT', 'SUCCESS', 'order-service'),
+      event('product-server', 'order-client', 10, 90, 'CONTROLLER', 'SUCCESS', 'product-service'),
+      event('product-service', 'product-server', 20, 80, 'SERVICE', 'SUCCESS', 'product-service'),
+    ])
+
+    expect(model.spans.find((span) => span.id === 'product-server')).toMatchObject({
+      crossesServiceBoundary: true,
+      parentServiceName: 'order-service',
+      serviceName: 'product-service',
+    })
+    expect(model.spans.find((span) => span.id === 'product-service')?.crossesServiceBoundary).toBe(false)
   })
 })
 

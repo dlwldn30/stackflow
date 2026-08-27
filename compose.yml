@@ -20,7 +20,7 @@ services:
     build:
       context: ./frontend
       args:
-        VITE_DEFAULT_PROJECT_PATH: /workspace/distributed-trace-lab/order-service
+        VITE_DEFAULT_PROJECT_PATH: /workspace/distributed-trace-lab
         VITE_DEFAULT_TARGET_BASE_URL: http://order-service:8092
         VITE_DEMO_TRACE_READY: "true"
     depends_on:
