@@ -3,7 +3,7 @@ import { getRecentTraces } from '../../../api/stackflow'
 import { connectTraceStream } from '../../../api/traceStream'
 import { getPrimaryFailureEvent } from '../../../lib/waterfall'
 import { matchesTraceEndpoint } from '../fixtures'
-import { fetchTraceWithRetry } from '../workbenchModel'
+import { fetchTraceWithRetry, flattenServiceApis } from '../workbenchModel'
 import type { ProjectWorkspaceModel } from './useProjectWorkspace'
 import type { RequestExecutionModel } from './useRequestExecution'
 import type { TraceRuntimeModel } from './useTraceRuntime'
@@ -132,8 +132,22 @@ export function useTraceActions({ project, request, runtime, lifecycle }: TraceA
     const runId = runtime.activeRunIdRef.current
     const detail = await fetchTraceWithRetry(traceId)
     if (!lifecycle.isCurrentRun(runId)) return
-    const matchingApi = project.apiCatalog.find((api) => matchesTraceEndpoint(api, detail))
+    const entryService = project.workspace?.services.find((service) =>
+      normalizeServiceName(service.structure.projectName) === detail.serviceName
+        || normalizeServiceName(service.serviceId) === detail.serviceName)
+    const serviceCatalog = entryService
+      ? flattenServiceApis(entryService.structure, entryService.serviceId)
+      : project.apiCatalog
+    const matchingApi = serviceCatalog.find((api) => matchesTraceEndpoint(api, detail))
     startTransition(() => {
+      if (entryService) {
+        project.setSelectedServiceId(entryService.serviceId)
+        project.setProjectStructure(entryService.structure)
+        project.setApiCatalog(serviceCatalog)
+        project.setInstrumentationProfile(
+          project.workspaceProfiles.find((item) => item.serviceId === entryService.serviceId)?.profile ?? null,
+        )
+      }
       runtime.setTraceDetail(detail)
       runtime.setSelectedNodeId(null)
       runtime.setTraceCollectionStatus(detail.traceCollectionStatus)
@@ -149,6 +163,10 @@ export function useTraceActions({ project, request, runtime, lifecycle }: TraceA
   }, [lifecycle, project, request, runtime])
 
   return { loadRecentTraces, openTraceStream, selectTrace }
+}
+
+function normalizeServiceName(value: string) {
+  return value.trim().toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').replaceAll(/^-|-$/g, '')
 }
 
 export type TraceActions = ReturnType<typeof useTraceActions>

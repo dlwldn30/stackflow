@@ -179,7 +179,28 @@ function buildSpanGraph(events: TraceEvent[]): {
     visits: [event],
   } satisfies GraphNodeState))
 
-  const nodes: Node[] = states.map((state) => {
+  const serviceNames = [...new Set(spanEvents.map((event) => event.serviceName ?? 'unknown-service'))]
+  const serviceAreaNodes: Node[] = serviceNames.length > 1 ? serviceNames.map((serviceName, index) => {
+    const serviceEvents = spanEvents.filter((event) => (event.serviceName ?? 'unknown-service') === serviceName)
+    const servicePositions = serviceEvents.flatMap((event) => event.spanId ? [positions.get(event.spanId)] : []).filter(Boolean) as Array<{ x: number; y: number }>
+    const minX = Math.min(...servicePositions.map((position) => position.x))
+    const maxX = Math.max(...servicePositions.map((position) => position.x))
+    const minY = Math.min(...servicePositions.map((position) => position.y))
+    const maxY = Math.max(...servicePositions.map((position) => position.y))
+    return {
+      id: `service-area:${serviceName}`,
+      position: { x: minX - 36, y: minY - 58 },
+      data: { label: serviceName },
+      className: `service-area service-area--${index % 3}`,
+      style: { width: maxX - minX + 292, height: maxY - minY + 190 },
+      draggable: false,
+      selectable: false,
+      focusable: false,
+      zIndex: -2,
+    }
+  }) : []
+
+  const spanNodes: Node[] = states.map((state) => {
     const event = state.visits[0]
     return {
       id: state.id,
@@ -205,19 +226,27 @@ function buildSpanGraph(events: TraceEvent[]): {
       selectable: true,
     }
   })
+  const nodes = [...serviceAreaNodes, ...spanNodes]
 
   const edges: Edge[] = spanEvents.flatMap((event) => {
     if (!event.spanId || !event.parentSpanId || !eventsBySpanId.has(event.parentSpanId)) {
       return []
     }
     const failed = isFailureStatus(event.status)
+    const parent = eventsBySpanId.get(event.parentSpanId)
+    const crossesServiceBoundary = Boolean(parent?.serviceName && event.serviceName && parent.serviceName !== event.serviceName)
     return [{
       id: `${event.parentSpanId}-${event.spanId}`,
       source: event.parentSpanId,
       target: event.spanId,
       type: 'smoothstep',
       animated: false,
-      className: `flow-edge is-active${failed ? ' is-failed' : ''}`,
+      className: `flow-edge is-active${failed ? ' is-failed' : ''}${crossesServiceBoundary ? ' is-cross-service' : ''}`,
+      label: crossesServiceBoundary ? `${parent?.serviceName} → ${event.serviceName}` : undefined,
+      labelStyle: { fill: failed ? '#9f261e' : '#315f9f', fontSize: 10, fontWeight: 700 },
+      labelBgStyle: { fill: '#ffffff', fillOpacity: 0.94, stroke: failed ? '#e8a39d' : '#9db9ee', strokeWidth: 1 },
+      labelBgPadding: [6, 4],
+      labelBgBorderRadius: 4,
       markerEnd: {
         type: MarkerType.ArrowClosed,
         width: 18,

@@ -1,15 +1,17 @@
 import { startTransition, useCallback } from 'react'
 import {
   analyzeProject,
-  createInstrumentationProfile,
+  analyzeWorkspace,
+  createWorkspaceInstrumentationProfile,
   getProjectStructure,
   selectProjectFolder,
 } from '../../../api/stackflow'
-import type { ProjectDomain, ProjectStructure } from '../../../types/trace'
+import type { ProjectDomain, ProjectStructure, WorkspaceAnalysis, WorkspaceService } from '../../../types/trace'
 import type { ViewMode } from '../../../ui/copy'
 import { EMPTY_API_DEFINITION, EMPTY_DOMAIN, FALLBACK_API_CATALOG, FALLBACK_PROJECT_STRUCTURE } from '../fixtures'
 import type { AnalysisTarget, ApiDefinition } from '../types'
-import { flattenProjectApis } from '../workbenchModel'
+import { getDefaultPathVariable } from '../requestModel'
+import { flattenProjectApis, flattenServiceApis } from '../workbenchModel'
 import type { ProjectWorkspaceModel } from './useProjectWorkspace'
 import type { RequestExecutionModel } from './useRequestExecution'
 import type { TraceRuntimeModel } from './useTraceRuntime'
@@ -54,13 +56,33 @@ export function useProjectActions({ project, request, runtime, lifecycle, setAct
     })
   }, [lifecycle, project, request, runtime])
 
+  const applyWorkspaceAnalysis = useCallback((workspace: WorkspaceAnalysis) => {
+    const selectedService = workspace.services.find((service) => service.serviceId === project.selectedServiceId)
+      ?? workspace.services[0]
+    if (!selectedService) throw new Error('Workspace에서 분석 가능한 Spring 서비스를 찾지 못했습니다.')
+    const catalog = flattenServiceApis(selectedService.structure, selectedService.serviceId)
+    applyProjectStructure(
+      selectedService.structure,
+      catalog,
+      `${workspace.services.length}개 서비스를 분석했습니다. 서비스를 선택해 API 구조를 확인하세요.`,
+      'external',
+    )
+    project.setWorkspace(workspace)
+    project.setSelectedServiceId(selectedService.serviceId)
+    if (catalog[0]?.requiresProductId) request.setProductId(getDefaultPathVariable(catalog[0]))
+  }, [applyProjectStructure, project, request])
+
   const loadApiCatalog = useCallback(async () => {
     const runId = runtime.activeRunIdRef.current
     try {
       const defaultProjectPath = import.meta.env.VITE_DEFAULT_PROJECT_PATH
-      const structure = defaultProjectPath
-        ? await analyzeProject(defaultProjectPath)
-        : await getProjectStructure()
+      if (defaultProjectPath) {
+        const workspace = await analyzeWorkspace(defaultProjectPath)
+        if (!lifecycle.isCurrentRun(runId)) return
+        applyWorkspaceAnalysis(workspace)
+        return
+      }
+      const structure = await getProjectStructure()
       if (!lifecycle.isCurrentRun(runId)) return
       applyProjectStructure(
         structure,
@@ -84,7 +106,7 @@ export function useProjectActions({ project, request, runtime, lifecycle, setAct
           : FALLBACK_API_CATALOG[0].id)
       })
     }
-  }, [applyProjectStructure, lifecycle, project, runtime.activeRunIdRef])
+  }, [applyProjectStructure, applyWorkspaceAnalysis, lifecycle, project, runtime.activeRunIdRef])
 
   const analyzeProjectPath = useCallback(async (pathOverride?: string) => {
     const requestedPath = pathOverride ?? project.projectPath
@@ -100,17 +122,27 @@ export function useProjectActions({ project, request, runtime, lifecycle, setAct
     project.setAnalysisMessage('프로젝트 파일과 Spring mapping을 읽고 있습니다...')
     const target: AnalysisTarget = requestedPath.trim() === '' ? 'sample' : 'external'
     try {
-      const structure = await analyzeProject(requestedPath)
-      if (!lifecycle.isCurrentRun(runId)) return
-      applyProjectStructure(structure, flattenProjectApis(structure), structure.analysisMessage, target)
-      project.setAnalysisState(structure.analysisStatus === 'FAILED' ? 'error' : 'idle')
+      if (target === 'external') {
+        const workspace = await analyzeWorkspace(requestedPath)
+        if (!lifecycle.isCurrentRun(runId)) return
+        applyWorkspaceAnalysis(workspace)
+        const failed = workspace.services.every((service) => service.structure.analysisStatus === 'FAILED')
+        project.setAnalysisState(failed ? 'error' : 'idle')
+      } else {
+        const structure = await analyzeProject(requestedPath)
+        if (!lifecycle.isCurrentRun(runId)) return
+        project.setWorkspace(null)
+        project.setSelectedServiceId(null)
+        applyProjectStructure(structure, flattenProjectApis(structure), structure.analysisMessage, target)
+        project.setAnalysisState(structure.analysisStatus === 'FAILED' ? 'error' : 'idle')
+      }
       setActiveView('project')
     } catch (error) {
       if (!lifecycle.isCurrentRun(runId)) return
       project.setAnalysisState('error')
       project.setAnalysisMessage(error instanceof Error ? error.message : '프로젝트 분석에 실패했습니다.')
     }
-  }, [applyProjectStructure, lifecycle, project, runtime.activeRunIdRef, setActiveView])
+  }, [applyProjectStructure, applyWorkspaceAnalysis, lifecycle, project, runtime.activeRunIdRef, setActiveView])
 
   const selectLocalProjectFolder = useCallback(async () => {
     project.setFolderPickerState('loading')
@@ -145,12 +177,17 @@ export function useProjectActions({ project, request, runtime, lifecycle, setAct
     project.setProfileState('loading')
     project.setProfileMessage('분석된 클래스와 public method로 Agent 실행 설정을 만들고 있습니다...')
     try {
-      const profile = await createInstrumentationProfile({
-        projectPath: project.projectPath.trim(),
+      const workspaceProfile = await createWorkspaceInstrumentationProfile({
+        workspacePath: project.projectPath.trim(),
         collectorBaseUrl: project.collectorBaseUrl.trim(),
         agentPath: project.agentPath.trim(),
       })
-      project.setInstrumentationProfile(profile)
+      project.setWorkspaceProfiles(workspaceProfile.profiles)
+      project.setInstrumentationProfile(
+        workspaceProfile.profiles.find((item) => item.serviceId === project.selectedServiceId)?.profile
+          ?? workspaceProfile.profiles[0]?.profile
+          ?? null,
+      )
       project.setProfileState('idle')
       project.setProfileMessage('명령을 터미널에서 실행해 대상 앱을 Agent와 함께 재시작하세요.')
     } catch (error) {
@@ -158,6 +195,25 @@ export function useProjectActions({ project, request, runtime, lifecycle, setAct
       project.setProfileMessage(error instanceof Error ? error.message : '실행 Trace 설정 생성에 실패했습니다.')
     }
   }, [project])
+
+  const selectService = useCallback((service: WorkspaceService) => {
+    if (service.serviceId === project.selectedServiceId) return
+    lifecycle.invalidateActiveRun()
+    const catalog = flattenServiceApis(service.structure, service.serviceId)
+    runtime.resetTraceRuntime()
+    request.resetForExternalProject()
+    project.setSelectedServiceId(service.serviceId)
+    project.setProjectStructure(service.structure)
+    project.setApiCatalog(catalog)
+    project.setSelectedDomainId(service.structure.domains[0]?.id ?? EMPTY_DOMAIN.id)
+    project.setSelectedApiId(catalog[0]?.id ?? EMPTY_API_DEFINITION.id)
+    if (catalog[0]?.requiresProductId) request.setProductId(getDefaultPathVariable(catalog[0]))
+    project.setApiScope('all')
+    project.setInstrumentationProfile(
+      project.workspaceProfiles.find((item) => item.serviceId === service.serviceId)?.profile ?? null,
+    )
+    setActiveView('project')
+  }, [lifecycle, project, request, runtime, setActiveView])
 
   const selectDomain = useCallback((domain: ProjectDomain) => {
     if (domain.id === EMPTY_DOMAIN.id) return
@@ -179,6 +235,7 @@ export function useProjectActions({ project, request, runtime, lifecycle, setAct
     applyProjectStructure,
     generateInstrumentationProfile,
     selectDomain,
+    selectService,
   }
 }
 

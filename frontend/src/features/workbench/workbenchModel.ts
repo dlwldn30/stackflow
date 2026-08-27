@@ -9,6 +9,16 @@ export function flattenProjectApis(structure: ProjectStructure): ApiDefinition[]
   )
 }
 
+export function flattenServiceApis(structure: ProjectStructure, serviceId: string): ApiDefinition[] {
+  return structure.domains.flatMap((domain) =>
+    domain.endpoints.map((endpoint) => ({
+      ...toApiDefinition(endpoint, domain.id, domain.name),
+      id: `${serviceId}:${endpoint.id}`,
+      serviceId,
+    })),
+  )
+}
+
 export function toApiDefinition(item: ApiCatalogItem, domainId: string, domainName: string): ApiDefinition {
   return {
     id: item.id,

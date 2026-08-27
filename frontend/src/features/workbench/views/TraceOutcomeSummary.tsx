@@ -28,6 +28,11 @@ export function TraceOutcomeSummary({
   onInspectFailure,
 }: TraceOutcomeSummaryProps) {
   const copy = OUTCOME_COPY[outcome]
+  const bySpanId = new Map(trace.events.filter((event) => event.spanId).map((event) => [event.spanId as string, event]))
+  const serviceTransitions = trace.events.filter((event) => {
+    const parent = event.parentSpanId ? bySpanId.get(event.parentSpanId) : null
+    return Boolean(parent?.serviceName && event.serviceName && parent.serviceName !== event.serviceName)
+  }).length
 
   return (
     <section className={`trace-outcome trace-outcome--${outcome}`} aria-label="Trace 실행 결과">
@@ -36,6 +41,8 @@ export function TraceOutcomeSummary({
         <span><small>HTTP</small><strong>{trace.httpStatus || '-'}</strong></span>
         <span><small>총 소요 시간</small><strong>{trace.durationMs}ms</strong></span>
         <span><small>Span</small><strong>{trace.events.length}개</strong></span>
+        <span><small>진입 서비스</small><strong>{trace.serviceName ?? '-'}</strong></span>
+        <span><small>참여 서비스</small><strong>{trace.serviceNames.length}개 · 경계 {serviceTransitions}회</strong></span>
       </div>
 
       {failureEvent ? (
@@ -53,7 +60,7 @@ export function TraceOutcomeSummary({
                 {propagationPath.map((event, index) => (
                   <span key={event.spanId ?? event.eventId}>
                     {index > 0 ? <ChevronRight size={12} aria-hidden="true" /> : null}
-                    {event.eventType}
+                    {event.serviceName ? `${event.serviceName} / ` : ''}{event.eventType}
                   </span>
                 ))}
               </div>

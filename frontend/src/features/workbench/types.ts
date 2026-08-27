@@ -22,6 +22,7 @@ export type ScenarioValue = 'normal' | 'redis-down' | 'db-timeout' | 'service-er
 
 export type ApiDefinition = {
   id: string
+  serviceId?: string
   method: ApiMethod
   methodSpecified: boolean
   label: string

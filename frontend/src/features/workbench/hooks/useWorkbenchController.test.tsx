@@ -6,7 +6,8 @@ import { useWorkbenchController } from './useWorkbenchController'
 
 const apiMocks = vi.hoisted(() => ({
   analyzeProject: vi.fn(),
-  createInstrumentationProfile: vi.fn(),
+  analyzeWorkspace: vi.fn(),
+  createWorkspaceInstrumentationProfile: vi.fn(),
   createTraceSession: vi.fn(),
   executeExternalRequest: vi.fn(),
   getProjectStructure: vi.fn(),
@@ -18,6 +19,9 @@ vi.mock('../../../api/stackflow', () => apiMocks)
 vi.mock('../../../api/traceStream', () => ({ connectTraceStream: vi.fn() }))
 vi.mock('../../../hooks/useInstrumentationStatus', () => ({
   useInstrumentationStatus: () => ({ state: 'idle', status: null, retry: vi.fn() }),
+}))
+vi.mock('../../../hooks/useWorkspaceInstrumentationStatus', () => ({
+  useWorkspaceInstrumentationStatus: () => ({}),
 }))
 
 describe('useWorkbenchController request lifecycle', () => {
@@ -82,7 +86,11 @@ describe('useWorkbenchController request lifecycle', () => {
     apiMocks.executeExternalRequest.mockImplementation(() => new Promise((resolve) => {
       resolveRequest = resolve
     }))
-    apiMocks.analyzeProject.mockResolvedValue(FALLBACK_PROJECT_STRUCTURE)
+    apiMocks.analyzeWorkspace.mockResolvedValue({
+      workspaceName: 'new-project',
+      services: [{ serviceId: 'sample', relativePath: '.', structure: FALLBACK_PROJECT_STRUCTURE }],
+      warnings: [],
+    })
     const { result } = renderHook(() => useWorkbenchController())
 
     await waitFor(() => expect(apiMocks.getProjectStructure).toHaveBeenCalledOnce())
@@ -111,7 +119,7 @@ describe('useWorkbenchController request lifecycle', () => {
     await act(async () => requestPromise)
 
     expect(result.current.requestView.externalResponse).toBeNull()
-    expect(result.current.projectView.analysisMessage).toBe(FALLBACK_PROJECT_STRUCTURE.analysisMessage)
+    expect(result.current.projectView.analysisMessage).toContain('1개 서비스를 분석했습니다')
   })
 
   it('stores the generated instrumentation profile in the project view model', async () => {
@@ -124,7 +132,10 @@ describe('useWorkbenchController request lifecycle', () => {
       connectionStatus: 'PROFILE_GENERATED' as const,
       createdAt: '2026-08-25T00:00:00Z', lastSeenAt: null,
     }
-    apiMocks.createInstrumentationProfile.mockResolvedValue(profile)
+    apiMocks.createWorkspaceInstrumentationProfile.mockResolvedValue({
+      workspaceName: 'orders',
+      profiles: [{ serviceId: 'orders', relativePath: '.', workingDirectory: '/workspace/orders', profile }],
+    })
     const { result } = renderHook(() => useWorkbenchController())
     await waitFor(() => expect(apiMocks.getProjectStructure).toHaveBeenCalledOnce())
 
@@ -136,10 +147,36 @@ describe('useWorkbenchController request lifecycle', () => {
         'external',
       )
       result.current.projectView.setProjectPath('/workspace/orders')
+      result.current.projectView.setSelectedServiceId('orders')
     })
     await act(async () => result.current.projectView.generateInstrumentationProfile())
 
     expect(result.current.projectView.profileState).toBe('idle')
     expect(result.current.projectView.instrumentationProfile).toEqual(profile)
+  })
+
+  it('changes the project, domain, and API selection as one service boundary', async () => {
+    const productStructure = { ...FALLBACK_PROJECT_STRUCTURE, projectName: 'product-service' }
+    const orderStructure = {
+      ...FALLBACK_PROJECT_STRUCTURE,
+      projectName: 'order-service',
+      domains: FALLBACK_PROJECT_STRUCTURE.domains.slice(0, 1),
+    }
+    const services = [
+      { serviceId: 'order-service', relativePath: 'order-service', structure: orderStructure },
+      { serviceId: 'product-service', relativePath: 'product-service', structure: productStructure },
+    ]
+    const { result } = renderHook(() => useWorkbenchController())
+    await waitFor(() => expect(apiMocks.getProjectStructure).toHaveBeenCalledOnce())
+
+    act(() => {
+      result.current.projectView.setWorkspace({ workspaceName: 'lab', services, warnings: [] })
+      result.current.projectView.setSelectedServiceId('order-service')
+      result.current.projectView.selectService(services[1])
+    })
+
+    expect(result.current.projectView.projectStructure.projectName).toBe('product-service')
+    expect(result.current.projectView.selectedApi.id).toMatch(/^product-service:/)
+    expect(result.current.projectView.selectedDomain.id).toBe(productStructure.domains[0].id)
   })
 })

@@ -24,6 +24,10 @@ export function createRequestEntry(key: string, value: string, enabled: boolean)
   return { id: crypto.randomUUID(), key, value, enabled }
 }
 
+export function getDefaultPathVariable(api: ApiDefinition) {
+  return api.pathTemplate.includes('/orders/') ? '2001' : '1001'
+}
+
 export function updateRequestEntries(
   entries: ExternalRequestEntry[],
   id: string,

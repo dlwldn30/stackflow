@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { analyzeProject, executeExternalRequest, getInstrumentationProfileStatus, getProjectStructure } from './stackflow'
+import { analyzeProject, analyzeWorkspace, executeExternalRequest, getInstrumentationProfileStatus, getProjectStructure } from './stackflow'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -23,6 +23,18 @@ describe('stackflow API client', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false }))
 
     await expect(getProjectStructure()).rejects.toThrow('프로젝트 구조를 불러오지 못했습니다.')
+  })
+
+  it('sends a workspace root to the multi-service analysis endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ workspaceName: 'lab', services: [] }) })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await analyzeWorkspace('/workspace/distributed-trace-lab')
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/project/workspace/analyze', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ workspacePath: '/workspace/distributed-trace-lab' }),
+    }))
   })
 
   it('keeps the UI usable when an older backend omits analysis coverage', async () => {

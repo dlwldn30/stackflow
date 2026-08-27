@@ -25,6 +25,9 @@ export interface WaterfallSpan {
   leftPercent: number
   widthPercent: number
   bottleneckRank: number | null
+  serviceName: string
+  parentServiceName: string | null
+  crossesServiceBoundary: boolean
 }
 
 export interface WaterfallModel {
@@ -84,6 +87,14 @@ export function buildWaterfall(events: TraceEvent[]): WaterfallModel {
       leftPercent: Math.max(0, ((start - traceStart) / durationMs) * 100),
       widthPercent: Math.min(100 - Math.max(0, ((start - traceStart) / durationMs) * 100), Math.max(0.8, (duration / durationMs) * 100)),
       bottleneckRank: null,
+      serviceName: event.serviceName ?? 'unknown-service',
+      parentServiceName: event.parentSpanId ? eventsBySpanId.get(event.parentSpanId)?.serviceName ?? null : null,
+      crossesServiceBoundary: Boolean(
+        event.serviceName
+          && event.parentSpanId
+          && eventsBySpanId.get(event.parentSpanId)?.serviceName
+          && eventsBySpanId.get(event.parentSpanId)?.serviceName !== event.serviceName,
+      ),
     } satisfies WaterfallSpan
   })
 

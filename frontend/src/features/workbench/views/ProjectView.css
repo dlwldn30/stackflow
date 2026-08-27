@@ -1126,9 +1126,19 @@
   }
 }
 
-@media (max-width: 1220px) {
+@media (max-width: 1320px) {
   .workspace--project {
     grid-template-columns: 330px minmax(0, 1fr);
+  }
+
+  .workspace--project .right-panel {
+    position: static;
+    grid-column: 1 / -1;
+    display: block;
+    max-height: none;
+    border-top: 1px solid var(--color-line);
+    border-left: 0;
+    overflow: visible;
   }
 }
 
@@ -1143,4 +1153,85 @@
     margin: -12px -12px 0;
     padding: 14px 12px;
   }
+}
+.service-compact {
+  display: grid;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--color-line);
+}
+
+.service-list {
+  display: grid;
+  gap: 6px;
+}
+
+.service-item {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: center;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--color-line);
+  border-left: 3px solid #8b98a8;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--color-ink);
+  text-align: left;
+}
+
+.service-item--0 { border-left-color: #16745a; }
+.service-item--1 { border-left-color: #2563eb; }
+.service-item--2 { border-left-color: #8b5e34; }
+
+.service-item.is-selected {
+  border-color: #8eb0ff;
+  border-left-color: #2563eb;
+  background: #edf3ff;
+}
+
+.service-item > span:not(.status-badge) {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.service-item strong,
+.service-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-profile-list {
+  display: grid;
+  gap: 8px;
+}
+
+.workspace-profile {
+  border: 1px solid var(--color-line);
+  border-left: 3px solid #8b98a8;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.workspace-profile--0 { border-left-color: #16745a; }
+.workspace-profile--1 { border-left-color: #2563eb; }
+.workspace-profile--2 { border-left-color: #8b5e34; }
+
+.workspace-profile > summary {
+  padding: 10px;
+}
+
+.workspace-profile__directory {
+  margin: 0;
+  padding: 0 10px 8px;
+  overflow-wrap: anywhere;
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.workspace-profile .instrumentation-command {
+  margin: 0 10px 10px;
 }

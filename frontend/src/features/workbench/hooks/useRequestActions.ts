@@ -7,6 +7,7 @@ import {
   buildExternalRequestMessage,
   buildExternalTargetPreview,
   buildRequestMessage,
+  getDefaultPathVariable,
   parseResponseBody,
   toEnabledEntries,
 } from '../requestModel'
@@ -60,6 +61,7 @@ export function useRequestActions(options: RequestActionsOptions) {
     }
     project.setSelectedApiId(api.id)
     project.setSelectedDomainId(api.domainId)
+    if (api.requiresProductId) request.setProductId(getDefaultPathVariable(api))
     setActiveView('api')
   }, [lifecycle, project, request, runtime, selectedApi.id, setActiveView])
 

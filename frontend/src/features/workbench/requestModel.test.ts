@@ -5,6 +5,7 @@ import {
   createRequestEntry,
   filterApis,
   formatResponseBody,
+  getDefaultPathVariable,
   parseResponseBody,
   removeRequestEntry,
   toEnabledEntries,
@@ -55,5 +56,10 @@ describe('request model', () => {
       value: '1',
       enabled: false,
     })
+  })
+
+  it('uses demo identifiers that match the selected service path', () => {
+    expect(getDefaultPathVariable({ pathTemplate: '/lab/orders/{orderId}' } as never)).toBe('2001')
+    expect(getDefaultPathVariable({ pathTemplate: '/lab/products/{productId}' } as never)).toBe('1001')
   })
 })

@@ -139,6 +139,30 @@ export interface InstrumentationProfile {
   lastSeenAt: string | null
 }
 
+export interface WorkspaceService {
+  serviceId: string
+  relativePath: string
+  structure: ProjectStructure
+}
+
+export interface WorkspaceAnalysis {
+  workspaceName: string
+  services: WorkspaceService[]
+  warnings: string[]
+}
+
+export interface WorkspaceServiceProfile {
+  serviceId: string
+  relativePath: string
+  workingDirectory: string
+  profile: InstrumentationProfile
+}
+
+export interface WorkspaceInstrumentationProfile {
+  workspaceName: string
+  profiles: WorkspaceServiceProfile[]
+}
+
 export interface TraceStartedEvent {
   traceId: string
   method: string
