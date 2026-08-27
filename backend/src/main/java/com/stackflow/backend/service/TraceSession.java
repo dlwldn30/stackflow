@@ -115,6 +115,7 @@ public class TraceSession {
 			orderedEvents,
 			TraceSource.SAMPLE,
 			"stackflow-sample",
+			List.of("stackflow-sample"),
 			TraceCollectionStatus.DISABLED,
 			responsePreview
 		);

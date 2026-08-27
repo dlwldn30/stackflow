@@ -12,6 +12,14 @@ class ApiExceptionHandlerTest {
 	private final ApiExceptionHandler handler = new ApiExceptionHandler();
 
 	@Test
+	void mapsInvalidWorkspaceRequestToBadRequest() {
+		assertEquals(
+			HttpStatus.BAD_REQUEST,
+			handler.handleInvalidRequest(new IllegalArgumentException("invalid workspace")).getStatusCode()
+		);
+	}
+
+	@Test
 	void mapsTraceSessionConflictToConflict() {
 		assertEquals(
 			HttpStatus.CONFLICT,

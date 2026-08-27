@@ -20,6 +20,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -27,7 +28,7 @@ import org.springframework.stereotype.Service;
 public class ExternalTraceService {
 
 	private static final Duration COLLECTION_TIMEOUT = Duration.ofSeconds(15);
-	private static final Duration COMPLETION_DEBOUNCE = Duration.ofMillis(600);
+	private static final Duration COMPLETION_DEBOUNCE = Duration.ofSeconds(2);
 
 	private final TraceService traceService;
 	private final Map<String, TraceAccumulator> accumulators = new ConcurrentHashMap<>();
@@ -47,6 +48,10 @@ public class ExternalTraceService {
 	@Autowired
 	public ExternalTraceService(TraceService traceService) {
 		this(traceService, Clock.systemUTC(), createScheduler(), COLLECTION_TIMEOUT, COMPLETION_DEBOUNCE);
+	}
+
+	ExternalTraceService(TraceService traceService, Duration completionDebounce) {
+		this(traceService, Clock.systemUTC(), createScheduler(), COLLECTION_TIMEOUT, completionDebounce);
 	}
 
 	ExternalTraceService(
@@ -106,7 +111,7 @@ public class ExternalTraceService {
 				.fromBody(contentType, responseBody)
 				.orElse(null);
 			accumulator.httpResultRecorded = true;
-			if (hasServerSpan(accumulator)) {
+			if (hasEntryServerSpan(accumulator)) {
 				scheduler.schedule(() -> finalizeIfQuiet(traceId), completionDebounce.toMillis(), TimeUnit.MILLISECONDS);
 			}
 		}
@@ -125,19 +130,20 @@ public class ExternalTraceService {
 			if (accumulators.get(traceId) != accumulator) {
 				return;
 			}
-			accumulator.serviceName = serviceName;
 			for (TraceEvent event : events) {
 				String key = event.spanId() == null || event.spanId().isBlank() ? event.eventId() : event.spanId();
 				if (accumulator.events.putIfAbsent(key, event) == null) {
 					accepted.add(event);
 				}
 			}
-			accumulator.lastUpdatedAt = clock.instant();
-			accumulator.status = TraceCollectionStatus.COLLECTING;
-			traceService.publishCollectionStatus(traceId, TraceCollectionStatus.COLLECTING, accepted.size() + "개 span을 수집했습니다.");
-			accepted.forEach(traceService::publishExternalTraceEvent);
-			if (hasServerSpan(accumulator)) {
-				scheduler.schedule(() -> finalizeIfQuiet(traceId), completionDebounce.toMillis(), TimeUnit.MILLISECONDS);
+			if (!accepted.isEmpty()) {
+				accumulator.lastUpdatedAt = clock.instant();
+				accumulator.status = TraceCollectionStatus.COLLECTING;
+				traceService.publishCollectionStatus(traceId, TraceCollectionStatus.COLLECTING, accepted.size() + "개 span을 수집했습니다.");
+				accepted.forEach(traceService::publishExternalTraceEvent);
+				if (hasEntryServerSpan(accumulator)) {
+					scheduler.schedule(() -> finalizeIfQuiet(traceId), completionDebounce.toMillis(), TimeUnit.MILLISECONDS);
+				}
 			}
 		}
 	}
@@ -153,7 +159,7 @@ public class ExternalTraceService {
 		}
 		synchronized (accumulator) {
 			if (Duration.between(accumulator.lastUpdatedAt, clock.instant()).compareTo(completionDebounce) < 0
-				|| !hasServerSpan(accumulator)
+				|| !hasEntryServerSpan(accumulator)
 				|| !accumulator.httpResultRecorded) {
 				return;
 			}
@@ -214,6 +220,19 @@ public class ExternalTraceService {
 			Math.max(0, Duration.between(startedAt, endedAt).toMillis()),
 			accumulator.requestDurationMs
 		);
+		String entryServiceName = findEntryServiceName(accumulator, events);
+		List<String> serviceNames = events.stream()
+			.map(TraceEvent::serviceName)
+			.filter(name -> name != null && !name.isBlank())
+			.distinct()
+			.sorted()
+			.toList();
+		if (serviceNames.contains(entryServiceName)) {
+			serviceNames = Stream.concat(
+				Stream.of(entryServiceName),
+				serviceNames.stream().filter(name -> !name.equals(entryServiceName))
+			).toList();
+		}
 		return new Trace(
 			accumulator.traceId,
 			accumulator.method,
@@ -226,16 +245,34 @@ public class ExternalTraceService {
 			resultStatus(accumulator.httpStatus, events),
 			events,
 			TraceSource.OPENTELEMETRY,
-			accumulator.serviceName,
+			entryServiceName,
+			serviceNames,
 			collectionStatus,
 			accumulator.responsePreview
 		);
 	}
 
-	private boolean hasServerSpan(TraceAccumulator accumulator) {
+	private boolean hasEntryServerSpan(TraceAccumulator accumulator) {
 		synchronized (accumulator) {
-			return accumulator.events.values().stream().anyMatch(event -> "SERVER".equals(event.spanKind()));
+			return accumulator.events.values().stream().anyMatch(event ->
+				"SERVER".equals(event.spanKind())
+					&& accumulator.parentSpanId.equals(event.parentSpanId())
+			);
 		}
+	}
+
+	private String findEntryServiceName(TraceAccumulator accumulator, List<TraceEvent> events) {
+		return events.stream()
+			.filter(event -> "SERVER".equals(event.spanKind()))
+			.filter(event -> accumulator.parentSpanId.equals(event.parentSpanId()))
+			.map(TraceEvent::serviceName)
+			.filter(name -> name != null && !name.isBlank())
+			.findFirst()
+			.orElseGet(() -> events.stream()
+				.map(TraceEvent::serviceName)
+				.filter(name -> name != null && !name.isBlank())
+				.findFirst()
+				.orElse("external-spring-app"));
 	}
 
 	@PreDestroy
@@ -255,7 +292,6 @@ public class ExternalTraceService {
 		private final Map<String, TraceEvent> events = new LinkedHashMap<>();
 		private volatile TraceCollectionStatus status = TraceCollectionStatus.PENDING;
 		private volatile Instant lastUpdatedAt;
-		private volatile String serviceName = "external-spring-app";
 		private volatile int httpStatus;
 		private volatile long requestDurationMs;
 		private volatile boolean httpResultRecorded;

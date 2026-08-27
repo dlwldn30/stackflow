@@ -12,6 +12,14 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @RestControllerAdvice
 public class ApiExceptionHandler {
 
+	@ExceptionHandler(IllegalArgumentException.class)
+	public ResponseEntity<Map<String, String>> handleInvalidRequest(IllegalArgumentException exception) {
+		return ResponseEntity.badRequest().body(Map.of(
+			"error", "InvalidRequest",
+			"message", exception.getMessage()
+		));
+	}
+
 	@ExceptionHandler(TraceNotFoundException.class)
 	public ResponseEntity<Map<String, String>> handleTraceNotFound(TraceNotFoundException exception) {
 		return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(

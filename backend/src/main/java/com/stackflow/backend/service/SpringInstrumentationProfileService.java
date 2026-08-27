@@ -72,7 +72,7 @@ public class SpringInstrumentationProfileService {
 			.map(item -> item.qualifiedName() + "[" + String.join(",", item.methods()) + "]")
 			.reduce((left, right) -> left + ";" + right)
 			.orElse("");
-		String serviceName = toServiceName(structure.projectName());
+		String serviceName = normalizeServiceName(structure.projectName());
 		String buildTool = detectBuildTool(projectRoot);
 		InstrumentationProfileStatusResponse profileStatus = profileRegistry.register(serviceName);
 		Map<String, String> environment = buildEnvironment(
@@ -288,7 +288,7 @@ public class SpringInstrumentationProfileService {
 		return "JAR";
 	}
 
-	private String toServiceName(String projectName) {
+	static String normalizeServiceName(String projectName) {
 		return projectName.toLowerCase(Locale.ROOT)
 			.replaceAll("[^a-z0-9._-]+", "-")
 			.replaceAll("^-+|-+$", "");

@@ -39,6 +39,7 @@ function trace(source: TraceDetail['source'], events: TraceEvent[]): TraceDetail
     events,
     source,
     serviceName: 'sample',
+    serviceNames: ['sample'],
     traceCollectionStatus: source === 'OPENTELEMETRY' ? 'COMPLETED' : 'DISABLED',
     responsePreview: null,
   }

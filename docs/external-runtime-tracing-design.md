@@ -32,6 +32,12 @@ Only public methods of analyzed Controller, Service, UseCase, Repository, Store,
 
 The Agent JAR is not downloaded automatically. Use the official OpenTelemetry Java Instrumentation release and keep the default local path or enter another path.
 
+### Workspace Profiles
+
+`POST /api/project/workspace/analyze` accepts a common workspace path. StackFlow analyzes up to ten independent Gradle or Maven projects found directly below that path. If there are no independent child projects, the workspace path itself is treated as the existing single project. Child symlinks that resolve outside the workspace are ignored.
+
+`POST /api/instrumentation/workspace-profile` creates one existing Agent profile per detected service and returns each profile with its relative path and working directory. Normalized service names must be unique because `service.name` is the runtime boundary used in a distributed trace.
+
 ## Correlation Contract
 
 For an external request with `captureTrace=true`, StackFlow creates:
@@ -55,7 +61,9 @@ The target Java Agent continues the injected trace and exports OTLP HTTP/protobu
 - allowlisted HTTP, network, code, RPC, database, and OTel metadata
 - exception stacktrace stored separately from metadata when an OTLP span exception event provides one
 
-Spans are deduplicated by span ID and ordered by start timestamp. A SERVER span marks the trace as eligible for completion after a short quiet period so late spans in the same export cycle can be merged.
+Spans are deduplicated by span ID and ordered by start timestamp. For a captured external request, the entry SERVER span is the SERVER span whose parent is the span ID injected by StackFlow. Collection completes only after the HTTP response and entry SERVER span have both arrived and no new span has arrived for two seconds. The hard collection timeout remains 15 seconds, and timed-out traces retain spans from every service that arrived before expiry.
+
+`Trace.serviceName` identifies the entry service instead of whichever service exported last. `Trace.serviceNames` lists every participating service with the entry service first.
 
 ### Code Attribute Compatibility
 
@@ -106,7 +114,7 @@ Sample traces retain the fixed StackFlow component graph. OpenTelemetry traces u
 
 ## Current Limits
 
-- One local Spring Boot JVM.
+- Workspace analysis and Agent profile generation support up to ten local Spring Boot projects; the bundled distributed runtime demo is delivered separately.
 - JVM restart is required; dynamic attach is not supported.
 - No cross-service distributed trace UI.
 - No OTLP Logs ingestion. Exception details are collected only from exception events attached to OTLP spans.
