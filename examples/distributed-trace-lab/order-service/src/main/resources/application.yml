@@ -1,0 +1,10 @@
+spring:
+  application:
+    name: order-service
+
+server:
+  port: ${PORT:8092}
+
+product-service:
+  base-url: ${PRODUCT_SERVICE_BASE_URL:http://localhost:8091}
+  request-timeout: 5s

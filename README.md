@@ -32,10 +32,10 @@ docker compose up --build --wait
 
 [http://localhost:5173](http://localhost:5173)을 열면 Trace Lab 분석과 요청 대상 설정이 자동으로 완료됩니다.
 
-1. Product의 `GET /lab/products/{productId}`를 선택합니다.
-2. `API 요청 만들기`로 이동해 `productId`에 `1001`을 입력합니다.
+1. Order의 `GET /lab/orders/{orderId}`를 선택합니다.
+2. `API 요청 만들기`로 이동해 `orderId`에 `2001`을 입력합니다.
 3. `요청 보내고 Trace 보기`를 누릅니다.
-4. Trace의 `타임라인`에서 Controller → Service → Redis → PostgreSQL 흐름을 확인합니다.
+4. Trace에서 Order → HTTP Client → Product → Redis → PostgreSQL 흐름을 확인합니다.
 
 Docker 데모에서는 Java Agent와 OTLP 수집 주소가 이미 연결되어 있습니다. 별도 Agent 설정은 필요하지 않습니다.
 
@@ -63,6 +63,8 @@ Compose를 실행한 상태에서 UI로 요청하거나 아래 자동 검증을 
 | Cache hit | Redis hit | 응답 `CACHE`, PostgreSQL span 없음 |
 | Redis 장애 | Redis 오류 → PostgreSQL fallback | 응답 `DATABASE_FALLBACK`, Trace `WARNING` |
 | 실제 DB timeout | `pg_sleep` → JDBC query timeout | HTTP 504, 약 1초 실패 PostgreSQL span, 예외 stacktrace |
+| 분산 주문 조회 | Order → HTTP Client → Product → Redis·PostgreSQL | 동일 trace ID의 `order-service`, `product-service` span |
+| 하위 서비스 timeout | Product PostgreSQL timeout → Order | Product 원인 span과 Order HTTP 504 |
 
 실제 DB timeout endpoint:
 
@@ -89,10 +91,12 @@ GET /lab/products/{productId}/database-timeout
 flowchart LR
   UI[React 작업창] -->|프로젝트 경로| Analyzer[Spring 정적 분석]
   UI -->|API 요청| Proxy[요청 프록시]
-  Proxy -->|traceparent| App[Agent 적용 Spring Boot]
-  App --> Redis[(Redis)]
-  App --> PostgreSQL[(PostgreSQL)]
-  App -->|OTLP HTTP/protobuf| Collector[StackFlow OTLP 수집기]
+  Proxy -->|traceparent| Order[Order Service + Agent]
+  Order -->|traceparent| Product[Product Service + Agent]
+  Product --> Redis[(Redis)]
+  Product --> PostgreSQL[(PostgreSQL)]
+  Order -->|OTLP HTTP/protobuf| Collector[StackFlow OTLP 수집기]
+  Product -->|OTLP HTTP/protobuf| Collector
   Collector -->|SSE / Trace API| UI
 ```
 
@@ -112,6 +116,7 @@ flowchart LR
 - HTTP method 미지정 endpoint의 보수적인 분석 전용 처리
 - 분석 범위, 감지 Controller·endpoint 수, 누락 가능성 경고 제공
 - OpenTelemetry Java Agent 실행 profile 생성
+- 공통 workspace의 독립 Spring Boot 서비스 분석과 서비스별 Agent profile 생성
 - W3C `traceparent` 강제 주입과 OTLP HTTP/protobuf 수집
 - 활성 capture에 속한 trace만 저장하는 인메모리 세션 경계
 - span 부모·자식 관계 기반 Waterfall·Node Graph·이벤트 보기
@@ -153,9 +158,9 @@ VITE_API_TARGET=http://localhost:18080 npm run dev
 
 ## 지원 범위
 
-현재 v0.1.x는 다음 경계 안에서 동작합니다.
+현재 지원 범위는 다음과 같습니다.
 
-- Java 기반 Spring Boot, 단일 로컬 JVM
+- Java 기반 Spring Boot와 로컬 단일 JVM 또는 2개 서비스 데모
 - Spring MVC, JDBC, Lettuce 등 Java Agent가 지원하는 자동 계측
 - Gradle, Maven, 실행 JAR용 Agent 명령 생성
 - 메모리 기반 Trace 저장과 15초 수집 timeout
@@ -163,7 +168,7 @@ VITE_API_TARGET=http://localhost:18080 npm run dev
 현재 제외 범위:
 
 - Kotlin과 합성 annotation의 추측 분석
-- 다중 서비스 분산 Trace
+- 메시지 큐와 비동기 consumer를 포함한 분산 Trace
 - 실행 중 JVM 동적 attach
 - 인증, 영구 저장, sampling 관리
 - production APM 운영과 AI 원인 분석
@@ -182,8 +187,9 @@ VITE_API_TARGET=http://localhost:18080 npm run dev
 
 ```bash
 cd backend && ./gradlew test --rerun-tasks
-cd ../examples/trace-lab && ./gradlew test
-cd ../../frontend && npm run test && npm run lint && npm run build
+cd ../examples/distributed-trace-lab/order-service && ./gradlew test
+cd ../product-service && ./gradlew test
+cd ../../../frontend && npm run test && npm run lint && npm run build
 cd .. && docker compose config && ./scripts/verify-demo.sh
 ```
 
@@ -196,7 +202,7 @@ GitHub Actions는 backend, Trace Lab, frontend, 실제 Docker Compose E2E를 PR�
 ```text
 backend/             Spring 분석, 요청 프록시, OTLP 수집, Trace API
 frontend/            React 작업창, Request editor, Waterfall·Graph UI
-examples/trace-lab/  Redis·PostgreSQL 정상/장애 실험용 Spring Boot 앱
+examples/distributed-trace-lab/  Order·Product·Redis·PostgreSQL 분산 Trace 실험 workspace
 docs/                분석 규칙, 외부 Trace 설계, 개발 규칙
 scripts/             재현 가능한 Docker 데모 검증
 ```
@@ -205,7 +211,7 @@ scripts/             재현 가능한 Docker 데모 검증
 
 - [외부 Runtime Trace 설계](docs/external-runtime-tracing-design.md)
 - [StackFlow 정적 분석 규칙](docs/stackflow-analysis-convention.md)
-- [Trace Lab 실험 방법](examples/trace-lab/README.md)
+- [분산 Trace Lab 실험 방법](examples/distributed-trace-lab/README.md)
 - [v0.1.1 외부 프로젝트 검증](docs/v0.1.1-external-project-validation.md)
 - [개발 규칙](docs/development-convention.md)
 
