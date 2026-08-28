@@ -117,8 +117,17 @@ Sample traces retain the fixed StackFlow component graph. OpenTelemetry traces u
 ## Current Limits
 
 - Workspace analysis and Agent profile generation support up to ten local Spring Boot projects; the bundled demo runs Order and Product as two local JVMs.
+- The validated distributed path is synchronous HTTP propagation from Order to Product. The collector can merge all participating `service.name` values, but three-or-more-service operation is not a published demo guarantee yet.
 - JVM restart is required; dynamic attach is not supported.
-- Cross-service spans are collected, but service-grouped Waterfall and graph presentation is not implemented yet.
+- Waterfall rows display the emitting service and explicit parent-child service boundaries. The graph groups span nodes by service and labels cross-service edges from runtime context only.
+- Message brokers and asynchronous consumers are not covered by the current HTTP response plus two-second quiet-period completion rule.
 - No OTLP Logs ingestion. Exception details are collected only from exception events attached to OTLP spans.
 - No authentication, durable storage, sampling administration, or production retention.
 - Libraries outside Java Agent support may produce partial traces.
+
+## Automated Acceptance
+
+The Docker Compose job validates both contracts against real Java Agent spans:
+
+- Playwright drives the UI through a normal Order-to-Product request and a Product PostgreSQL timeout propagated as Order HTTP 504. It checks workspace selection, service boundaries, graph grouping, failure cause, Inspector detail, and mobile horizontal overflow.
+- `scripts/verify-demo.sh` validates cache miss, cache hit, Redis fallback, direct PostgreSQL timeout, distributed success, and distributed timeout through the backend APIs.
