@@ -1,3 +1,4 @@
+import { ArrowRight } from 'lucide-react'
 import type { TraceSummary } from '../../../types/trace'
 import { EVENT_STATUS_LABEL } from '../../../ui/copy'
 import type { TraceHistoryFilter } from '../traceModel'
@@ -9,6 +10,7 @@ interface TraceHistoryPanelProps {
   selectedTraceId: string | null
   onFilterChange: (filter: TraceHistoryFilter) => void
   onSelectTrace: (traceId: string) => void
+  onNavigateToRequest: () => void
 }
 
 const FILTERS: { value: TraceHistoryFilter; label: string }[] = [
@@ -25,9 +27,10 @@ export function TraceHistoryPanel({
   selectedTraceId,
   onFilterChange,
   onSelectTrace,
+  onNavigateToRequest,
 }: TraceHistoryPanelProps) {
   return (
-    <div className="panel-card recent-card trace-history-panel">
+    <section className="panel-card recent-card trace-history-panel" aria-label="최근 Trace 탐색">
       <div className="panel-header">
         <div>
           <span className="section-label">실행 기록</span>
@@ -52,17 +55,28 @@ export function TraceHistoryPanel({
 
       <div className="trace-list">
         {traces.length === 0 ? (
-          <p className="empty-copy">{totalCount === 0 ? '아직 수집된 Trace가 없습니다.' : '이 조건에 맞는 Trace가 없습니다.'}</p>
+          <div className="trace-history-empty">
+            <p className="empty-copy">{totalCount === 0 ? '아직 수집된 Trace가 없습니다.' : '이 조건에 맞는 Trace가 없습니다.'}</p>
+            {totalCount === 0 ? (
+              <button type="button" onClick={onNavigateToRequest}>
+                API 요청으로 이동
+                <ArrowRight size={15} aria-hidden="true" />
+              </button>
+            ) : null}
+          </div>
         ) : (
           traces.map((trace) => {
             const collectionTimedOut = trace.traceCollectionStatus === 'TIMED_OUT'
             const tone = collectionTimedOut ? 'collection-timeout' : trace.resultStatus.toLowerCase()
+            const statusLabel = collectionTimedOut ? '수집 시간 초과' : EVENT_STATUS_LABEL[trace.resultStatus]
             return (
               <button
                 key={trace.traceId}
                 type="button"
                 className={`trace-item trace-item--${tone}${selectedTraceId === trace.traceId ? ' is-selected' : ''}`}
                 onClick={() => onSelectTrace(trace.traceId)}
+                title={trace.endpoint}
+                aria-label={`${trace.endpoint} · ${statusLabel} · Trace ${trace.traceId.slice(0, 8)}`}
               >
                 <div>
                   <strong>{trace.endpoint}</strong>
@@ -70,7 +84,7 @@ export function TraceHistoryPanel({
                 </div>
                 <div>
                   <span className={`pill pill--inline pill--${collectionTimedOut ? 'warning' : tone}`}>
-                    {collectionTimedOut ? '수집 시간 초과' : EVENT_STATUS_LABEL[trace.resultStatus]}
+                    {statusLabel}
                   </span>
                   <span>{trace.durationMs}ms</span>
                 </div>
@@ -79,6 +93,6 @@ export function TraceHistoryPanel({
           })
         )}
       </div>
-    </div>
+    </section>
   )
 }
