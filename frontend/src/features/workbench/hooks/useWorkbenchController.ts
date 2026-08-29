@@ -46,16 +46,18 @@ export function useWorkbenchController() {
     ?? null
   const hasDetectedDomains = project.projectStructure.domains.length > 0
   const hasDetectedApis = project.apiCatalog.length > 0
+  const analysisUsable = project.analysisResultState === 'current' && project.analysisState === 'idle'
+  const hasUsableApis = analysisUsable && hasDetectedApis
   const domainApis = project.apiCatalog.filter((api) => api.domainId === selectedDomain.id)
   const scopedApis = project.apiScope === 'all' ? project.apiCatalog : domainApis
   const visibleApis = filterApis(scopedApis, request.endpointSearch)
   const selectedApi = scopedApis.find((api) => api.id === project.selectedApiId) ?? scopedApis[0] ?? EMPTY_API_DEFINITION
-  const hasConcreteMethod = hasDetectedApis && isConcreteMethodApi(selectedApi)
+  const hasConcreteMethod = hasUsableApis && isConcreteMethodApi(selectedApi)
   const runtimeSupported = hasConcreteMethod
     && project.analysisTarget === 'sample'
     && isStackFlowRuntimeApi(selectedApi)
   const externalRunnable = hasConcreteMethod && project.analysisTarget === 'external'
-  const analyzeOnly = hasDetectedApis && !runtimeSupported && !externalRunnable
+  const analyzeOnly = hasUsableApis && !runtimeSupported && !externalRunnable
   const demoTraceReady = import.meta.env.VITE_DEMO_TRACE_READY === 'true'
     && project.projectPath.trim() === import.meta.env.VITE_DEFAULT_PROJECT_PATH
   const externalTraceConfigured = project.analysisTarget === 'external'
@@ -66,7 +68,7 @@ export function useWorkbenchController() {
   const traceActions = useTraceActions({ project, request, runtime, lifecycle })
   const requestActions = useRequestActions({
     project, request, runtime, traceActions, lifecycle, selectedApi,
-    hasDetectedApis, runtimeSupported, externalRunnable, analyzeOnly,
+    hasDetectedApis: hasUsableApis, runtimeSupported, externalRunnable, analyzeOnly,
     externalTraceConfigured, setActiveView: setActiveViewState,
   })
   const projectActions = useProjectActions({
@@ -107,7 +109,7 @@ export function useWorkbenchController() {
   const commonLayerGroups = groupProjectLayers(buildCommonProjectLayers(project.projectStructure))
   const commonClassCount = commonLayerGroups.reduce((sum, group) => sum + group.classes.length, 0)
   const activeRoute = graph.states.filter((state) => state.active)
-  const estimatedFlow = hasDetectedApis ? buildEstimatedFlow(selectedApi, selectedDomain) : []
+  const estimatedFlow = hasUsableApis ? buildEstimatedFlow(selectedApi, selectedDomain) : []
   const selectedRuntimeServiceName = selectedService
     ? normalizeServiceName(selectedService.structure.projectName)
     : runtime.traceDetail?.serviceName
@@ -168,6 +170,12 @@ export function useWorkbenchController() {
   const currentResultStatus: EventStatus | 'IDLE' = request.externalResponse?.resultStatus
     ?? runtime.traceDetail?.resultStatus
     ?? 'IDLE'
+  const effectiveProjectStatus = project.analysisState === 'error' || project.analysisResultState === 'none'
+    ? 'FAILED'
+    : project.projectStructure.analysisStatus
+  const projectDisplayName = project.analysisResultState === 'none' && project.projectPath.trim()
+    ? project.projectPath.trim().split(/[/\\]/).filter(Boolean).at(-1) ?? '외부 프로젝트'
+    : project.projectStructure.projectName
 
   /* oxlint-disable react-hooks/exhaustive-deps -- Initial loading runs once; action hooks own cancellation. */
   useEffect(() => {
@@ -196,11 +204,11 @@ export function useWorkbenchController() {
   return {
     shell: {
       activeView, setActiveView,
-      projectName: project.projectStructure.projectName,
-      projectStatus: project.projectStructure.analysisStatus,
+      projectName: projectDisplayName,
+      projectStatus: effectiveProjectStatus,
       analysisTarget: project.analysisTarget,
-      hasDetectedApis,
-      requestReady: hasDetectedApis && hasConcreteMethod,
+      hasDetectedApis: hasUsableApis,
+      requestReady: hasUsableApis && hasConcreteMethod,
       traceId: runtime.traceDetail?.traceId ?? null,
       traceResultStatus: currentResultStatus,
       traceDisplayStatus,
@@ -210,7 +218,7 @@ export function useWorkbenchController() {
       ...project, ...projectActions,
       setActiveView, selectApi: requestActions.selectApi,
       setExternalResponse: request.setExternalResponse,
-      selectedDomain, hasDetectedDomains, hasDetectedApis, projectMetrics,
+      selectedDomain, hasDetectedDomains, hasDetectedApis, analysisUsable, projectMetrics,
       workspaceServices, selectedService, workspaceMetrics, receivedAgentCount,
       domainLayerGroups, domainStructurePath, supportingDomainGroups,
       commonLayerGroups, commonClassCount, selectedApi, selectedApiMethodLabel,
@@ -221,7 +229,7 @@ export function useWorkbenchController() {
     requestView: {
       ...project, ...request, ...requestActions,
       setActiveView, selectedDomain, domainApis, visibleApis, selectedApi,
-      hasDetectedApis, hasConcreteMethod, runtimeSupported, externalRunnable, analyzeOnly,
+      hasDetectedApis: hasUsableApis, hasConcreteMethod, runtimeSupported, externalRunnable, analyzeOnly,
       externalTraceConfigured, externalTraceVerified, hasIntegrationBoundary,
       estimatedFlow, runtimeModeLabel, selectedApiMethodLabel,
       selectedApiMethodClassName, formattedResponseBody, formattedExternalResponseBody,

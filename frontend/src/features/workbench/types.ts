@@ -6,6 +6,7 @@ import type {
 } from '../../types/trace'
 
 export type AnalysisTarget = 'sample' | 'external'
+export type AnalysisResultState = 'none' | 'current' | 'stale'
 export type AsyncState = 'idle' | 'loading' | 'error'
 export type ApiScope = 'all' | 'domain'
 export type RequestOptionTab = 'query' | 'headers' | 'body'

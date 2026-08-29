@@ -8,7 +8,7 @@ import {
 } from '../../../api/stackflow'
 import type { ProjectDomain, ProjectStructure, WorkspaceAnalysis, WorkspaceService } from '../../../types/trace'
 import type { ViewMode } from '../../../ui/copy'
-import { EMPTY_API_DEFINITION, EMPTY_DOMAIN, FALLBACK_API_CATALOG, FALLBACK_PROJECT_STRUCTURE } from '../fixtures'
+import { EMPTY_API_DEFINITION, EMPTY_DOMAIN } from '../fixtures'
 import type { AnalysisTarget, ApiDefinition } from '../types'
 import { getDefaultPathVariable } from '../requestModel'
 import { flattenProjectApis, flattenServiceApis } from '../workbenchModel'
@@ -31,6 +31,7 @@ export function useProjectActions({ project, request, runtime, lifecycle, setAct
     analyzedCatalog: ApiDefinition[],
     message: string,
     target: AnalysisTarget,
+    successfulPath?: string | null,
   ) => {
     lifecycle.invalidateActiveRun()
     startTransition(() => {
@@ -38,6 +39,10 @@ export function useProjectActions({ project, request, runtime, lifecycle, setAct
       project.setApiCatalog(analyzedCatalog)
       project.setCatalogSource('analyzed')
       project.setAnalysisTarget(target)
+      project.setAnalysisResultState('current')
+      project.setLastSuccessfulProjectPath(target === 'external'
+        ? (successfulPath ?? project.projectPath.trim())
+        : null)
       project.setApiScope(target === 'external' ? 'all' : 'domain')
       project.setAnalysisMessage(message)
       project.setSelectedDomainId((current) => structure.domains.some((domain) => domain.id === current)
@@ -56,7 +61,7 @@ export function useProjectActions({ project, request, runtime, lifecycle, setAct
     })
   }, [lifecycle, project, request, runtime])
 
-  const applyWorkspaceAnalysis = useCallback((workspace: WorkspaceAnalysis) => {
+  const applyWorkspaceAnalysis = useCallback((workspace: WorkspaceAnalysis, successfulPath?: string) => {
     const selectedService = workspace.services.find((service) => service.serviceId === project.selectedServiceId)
       ?? workspace.services[0]
     if (!selectedService) throw new Error('Workspace에서 분석 가능한 Spring 서비스를 찾지 못했습니다.')
@@ -66,6 +71,7 @@ export function useProjectActions({ project, request, runtime, lifecycle, setAct
       catalog,
       `${workspace.services.length}개 서비스를 분석했습니다. 서비스를 선택해 API 구조를 확인하세요.`,
       'external',
+      successfulPath,
     )
     project.setWorkspace(workspace)
     project.setSelectedServiceId(selectedService.serviceId)
@@ -74,36 +80,39 @@ export function useProjectActions({ project, request, runtime, lifecycle, setAct
 
   const loadApiCatalog = useCallback(async () => {
     const runId = runtime.activeRunIdRef.current
+    const defaultProjectPath = import.meta.env.VITE_DEFAULT_PROJECT_PATH
     try {
-      const defaultProjectPath = import.meta.env.VITE_DEFAULT_PROJECT_PATH
       if (defaultProjectPath) {
         const workspace = await analyzeWorkspace(defaultProjectPath)
         if (!lifecycle.isCurrentRun(runId)) return
-        applyWorkspaceAnalysis(workspace)
+        const failed = workspace.services.length === 0
+          || workspace.services.every((service) => service.structure.analysisStatus === 'FAILED')
+        if (failed) {
+          throw new Error(workspace.warnings[0]
+            ?? workspace.services[0]?.structure.analysisMessage
+            ?? 'Workspace에서 분석 가능한 Spring 서비스를 찾지 못했습니다.')
+        }
+        applyWorkspaceAnalysis(workspace, defaultProjectPath)
+        project.setAnalysisState('idle')
         return
       }
       const structure = await getProjectStructure()
       if (!lifecycle.isCurrentRun(runId)) return
+      if (structure.analysisStatus === 'FAILED') throw new Error(structure.analysisMessage)
       applyProjectStructure(
         structure,
         flattenProjectApis(structure),
         structure.analysisMessage,
         defaultProjectPath ? 'external' : 'sample',
       )
-    } catch {
+      project.setAnalysisState('idle')
+    } catch (error) {
       if (!lifecycle.isCurrentRun(runId)) return
       startTransition(() => {
-        project.setProjectStructure(FALLBACK_PROJECT_STRUCTURE)
-        project.setApiCatalog(FALLBACK_API_CATALOG)
-        project.setCatalogSource('fallback')
-        project.setAnalysisTarget('sample')
-        project.setAnalysisMessage('샘플 프로젝트를 표시하고 있습니다. 직접 분석하려면 프로젝트 경로를 입력하세요.')
-        project.setSelectedDomainId((current) => FALLBACK_PROJECT_STRUCTURE.domains.some((domain) => domain.id === current)
-          ? current
-          : FALLBACK_PROJECT_STRUCTURE.domains[0].id)
-        project.setSelectedApiId((current) => FALLBACK_API_CATALOG.some((api) => api.id === current)
-          ? current
-          : FALLBACK_API_CATALOG[0].id)
+        project.setAnalysisTarget(defaultProjectPath ? 'external' : 'sample')
+        project.setAnalysisState('error')
+        project.setAnalysisResultState('none')
+        project.setAnalysisMessage(error instanceof Error ? error.message : '프로젝트 분석에 실패했습니다.')
       })
     }
   }, [applyProjectStructure, applyWorkspaceAnalysis, lifecycle, project, runtime.activeRunIdRef])
@@ -112,6 +121,7 @@ export function useProjectActions({ project, request, runtime, lifecycle, setAct
     const requestedPath = pathOverride ?? project.projectPath
     if (pathOverride === undefined && !requestedPath.trim()) {
       project.setAnalysisState('error')
+      project.setAnalysisResultState(project.analysisResultState === 'none' ? 'none' : 'stale')
       project.setAnalysisMessage('분석할 프로젝트 폴더를 선택하거나 절대 경로를 입력하세요. 데모는 별도 버튼으로 열 수 있습니다.')
       return
     }
@@ -125,22 +135,31 @@ export function useProjectActions({ project, request, runtime, lifecycle, setAct
       if (target === 'external') {
         const workspace = await analyzeWorkspace(requestedPath)
         if (!lifecycle.isCurrentRun(runId)) return
-        applyWorkspaceAnalysis(workspace)
-        const failed = workspace.services.every((service) => service.structure.analysisStatus === 'FAILED')
-        project.setAnalysisState(failed ? 'error' : 'idle')
+        const failed = workspace.services.length === 0
+          || workspace.services.every((service) => service.structure.analysisStatus === 'FAILED')
+        if (failed) {
+          throw new Error(workspace.warnings[0]
+            ?? workspace.services[0]?.structure.analysisMessage
+            ?? 'Workspace에서 분석 가능한 Spring 서비스를 찾지 못했습니다.')
+        }
+        applyWorkspaceAnalysis(workspace, requestedPath.trim())
+        project.setAnalysisState('idle')
       } else {
         const structure = await analyzeProject(requestedPath)
         if (!lifecycle.isCurrentRun(runId)) return
+        if (structure.analysisStatus === 'FAILED') throw new Error(structure.analysisMessage)
         project.setWorkspace(null)
         project.setSelectedServiceId(null)
-        applyProjectStructure(structure, flattenProjectApis(structure), structure.analysisMessage, target)
-        project.setAnalysisState(structure.analysisStatus === 'FAILED' ? 'error' : 'idle')
+        applyProjectStructure(structure, flattenProjectApis(structure), structure.analysisMessage, target, null)
+        project.setAnalysisState('idle')
       }
       setActiveView('project')
     } catch (error) {
       if (!lifecycle.isCurrentRun(runId)) return
       project.setAnalysisState('error')
+      project.setAnalysisResultState(project.analysisResultState === 'none' ? 'none' : 'stale')
       project.setAnalysisMessage(error instanceof Error ? error.message : '프로젝트 분석에 실패했습니다.')
+      setActiveView('project')
     }
   }, [applyProjectStructure, applyWorkspaceAnalysis, lifecycle, project, runtime.activeRunIdRef, setActiveView])
 
@@ -169,7 +188,7 @@ export function useProjectActions({ project, request, runtime, lifecycle, setAct
   }, [project])
 
   const generateInstrumentationProfile = useCallback(async () => {
-    if (project.analysisTarget !== 'external' || !project.projectPath.trim()) {
+    if (project.analysisResultState !== 'current' || project.analysisTarget !== 'external' || !project.projectPath.trim()) {
       project.setProfileState('error')
       project.setProfileMessage('먼저 외부 Spring 프로젝트 경로를 분석하세요.')
       return

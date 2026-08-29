@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useInstrumentationStatus } from '../../../hooks/useInstrumentationStatus'
 import { useWorkspaceInstrumentationStatus } from '../../../hooks/useWorkspaceInstrumentationStatus'
 import type { InstrumentationProfile, ProjectStructure, WorkspaceAnalysis, WorkspaceServiceProfile } from '../../../types/trace'
-import type { ActionFields, AnalysisTarget, ApiDefinition, ApiScope, AsyncState, StateFields } from '../types'
+import type { ActionFields, AnalysisResultState, AnalysisTarget, ApiDefinition, ApiScope, AsyncState, StateFields } from '../types'
 
 export function useProjectWorkspace(
   initialStructure: ProjectStructure,
@@ -19,6 +19,8 @@ export function useProjectWorkspace(
   const [catalogSource, setCatalogSource] = useState<'analyzed' | 'fallback'>('fallback')
   const [analysisTarget, setAnalysisTarget] = useState<AnalysisTarget>('sample')
   const [analysisState, setAnalysisState] = useState<AsyncState>('idle')
+  const [analysisResultState, setAnalysisResultState] = useState<AnalysisResultState>('none')
+  const [lastSuccessfulProjectPath, setLastSuccessfulProjectPath] = useState<string | null>(null)
   const [analysisMessage, setAnalysisMessage] = useState('기본 StackFlow 샘플 프로젝트를 사용하고 있습니다.')
   const [selectedApiId, setSelectedApiId] = useState(initialCatalog[0]?.id ?? 'empty-api')
   const [selectedDomainId, setSelectedDomainId] = useState(initialStructure.domains[0]?.id ?? 'empty')
@@ -50,6 +52,8 @@ export function useProjectWorkspace(
     catalogSource, setCatalogSource,
     analysisTarget, setAnalysisTarget,
     analysisState, setAnalysisState,
+    analysisResultState, setAnalysisResultState,
+    lastSuccessfulProjectPath, setLastSuccessfulProjectPath,
     analysisMessage, setAnalysisMessage,
     selectedApiId, setSelectedApiId,
     selectedDomainId, setSelectedDomainId,
