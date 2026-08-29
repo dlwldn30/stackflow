@@ -162,7 +162,9 @@ VITE_API_TARGET=http://localhost:18080 npm run dev
 
 현재 지원 범위는 다음과 같습니다.
 
-- Java 기반 Spring Boot와 로컬 단일 JVM 또는 2개 서비스 데모
+- Java 기반 Spring Boot 단일 프로젝트와 최대 10개 프로젝트의 로컬 Workspace 분석
+- 단일 JVM Trace와 동기 HTTP로 연결된 2개 Spring Boot JVM 분산 Trace 데모
+- 서비스별 Agent profile·실행 명령과 실제 `service.name` 기반 Waterfall·그래프 경계
 - Spring MVC, JDBC, Lettuce 등 Java Agent가 지원하는 자동 계측
 - Gradle, Maven, 실행 JAR용 Agent 명령 생성
 - 메모리 기반 Trace 저장과 15초 수집 timeout
@@ -170,7 +172,8 @@ VITE_API_TARGET=http://localhost:18080 npm run dev
 현재 제외 범위:
 
 - Kotlin과 합성 annotation의 추측 분석
-- 메시지 큐와 비동기 consumer를 포함한 분산 Trace
+- Kafka·RabbitMQ 같은 메시지 큐와 비동기 consumer Trace
+- 세 개 이상 서비스의 공개 데모와 production 규모 분산 Trace 운영
 - 실행 중 JVM 동적 attach
 - 인증, 영구 저장, sampling 관리
 - production APM 운영과 AI 원인 분석
@@ -192,10 +195,12 @@ cd backend && ./gradlew test --rerun-tasks
 cd ../examples/distributed-trace-lab/order-service && ./gradlew test
 cd ../product-service && ./gradlew test
 cd ../../../frontend && npm run test && npm run lint && npm run build
+cd .. && docker compose up --build --wait
+cd frontend && npx playwright install chromium && npm run test:e2e
 cd .. && docker compose config && ./scripts/verify-demo.sh
 ```
 
-GitHub Actions는 backend, Trace Lab, frontend, 실제 Docker Compose E2E를 PR마다 실행합니다.
+GitHub Actions는 backend, 두 Trace Lab, frontend 단위 검사, 실제 Chromium UI E2E와 Docker API 시나리오를 PR마다 실행합니다. 브라우저 E2E는 정상 Order→Product 호출과 Product PostgreSQL timeout 전파를 검증하고, `verify-demo.sh`는 cache·Redis 장애를 포함한 6개 시나리오를 검증합니다.
 
 비데모 Spring Boot 3.4.1 프로젝트에서도 Java 224개, Controller 15개, REST endpoint 42개를 분석하고 `Controller → Redis PING` 실제 Trace를 수집했습니다. 자세한 근거는 [v0.1.1 외부 프로젝트 검증](docs/v0.1.1-external-project-validation.md)에 기록했습니다.
 

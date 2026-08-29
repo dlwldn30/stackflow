@@ -1,8 +1,7 @@
 # StackFlow Product Direction and Implementation Plan
 
-Date: 2026-07-29
-Status: Draft
-Branch context: `feat/9-external-api-target-base-url`
+Date: 2026-08-28
+Status: Active
 
 ## Purpose
 
@@ -33,46 +32,26 @@ The initial target should not be:
 
 - Production incident response.
 - Full APM replacement.
-- Distributed tracing across microservices.
+- Production-scale trace ingestion across arbitrary services.
 - Security-sensitive production monitoring.
 
 ## Current State
 
-The repository already has the first runtime trace slice:
+The repository now provides an end-to-end local tracing workbench:
 
-- Spring Boot backend.
-- React + Vite frontend.
-- Sample product APIs.
-- SSE-based live trace streaming.
-- Request flow graph.
-- Node detail panel.
-- Response body panel.
-- Recent trace history.
-
-The repository also has early static project analysis:
-
-- Analyze a Spring Boot project path.
-- Detect REST controllers.
-- Extract API mappings.
-- Group APIs into domains.
-- Summarize layers such as Controller, Service, Repository, Cache, Store, DTO, and Domain.
-
-The repository is adding external target execution:
-
-- Configure a target base URL for an analyzed Spring Boot project.
-- Call the selected external endpoint through the StackFlow backend proxy.
-- Compose query parameters, headers, and JSON request body for external endpoint execution.
-- Show HTTP status, duration, content type, response body, and transport error message.
-- Show the request summary next to the response so users can compare what was sent and what came back.
-- Keep external execution results separate from runtime trace evidence.
-- Preview a browser-selected local folder, while keeping explicit project path input for backend analysis because browser mode cannot reliably expose the absolute local path.
+- Analyze one Spring Boot project or a workspace containing up to ten independent Gradle or Maven services.
+- Detect controllers, mappings, domains, layers, infrastructure evidence, and analysis coverage warnings.
+- Generate service-specific OpenTelemetry Java Agent profiles without changing target source or build files.
+- Execute selected APIs through the backend proxy with a StackFlow-owned W3C `traceparent`.
+- Receive OTLP HTTP/protobuf spans and render Waterfall, graph, events, failure propagation, exception detail, and response preview.
+- Correlate synchronous HTTP spans across the bundled Order and Product JVMs by actual `spanId`, `parentSpanId`, and `service.name`.
+- Verify the representative distributed UI flows with Playwright and the six infrastructure scenarios with Docker Compose.
 
 Current limitation:
 
-- External project analysis and StackFlow sample runtime tracing are still separate concepts.
-- Selecting an analyzed external API does not automatically mean StackFlow can trace that external app internally.
-- Without instrumentation inside the external app, StackFlow can only show structure and estimated flow.
-- External API execution confirms the endpoint response, but it still cannot prove the internal Controller -> Service -> Repository path.
+- Runtime tracing still requires restarting each target JVM with the generated Agent command.
+- The validated distributed demo is two local Spring Boot JVMs connected by synchronous HTTP.
+- Message brokers, asynchronous consumers, authentication, durable storage, and production retention are not supported.
 
 ## Product Information Architecture
 
@@ -266,7 +245,7 @@ Reason:
 Scope:
 
 - Turn static analysis into an instrumentation profile for a local external Spring Boot application.
-- Trace one Spring Boot JVM with the OpenTelemetry Java Agent and OTLP HTTP/protobuf.
+- Trace one JVM or a local workspace of synchronously connected Spring Boot JVMs with the OpenTelemetry Java Agent and OTLP HTTP/protobuf.
 - Keep the target project's source and Gradle/Maven files unchanged.
 
 Implementation:
@@ -276,6 +255,8 @@ Implementation:
 - Receive standard OTLP traces through `POST /v1/traces`.
 - Inject a StackFlow-owned W3C `traceparent` when `POST /api/external/request` runs with trace capture enabled.
 - Join received spans by trace ID and build the actual graph from `spanId -> parentSpanId`.
+- Analyze workspace services separately, generate one Agent profile per service, and preserve entry and participating service names.
+- Complete distributed collection after the entry SERVER span, HTTP response, and a two-second quiet period, with a 15-second hard timeout.
 - Keep sample traces on the existing fixed graph and use a dynamic graph only for `source=OPENTELEMETRY`.
 - Distinguish HTTP execution failure from `TRACE_COLLECTION_TIMEOUT` when no spans arrive for 15 seconds.
 
@@ -286,9 +267,9 @@ Reason:
 
 Limits:
 
-- First support is local development and one Spring Boot JVM.
+- Supported operation is local development; the bundled and automated distributed acceptance path uses two Spring Boot JVMs connected by synchronous HTTP.
 - The target JVM must be restarted with the Agent; dynamic attach is not supported.
-- Distributed services, authentication, persistence, sampling controls, and production APM operation remain later phases.
+- Message queues, asynchronous consumers, authentication, persistence, sampling controls, and production APM operation remain later phases.
 - See `docs/external-runtime-tracing-design.md` for the executable contract and metadata policy.
 
 ## Implementation Rules Going Forward
@@ -306,8 +287,8 @@ The UI now separates the workflow into three evidence stages:
 
 - `Project`: static Spring structure and analysis coverage.
 - `Request`: API input, execution target, and HTTP response.
-- `Trace`: actual OTLP Waterfall, failure propagation, response preview, and exception detail.
+- `Trace`: actual OTLP Waterfall, service boundaries, failure propagation, response preview, and exception detail.
 
-The next compatibility task is to normalize both legacy and current OpenTelemetry code semantic keys. In particular, the Java Agent can emit `code.function` while the current Inspector also expects `code.function.name`. Supporting both keys will keep class and method location summaries accurate across Agent versions.
+Legacy and current OpenTelemetry code semantic keys are normalized in the frontend display layer. A non-demo Spring Boot 3.4.1 project and the two-service Order·Product workspace are both recorded acceptance paths.
 
-After that compatibility fix, validate one non-demo Spring Boot project end to end and publish the verified state as `v0.1.1`.
+The next delivery task is portfolio packaging: align public screenshots and demo media with the distributed Trace flow, document the verified limits, and publish a release from a clean, green `main`.
