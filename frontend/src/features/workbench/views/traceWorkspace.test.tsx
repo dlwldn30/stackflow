@@ -64,7 +64,7 @@ describe('Trace workspace presentation', () => {
       httpStatus: 200, durationMs: 12, startedAt: new Date(0).toISOString(), traceCollectionStatus: 'DISABLED',
     }]
     render(
-      <TraceHistoryPanel traces={traces} totalCount={1} filter="all" selectedTraceId={null} onFilterChange={onFilterChange} onSelectTrace={vi.fn()} />,
+      <TraceHistoryPanel traces={traces} totalCount={1} filter="all" selectedTraceId={null} onFilterChange={onFilterChange} onSelectTrace={vi.fn()} onNavigateToRequest={vi.fn()} />,
     )
     fireEvent.click(screen.getByRole('button', { name: '확인 필요' }))
     expect(onFilterChange).toHaveBeenCalledWith('attention')
@@ -76,10 +76,26 @@ describe('Trace workspace presentation', () => {
       httpStatus: 200, durationMs: 12, startedAt: new Date(0).toISOString(), traceCollectionStatus: 'TIMED_OUT',
     }]
     const { container } = render(
-      <TraceHistoryPanel traces={traces} totalCount={1} filter="all" selectedTraceId={null} onFilterChange={vi.fn()} onSelectTrace={vi.fn()} />,
+      <TraceHistoryPanel traces={traces} totalCount={1} filter="all" selectedTraceId={null} onFilterChange={vi.fn()} onSelectTrace={vi.fn()} onNavigateToRequest={vi.fn()} />,
     )
     const timeoutPill = within(container).getByText('수집 시간 초과')
     expect(timeoutPill).toHaveClass('pill--warning')
+  })
+
+  it('offers API navigation only when there is no trace history at all', () => {
+    const onNavigateToRequest = vi.fn()
+    const { rerender } = render(
+      <TraceHistoryPanel traces={[]} totalCount={0} filter="all" selectedTraceId={null} onFilterChange={vi.fn()} onSelectTrace={vi.fn()} onNavigateToRequest={onNavigateToRequest} />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'API 요청으로 이동' }))
+    expect(onNavigateToRequest).toHaveBeenCalledOnce()
+
+    rerender(
+      <TraceHistoryPanel traces={[]} totalCount={2} filter="timeout" selectedTraceId={null} onFilterChange={vi.fn()} onSelectTrace={vi.fn()} onNavigateToRequest={onNavigateToRequest} />,
+    )
+    expect(screen.getByText('이 조건에 맞는 Trace가 없습니다.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'API 요청으로 이동' })).not.toBeInTheDocument()
   })
 
   it('shows selected span facts and keeps raw details collapsed', () => {

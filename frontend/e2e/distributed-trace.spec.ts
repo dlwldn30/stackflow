@@ -24,6 +24,10 @@ test.describe.serial('분산 Trace 사용자 흐름', () => {
     await expectMetric(outcome, '진입 서비스', 'order-service')
     await expect(outcome.getByText(/2개 · 경계 1회/)).toBeVisible()
 
+    const history = page.getByRole('region', { name: '최근 Trace 탐색' })
+    await expect(history).toBeVisible()
+    await expect(history.locator('.trace-item.is-selected')).toHaveAccessibleName(/\/lab\/orders\/2001 · 성공/)
+
     const waterfall = page.getByRole('region', { name: 'Span 타임라인' })
     await expect(waterfall.getByText('서비스 경계', { exact: true })).toBeVisible()
     await expect(waterfall.getByText('order-service → product-service', { exact: true })).toBeVisible()
@@ -32,6 +36,16 @@ test.describe.serial('분산 Trace 사용자 흐름', () => {
     await expect(page.locator('.service-area').filter({ hasText: 'order-service' })).toBeVisible()
     await expect(page.locator('.service-area').filter({ hasText: 'product-service' })).toBeVisible()
     await expect(page.locator('.react-flow__edge-text').filter({ hasText: 'order-service → product-service' })).toBeVisible()
+
+    await page.setViewportSize({ width: 390, height: 844 })
+    await expect.poll(() => page.evaluate(() =>
+      document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    )).toBe(0)
+    const graphTop = await page.locator('.graph-panel').evaluate((element) => element.getBoundingClientRect().top + window.scrollY)
+    const inspectorTop = await page.locator('.workspace--runtime .right-panel').evaluate((element) => element.getBoundingClientRect().top + window.scrollY)
+    const historyTop = await page.getByRole('region', { name: '최근 Trace 탐색' }).evaluate((element) => element.getBoundingClientRect().top + window.scrollY)
+    expect(graphTop).toBeLessThan(inspectorTop)
+    expect(inspectorTop).toBeLessThan(historyTop)
   })
 
   test('Product PostgreSQL timeout의 원인과 Order까지의 오류 전파를 표시한다', async ({ page }) => {
@@ -53,11 +67,6 @@ test.describe.serial('분산 Trace 사용자 흐름', () => {
     await expect(inspector).toContainText(/PostgreSQL|POSTGRESQL/)
     await expect(inspector.locator('.trace-inspector-error')).toBeVisible()
 
-    await page.setViewportSize({ width: 390, height: 844 })
-    await expect.poll(() => page.evaluate(() =>
-      document.documentElement.scrollWidth - document.documentElement.clientWidth,
-    )).toBe(0)
-    await expect(page.getByRole('region', { name: 'Span 타임라인' })).toBeVisible()
   })
 })
 

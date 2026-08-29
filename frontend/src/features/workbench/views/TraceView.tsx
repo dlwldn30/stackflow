@@ -29,25 +29,15 @@ export function TraceView({ model }: TraceViewProps) {
   return (
     <section className="workspace workspace--runtime">
       <aside className="left-panel control-rail">
-        <div className="panel-card control-card">
-          <div className="panel-header control-header">
-            <div>
-              <span className="section-label">실행 기록</span>
-              <h2>최근 Trace</h2>
-              <p>이전 실행 기록을 다시 확인할 수 있습니다.</p>
-            </div>
-            <StatusBadge tone="info">{recentTraces.length}개 기록</StatusBadge>
-          </div>
-            <TraceHistoryPanel
-              traces={filteredRecentTraces}
-              totalCount={recentTraces.length}
-              filter={traceHistoryFilter}
-              selectedTraceId={traceDetail?.traceId ?? null}
-              onFilterChange={setTraceHistoryFilter}
-              onSelectTrace={(traceId) => void selectTrace(traceId)}
-            />
-
-        </div>
+        <TraceHistoryPanel
+          traces={filteredRecentTraces}
+          totalCount={recentTraces.length}
+          filter={traceHistoryFilter}
+          selectedTraceId={traceDetail?.traceId ?? null}
+          onFilterChange={setTraceHistoryFilter}
+          onSelectTrace={(traceId) => void selectTrace(traceId)}
+          onNavigateToRequest={() => setActiveView('api')}
+        />
       </aside>
       <section className="graph-panel">
             <div className="panel-card panel-card--graph">
