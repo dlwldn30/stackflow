@@ -1,8 +1,9 @@
-import { act, renderHook, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, render, renderHook, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ExternalRequestResponse } from '../../../types/trace'
 import { FALLBACK_API_CATALOG, FALLBACK_PROJECT_STRUCTURE } from '../fixtures'
 import { useWorkbenchController } from './useWorkbenchController'
+import { ProjectView } from '../views/ProjectView'
 
 const apiMocks = vi.hoisted(() => ({
   analyzeProject: vi.fn(),
@@ -29,6 +30,79 @@ describe('useWorkbenchController request lifecycle', () => {
     vi.resetAllMocks()
     apiMocks.getProjectStructure.mockResolvedValue(FALLBACK_PROJECT_STRUCTURE)
     apiMocks.getRecentTraces.mockResolvedValue([])
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('shows an explicit failure instead of activating the sample when initial workspace analysis fails', async () => {
+    vi.stubEnv('VITE_DEFAULT_PROJECT_PATH', '/workspace/distributed-trace-lab')
+    apiMocks.analyzeWorkspace.mockRejectedValue(new Error('Gateway Timeout'))
+
+    const { result } = renderHook(() => useWorkbenchController())
+
+    await waitFor(() => expect(result.current.projectView.analysisState).toBe('error'))
+    expect(result.current.projectView.analysisResultState).toBe('none')
+    expect(result.current.projectView.analysisTarget).toBe('external')
+    expect(result.current.projectView.analysisMessage).toBe('Gateway Timeout')
+    expect(result.current.shell.projectStatus).toBe('FAILED')
+    expect(result.current.shell.projectName).toBe('distributed-trace-lab')
+    expect(result.current.shell.hasDetectedApis).toBe(false)
+    expect(result.current.shell.requestReady).toBe(false)
+    expect(apiMocks.getProjectStructure).not.toHaveBeenCalled()
+
+    render(<ProjectView model={result.current.projectView} />)
+    expect(screen.getByRole('heading', { name: 'distributed-trace-lab을 분석하지 못했습니다' })).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: '다시 분석' }).length).toBeGreaterThan(0)
+    expect(screen.getByRole('button', { name: '데모 프로젝트 열기' })).toBeInTheDocument()
+    expect(screen.queryByText('StackFlow 샘플')).not.toBeInTheDocument()
+  })
+
+  it('keeps a previous successful result as stale and restores it after a successful retry', async () => {
+    const nextWorkspace = {
+      workspaceName: 'orders',
+      services: [{ serviceId: 'orders', relativePath: '.', structure: FALLBACK_PROJECT_STRUCTURE }],
+      warnings: [],
+    }
+    apiMocks.analyzeWorkspace
+      .mockRejectedValueOnce(new Error('분석 서버 시간 초과'))
+      .mockResolvedValueOnce(nextWorkspace)
+    const { result } = renderHook(() => useWorkbenchController())
+    await waitFor(() => expect(result.current.projectView.analysisResultState).toBe('current'))
+
+    act(() => result.current.projectView.setProjectPath('/workspace/orders'))
+    await act(async () => result.current.projectView.analyzeProjectPath())
+
+    expect(result.current.projectView.analysisResultState).toBe('stale')
+    expect(result.current.projectView.projectStructure).toEqual(FALLBACK_PROJECT_STRUCTURE)
+    expect(result.current.shell.hasDetectedApis).toBe(false)
+    expect(result.current.shell.requestReady).toBe(false)
+
+    render(<ProjectView model={result.current.projectView} />)
+    expect(screen.getByText('이전 분석 결과를 읽기 전용으로 표시합니다.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '선택한 API로 요청' })).not.toBeInTheDocument()
+
+    await act(async () => result.current.projectView.analyzeProjectPath())
+
+    expect(result.current.projectView.analysisResultState).toBe('current')
+    expect(result.current.projectView.lastSuccessfulProjectPath).toBe('/workspace/orders')
+    expect(result.current.shell.hasDetectedApis).toBe(true)
+  })
+
+  it('activates the sample only after the user explicitly opens the demo', async () => {
+    vi.stubEnv('VITE_DEFAULT_PROJECT_PATH', '/workspace/unavailable')
+    apiMocks.analyzeWorkspace.mockRejectedValue(new Error('분석 실패'))
+    apiMocks.analyzeProject.mockResolvedValue(FALLBACK_PROJECT_STRUCTURE)
+    const { result } = renderHook(() => useWorkbenchController())
+    await waitFor(() => expect(result.current.projectView.analysisResultState).toBe('none'))
+
+    await act(async () => result.current.projectView.analyzeProjectPath(''))
+
+    expect(result.current.projectView.analysisResultState).toBe('current')
+    expect(result.current.projectView.analysisTarget).toBe('sample')
+    expect(result.current.projectView.lastSuccessfulProjectPath).toBeNull()
+    expect(result.current.shell.hasDetectedApis).toBe(true)
   })
 
   it('ignores request A after selecting API B', async () => {

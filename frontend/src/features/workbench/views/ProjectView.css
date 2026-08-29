@@ -115,6 +115,25 @@
   white-space: nowrap;
 }
 
+.analysis-summary__actions {
+  display: flex;
+  grid-column: 2 / -1;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.analysis-summary__actions button,
+.analysis-failure-empty__actions button {
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  background: #fff;
+  color: inherit;
+  padding: 6px 9px;
+  font-size: 0.68rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
 .analysis-summary > details {
   grid-column: 2 / -1;
 }
@@ -149,6 +168,75 @@
   border-color: rgba(194, 65, 60, 0.22);
   background: var(--color-error-soft);
   color: var(--color-error);
+}
+
+.workspace--project-result-none .service-compact,
+.workspace--project-result-none .domain-compact {
+  display: none;
+}
+
+.analysis-failure-empty {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-content: start;
+  gap: 14px;
+  min-height: 280px;
+  border-color: rgba(194, 65, 60, 0.28);
+  padding: 28px;
+  color: var(--color-error);
+}
+
+.analysis-failure-empty h2 {
+  margin: 5px 0 8px;
+  color: var(--color-text);
+  font-size: 1.05rem;
+}
+
+.analysis-failure-empty p,
+.analysis-failure-empty small {
+  display: block;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-muted);
+  line-height: 1.55;
+}
+
+.analysis-failure-empty__actions {
+  display: flex;
+  grid-column: 2;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.stale-analysis-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 14px;
+  border: 1px solid rgba(168, 100, 0, 0.28);
+  border-radius: 6px;
+  background: var(--color-warning-soft);
+  padding: 10px 12px;
+  color: var(--color-warning);
+}
+
+.stale-analysis-banner span,
+.stale-analysis-banner strong,
+.stale-analysis-banner small {
+  display: block;
+}
+
+.stale-analysis-banner small {
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+  color: var(--color-muted);
+  line-height: 1.45;
+}
+
+.workspace--project-result-stale .map-board,
+.workspace--project-result-stale .project-metric-strip {
+  opacity: 0.72;
 }
 
 .control-rail > .panel-card .project-strip {
@@ -1152,6 +1240,16 @@
   .workspace--project .control-header {
     margin: -12px -12px 0;
     padding: 14px 12px;
+  }
+
+  .analysis-failure-empty {
+    grid-template-columns: 1fr;
+    min-height: 0;
+    padding: 20px;
+  }
+
+  .analysis-failure-empty__actions {
+    grid-column: 1;
   }
 }
 .service-compact {

@@ -32,10 +32,13 @@ export function ProjectView({ model }: ProjectViewProps) {
     externalTraceVerified, instrumentationCommand,
     workspaceServices, selectedService, workspaceMetrics, receivedAgentCount,
     workspaceProfiles, workspaceInstrumentationStatuses, selectService,
+    analysisResultState, lastSuccessfulProjectPath, analysisUsable,
   } = model
 
+  const attemptedProjectName = projectPath.trim().split(/[/\\]/).filter(Boolean).at(-1) ?? '외부 프로젝트'
+
   return (
-    <section className="workspace workspace--project">
+    <section className={`workspace workspace--project workspace--project-result-${analysisResultState}`}>
       <aside className="left-panel control-rail">
         <div className="panel-card control-card">
           <div className="panel-header control-header">
@@ -44,8 +47,8 @@ export function ProjectView({ model }: ProjectViewProps) {
               <h2>프로젝트 열기</h2>
               <p>Spring Boot 루트 폴더를 선택하세요.</p>
             </div>
-            <StatusBadge tone={analysisTarget === 'external' ? 'success' : 'info'}>
-              {analysisTarget === 'external' ? '외부 프로젝트' : '샘플'}
+            <StatusBadge tone={analysisState === 'error' ? 'error' : analysisTarget === 'external' ? 'success' : 'info'}>
+              {analysisState === 'error' ? '분석 실패' : analysisTarget === 'external' ? '외부 프로젝트' : '샘플'}
             </StatusBadge>
           </div>
               <section className="setup-step setup-step--project">
@@ -101,7 +104,13 @@ export function ProjectView({ model }: ProjectViewProps) {
                 <div className={`analysis-summary analysis-summary--${analysisState === 'error' ? 'failed' : projectStructure.analysisStatus.toLowerCase()}`}>
                   {analysisState !== 'error' && projectStructure.analysisStatus === 'SUCCESS' ? <CheckCircle2 size={18} aria-hidden="true" /> : <AlertCircle size={18} aria-hidden="true" />}
                   <div>
-                    <span>{analysisTarget === 'external' ? projectStructure.projectName : 'StackFlow 샘플'}</span>
+                    <span>
+                      {analysisResultState === 'stale'
+                        ? `이전 분석 결과 · ${projectStructure.projectName}`
+                        : analysisResultState === 'none'
+                          ? attemptedProjectName
+                          : analysisTarget === 'external' ? projectStructure.projectName : 'StackFlow 샘플'}
+                    </span>
                     <strong>
                       {analysisState === 'error'
                         ? analysisMessage
@@ -112,16 +121,23 @@ export function ProjectView({ model }: ProjectViewProps) {
                           : PROJECT_STATUS_LABEL[projectStructure.analysisStatus]}
                     </strong>
                   </div>
-                  {hasDetectedApis && analysisState !== 'error' ? (
+                  {analysisUsable && hasDetectedApis ? (
                     <button type="button" onClick={() => setActiveView('api')}>
                       API 보기
                       <ArrowRight size={15} aria-hidden="true" />
                     </button>
+                  ) : analysisState === 'error' ? (
+                    <div className="analysis-summary__actions">
+                      <button type="button" onClick={() => void analyzeProjectPath()}>다시 분석</button>
+                      <button type="button" onClick={() => void analyzeProjectPath('')}>데모 열기</button>
+                    </div>
                   ) : null}
                   <details>
                     <summary>기술 메시지</summary>
                     <p>{analysisMessage}</p>
-                    <p>{projectStructure.analysisMessage}</p>
+                    {analysisResultState !== 'none' && projectStructure.analysisMessage !== analysisMessage
+                      ? <p>{projectStructure.analysisMessage}</p>
+                      : null}
                   </details>
                 </div>
               </div>
@@ -197,7 +213,31 @@ export function ProjectView({ model }: ProjectViewProps) {
         </div>
       </aside>
       <section className="graph-panel">
+        {analysisResultState === 'none' ? (
+          <div className="panel-card analysis-failure-empty" role="alert">
+            <AlertCircle size={24} aria-hidden="true" />
+            <div>
+              <span className="section-label">프로젝트 분석 실패</span>
+              <h2>{attemptedProjectName}을 분석하지 못했습니다</h2>
+              <p>{analysisMessage}</p>
+              <small>샘플 프로젝트로 자동 전환하지 않았습니다. 경로와 backend 상태를 확인한 뒤 다시 시도하세요.</small>
+            </div>
+            <div className="analysis-failure-empty__actions">
+              <button type="button" onClick={() => void analyzeProjectPath()}>다시 분석</button>
+              <button type="button" onClick={() => void analyzeProjectPath('')}>데모 프로젝트 열기</button>
+            </div>
+          </div>
+        ) : (
             <div className="panel-card panel-card--map">
+              {analysisResultState === 'stale' ? (
+                <div className="stale-analysis-banner" role="status">
+                  <AlertCircle size={17} aria-hidden="true" />
+                  <span>
+                    <strong>이전 분석 결과를 읽기 전용으로 표시합니다.</strong>
+                    <small>{lastSuccessfulProjectPath ?? projectStructure.projectName} · API 요청과 Trace 실행은 다시 분석한 뒤 사용할 수 있습니다.</small>
+                  </span>
+                </div>
+              ) : null}
               <header className="project-overview-head">
                 <div className="project-overview-title">
                   <span className="section-label">분석된 프로젝트</span>
@@ -242,7 +282,7 @@ export function ProjectView({ model }: ProjectViewProps) {
                       </div>
                       <p>{hasDetectedDomains ? getDomainDescription(selectedDomain, analysisTarget === 'sample') : projectStatusContent.headerSummary}</p>
                     </div>
-                    {selectedDomain.endpoints.length > 0 ? (
+                    {analysisUsable && selectedDomain.endpoints.length > 0 ? (
                       <button className="domain-primary-action" type="button" onClick={() => setActiveView('api')}>
                         선택한 API로 요청
                         <ArrowRight size={16} aria-hidden="true" />
@@ -345,9 +385,10 @@ export function ProjectView({ model }: ProjectViewProps) {
                 </section>
               </div>
             </div>
-
+        )}
       </section>
-      <aside className="right-panel inspector-rail">
+      {analysisResultState !== 'none' ? (
+        <aside className="right-panel inspector-rail">
             <div className="panel-card inspector-workbench">
               <div className="panel-header">
                 <div>
@@ -362,7 +403,7 @@ export function ProjectView({ model }: ProjectViewProps) {
                 <span><strong>{selectedDomain.infrastructure.length}</strong>개 인프라</span>
               </div>
 
-              {analysisTarget === 'external' && projectStructure.analysisStatus === 'SUCCESS' ? (
+              {analysisUsable && analysisTarget === 'external' && projectStructure.analysisStatus === 'SUCCESS' ? (
                 <details className="inspector-disclosure">
                   <summary>
                     <span>
@@ -529,7 +570,8 @@ export function ProjectView({ model }: ProjectViewProps) {
               </details>
             </div>
 
-      </aside>
+        </aside>
+      ) : null}
     </section>
   )
 }
