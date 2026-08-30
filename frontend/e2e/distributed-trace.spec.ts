@@ -16,6 +16,21 @@ test.describe.serial('분산 Trace 사용자 흐름', () => {
 
     await expect(page.getByLabel('대상 기본 URL')).toHaveValue('http://order-service:8092')
     await expect(page.getByLabel('Path variable 값')).toHaveValue('2001')
+    await expect(page.getByRole('region', { name: 'API 응답' })).toBeVisible()
+    await expect(page.locator('.request-flow-disclosure')).not.toHaveAttribute('open', '')
+
+    await page.setViewportSize({ width: 390, height: 844 })
+    await expect(page.getByRole('button', { name: /API 변경/ })).toBeVisible()
+    await expect.poll(() => page.evaluate(() =>
+      document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    )).toBe(0)
+    const composerTop = await page.getByRole('region', { name: 'API 요청 작성' }).evaluate((element) => element.getBoundingClientRect().top + window.scrollY)
+    const responseTop = await page.getByRole('region', { name: 'API 응답' }).evaluate((element) => element.getBoundingClientRect().top + window.scrollY)
+    const explorerTop = await page.locator('.request-endpoint-rail').evaluate((element) => element.getBoundingClientRect().top + window.scrollY)
+    expect(composerTop).toBeLessThan(responseTop)
+    expect(responseTop).toBeLessThan(explorerTop)
+    await page.setViewportSize({ width: 1440, height: 900 })
+
     await page.getByRole('button', { name: '요청 보내고 Trace 보기' }).click()
 
     const outcome = page.getByRole('region', { name: 'Trace 실행 결과' })
@@ -86,7 +101,7 @@ async function openEndpoint(page: Page, endpoint: string) {
   })
   await expect(endpointButton).toHaveCount(1)
   await endpointButton.click()
-  await expect(page.getByText(endpoint, { exact: true }).first()).toBeVisible()
+  await expect(endpointButton).toHaveClass(/is-selected/u)
 }
 
 async function expectMetric(outcome: ReturnType<Page['getByRole']>, label: string, value: string) {

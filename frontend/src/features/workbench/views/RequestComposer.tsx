@@ -1,11 +1,8 @@
-import { ArrowLeft, ExternalLink, Plus, Send, Trash2 } from 'lucide-react'
+import { Plus, Send, Trash2 } from 'lucide-react'
 import type {
   ExternalRequestEntry,
-  ExternalRequestResponse,
   TraceCollectionStatus,
-  TraceDetail,
 } from '../../../types/trace'
-import { TRACE_COLLECTION_STATUS_LABEL } from '../../../ui/copy'
 import { SCENARIOS } from '../fixtures'
 import { countEnabledEntries } from '../requestModel'
 import type { ApiDefinition, AsyncState, RequestOptionTab, ScenarioValue } from '../types'
@@ -35,12 +32,8 @@ type RequestComposerProps = {
   bodyAllowed: boolean
   requestState: AsyncState
   requestMessage: string
-  externalResponse: ExternalRequestResponse | null
-  traceDetail: TraceDetail | null
   traceCollectionStatus: TraceCollectionStatus
-  formattedExternalResponseBody: string | null
-  formattedResponseBody: string | null
-  onBackProject: () => void
+  responseAvailable: boolean
   onTargetBaseUrlChange: (value: string) => void
   onProductIdChange: (value: string) => void
   onScenarioChange: (value: ScenarioValue) => void
@@ -54,7 +47,6 @@ type RequestComposerProps = {
   onRemoveQueryParam: (id: string) => void
   onRemoveRequestHeader: (id: string) => void
   onRunRequest: () => void
-  onOpenTrace: () => void
 }
 
 export function RequestComposer(props: RequestComposerProps) {
@@ -83,24 +75,20 @@ export function RequestComposer(props: RequestComposerProps) {
     bodyAllowed,
     requestState,
     requestMessage,
-    externalResponse,
-    traceDetail,
     traceCollectionStatus,
-    formattedExternalResponseBody,
-    formattedResponseBody,
+    responseAvailable,
   } = props
-  const traceId = externalResponse?.traceId ?? traceDetail?.traceId ?? null
   const runLabel = getRunLabel(requestState, runtimeSupported, externalRunnable, externalTraceConfigured, externalTraceVerified)
-  const responseStatus = externalRunnable ? externalResponse?.resultStatus : traceDetail?.resultStatus
-  const responseHttpStatus = externalRunnable ? externalResponse?.httpStatus : traceDetail?.httpStatus
+  const targetMissing = externalRunnable && !targetBaseUrl.trim()
+  const requestBodyValidationError = requestBodyError ?? validateRequestBody(bodyAllowed, requestBody)
+  const showLiveStatus = requestState === 'loading'
+    || requestState === 'error' && !responseAvailable
+    || traceCollectionStatus === 'PENDING'
+    || traceCollectionStatus === 'COLLECTING'
 
   return (
     <section className="request-composer" aria-label="API 요청 작성">
       <header className="request-composer__header">
-        <button type="button" className="request-back-button" onClick={props.onBackProject}>
-          <ArrowLeft size={15} aria-hidden="true" />
-          프로젝트 구조
-        </button>
         <div className="request-breadcrumb">
           <span>{domainName}</span>
           <strong>{selectedApi.controller}.{selectedApi.handler}</strong>
@@ -136,7 +124,11 @@ export function RequestComposer(props: RequestComposerProps) {
           className="run-button request-command-run"
           type="button"
           onClick={props.onRunRequest}
-          disabled={requestState === 'loading' || !hasDetectedApis || analyzeOnly}
+          disabled={requestState === 'loading'
+            || !hasDetectedApis
+            || analyzeOnly
+            || targetMissing
+            || Boolean(requestBodyValidationError)}
         >
           <Send size={17} aria-hidden="true" />
           {runLabel}
@@ -145,6 +137,9 @@ export function RequestComposer(props: RequestComposerProps) {
 
       {!selectedApi.methodSpecified ? (
         <p className="request-method-warning">Controller mapping에 HTTP method가 명시되지 않아 요청을 실행할 수 없습니다.</p>
+      ) : null}
+      {targetMissing ? (
+        <p className="request-method-warning">요청을 실행하려면 대상 기본 URL을 입력하세요.</p>
       ) : null}
 
       <div className="request-form request-form--workspace">
@@ -200,7 +195,7 @@ export function RequestComposer(props: RequestComposerProps) {
                     rows={8}
                     spellCheck={false}
                   />
-                  {requestBodyError ? <small className="request-message--error">{requestBodyError}</small> : null}
+                  {requestBodyValidationError ? <small className="request-message--error">{requestBodyValidationError}</small> : null}
                 </label>
               ) : null}
             </div>
@@ -230,56 +225,12 @@ export function RequestComposer(props: RequestComposerProps) {
           </label>
         ) : null}
 
-        <div className={`request-live-status request-live-status--${requestState}`} aria-live="polite">
-          <span>{getExecutionStatus(requestState, traceCollectionStatus, externalResponse, traceDetail)}</span>
-          <p>{requestMessage}</p>
-        </div>
-
-        <section className="request-result-panel" aria-label="API 응답">
-          <div className="request-result-head">
-            <div>
-              <span className="section-label">응답</span>
-              <strong>{externalRunnable ? '외부 HTTP 결과' : '실행 결과'}</strong>
-            </div>
-            <div>
-              <span className={`pill pill--inline pill--${(responseStatus ?? 'idle').toLowerCase()}`}>
-                {responseHttpStatus ? `HTTP ${responseHttpStatus}` : '대기'}
-              </span>
-              {traceId ? (
-                <button type="button" className="trace-open-button" onClick={props.onOpenTrace}>
-                  Trace에서 보기 <ExternalLink size={14} aria-hidden="true" />
-                </button>
-              ) : null}
-              {externalResponse?.responseBodyTruncated ? (
-                <span className="response-truncated-badge" role="status">1MiB 일부</span>
-              ) : null}
-            </div>
+        {showLiveStatus ? (
+          <div className={`request-live-status request-live-status--${requestState}`} aria-live="polite">
+            <span>{getExecutionStatus(requestState, traceCollectionStatus)}</span>
+            <p>{requestMessage}</p>
           </div>
-          {externalRunnable ? (
-            externalResponse ? (
-              <>
-                <div className="request-result-meta">
-                  <span><strong>{externalResponse.durationMs}ms</strong>소요 시간</span>
-                  <span><strong>{externalResponse.contentType || '-'}</strong>Content-Type</span>
-                  <span><strong>{externalResponse.traceId?.slice(0, 8) || '-'}</strong>Trace ID</span>
-                </div>
-                {externalResponse.errorMessage ? <p className="external-error">{externalResponse.errorMessage}</p> : null}
-                {formattedExternalResponseBody
-                  ? <pre className="response-body response-body--external">{formattedExternalResponseBody}</pre>
-                  : <p className="empty-copy">응답 본문이 없습니다.</p>}
-              </>
-            ) : <p className="empty-copy">대상 URL을 입력하고 요청을 보내면 응답이 표시됩니다.</p>
-          ) : formattedResponseBody ? (
-            <>
-              <div className="request-result-meta">
-                <span><strong>{traceDetail?.durationMs ?? 0}ms</strong>소요 시간</span>
-                <span><strong>{traceDetail?.events.length ?? 0}</strong>실행 이벤트</span>
-                <span><strong>{traceDetail?.traceId.slice(0, 8) ?? '-'}</strong>Trace ID</span>
-              </div>
-              <pre className="response-body response-body--external">{formattedResponseBody}</pre>
-            </>
-          ) : <p className="empty-copy">요청을 실행하면 JSON 응답이 표시됩니다.</p>}
-        </section>
+        ) : null}
       </div>
     </section>
   )
@@ -366,12 +317,20 @@ function getRunLabel(
 function getExecutionStatus(
   requestState: AsyncState,
   traceCollectionStatus: TraceCollectionStatus,
-  externalResponse: ExternalRequestResponse | null,
-  traceDetail: TraceDetail | null,
 ) {
   if (requestState === 'loading') return traceCollectionStatus === 'PENDING' ? 'Span 대기' : '요청 중'
   if (requestState === 'error') return '요청 실패'
-  if (traceCollectionStatus !== 'DISABLED') return TRACE_COLLECTION_STATUS_LABEL[traceCollectionStatus]
-  if (externalResponse || traceDetail) return '완료'
-  return '대기'
+  if (traceCollectionStatus === 'PENDING') return 'Span 대기'
+  if (traceCollectionStatus === 'COLLECTING') return '수집 중'
+  return '응답 수신'
+}
+
+function validateRequestBody(bodyAllowed: boolean, requestBody: string) {
+  if (!bodyAllowed || !requestBody.trim()) return null
+  try {
+    JSON.parse(requestBody)
+    return null
+  } catch {
+    return '요청 본문은 올바른 JSON 형식이어야 합니다.'
+  }
 }
