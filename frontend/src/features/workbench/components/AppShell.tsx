@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react'
 import { StatusBadge } from '../../../components/StatusBadge'
+import type { StatusTone } from '../../../components/StatusBadge'
 import { WorkflowTabs } from '../../../components/WorkflowTabs'
 import { getWorkflowNavigationState } from '../../../components/workflowNavigation'
-import { getResultStatusLabel } from '../../../ui/copy'
-import type { EventStatus, ProjectAnalysisStatus } from '../../../types/trace'
+import type { ProjectAnalysisStatus } from '../../../types/trace'
 import type { AnalysisTarget } from '../types'
 import type { ViewMode } from '../../../ui/copy'
 
@@ -15,9 +15,7 @@ type AppShellProps = {
   hasDetectedApis: boolean
   requestReady: boolean
   traceId: string | null
-  traceResultStatus: EventStatus | 'IDLE'
-  traceDisplayStatus: string
-  traceEventCount: number
+  traceCollectionPresentation: { label: string; tone: StatusTone }
   onViewChange: (view: ViewMode) => void
   children: ReactNode
 }
@@ -30,9 +28,7 @@ export function AppShell({
   hasDetectedApis,
   requestReady,
   traceId,
-  traceResultStatus,
-  traceDisplayStatus,
-  traceEventCount,
+  traceCollectionPresentation,
   onViewChange,
   children,
 }: AppShellProps) {
@@ -55,10 +51,10 @@ export function AppShell({
         </div>
         {activeView === 'runtime' ? (
           <div className="topbar__trace-meta">
-            <span><small>Trace ID</small><strong>{traceId?.slice(0, 8) ?? '대기'}</strong></span>
-            <span><small>결과</small><strong>{getResultStatusLabel(traceResultStatus)}</strong></span>
-            <span><small>상태</small><strong>{traceDisplayStatus}</strong></span>
-            <span><small>이벤트</small><strong>{traceEventCount}</strong></span>
+            {traceId ? <span><small>Trace ID</small><strong title={traceId}>{traceId.slice(0, 8)}</strong></span> : null}
+            <StatusBadge tone={traceCollectionPresentation.tone}>
+              {traceCollectionPresentation.label}
+            </StatusBadge>
           </div>
         ) : (
           <StatusBadge tone={activeNavigationState.tone}>

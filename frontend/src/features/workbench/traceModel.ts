@@ -1,8 +1,23 @@
 import type { GraphNodeState, TraceDetail, TraceEvent, TraceResponsePreview, TraceSummary } from '../../types/trace'
+import type { StatusTone } from '../../components/StatusBadge'
+import type { StreamStatus } from '../../ui/copy'
 
 export type TraceHistoryFilter = 'all' | 'success' | 'attention' | 'timeout'
-export type TraceOutcome = 'success' | 'recovered' | 'failure' | 'collection_timeout'
+export type TraceOutcome = 'success' | 'recovered' | 'failure'
 export const MAX_RECENT_TRACES = 25
+
+export interface TraceOutcomePresentation {
+  outcome: TraceOutcome
+  resultLabel: string
+  resultDetail: string
+  collectionTimedOut: boolean
+  serviceTransitions: number
+}
+
+export interface TraceCollectionPresentation {
+  label: string
+  tone: StatusTone
+}
 
 export interface TraceMetadataItem {
   key: string
@@ -54,10 +69,61 @@ export function formatTraceResponsePreview(preview: TraceResponsePreview | null)
   return preview.body
 }
 
-export function getTraceOutcome(trace: TraceDetail, failureEvent: TraceEvent | null): TraceOutcome {
-  if (trace.traceCollectionStatus === 'TIMED_OUT') return 'collection_timeout'
-  if (trace.resultStatus === 'ERROR' || trace.resultStatus === 'TIMEOUT') return 'failure'
-  return failureEvent ? 'recovered' : 'success'
+export function buildTraceOutcomePresentation(
+  trace: TraceDetail,
+  failureEvent: TraceEvent | null,
+): TraceOutcomePresentation {
+  const outcome: TraceOutcome = trace.resultStatus === 'ERROR' || trace.resultStatus === 'TIMEOUT'
+    ? 'failure'
+    : failureEvent ? 'recovered' : 'success'
+  const collectionTimedOut = trace.traceCollectionStatus === 'TIMED_OUT'
+  const bySpanId = new Map(trace.events.filter((event) => event.spanId).map((event) => [event.spanId as string, event]))
+  const serviceTransitions = trace.events.filter((event) => {
+    const parent = event.parentSpanId ? bySpanId.get(event.parentSpanId) : null
+    return Boolean(parent?.serviceName && event.serviceName && parent.serviceName !== event.serviceName)
+  }).length
+
+  if (outcome === 'failure') {
+    return {
+      outcome,
+      resultLabel: '요청 실패',
+      resultDetail: '실제 하위 원인 Span부터 확인하세요.',
+      collectionTimedOut,
+      serviceTransitions,
+    }
+  }
+  if (outcome === 'recovered') {
+    return {
+      outcome,
+      resultLabel: '복구된 실패',
+      resultDetail: '중간 오류가 발생했지만 fallback으로 요청은 완료됐습니다.',
+      collectionTimedOut,
+      serviceTransitions,
+    }
+  }
+  return {
+    outcome,
+    resultLabel: collectionTimedOut ? 'HTTP 요청 성공' : '정상 완료',
+    resultDetail: collectionTimedOut
+      ? 'HTTP 요청은 완료됐지만 전체 Span 수집 여부는 확인할 수 없습니다.'
+      : '실패 없이 요청 처리가 끝났습니다.',
+    collectionTimedOut,
+    serviceTransitions,
+  }
+}
+
+export function getTraceCollectionPresentation(
+  streamStatus: StreamStatus,
+  collectionStatus: TraceDetail['traceCollectionStatus'],
+  hasTrace: boolean,
+): TraceCollectionPresentation {
+  if (collectionStatus === 'TIMED_OUT') return { label: 'Span 수집 시간 초과', tone: 'warning' }
+  if (collectionStatus === 'COMPLETED' || streamStatus === 'completed') return { label: '수집 완료', tone: 'success' }
+  if (streamStatus === 'connection_timeout' || streamStatus === 'error') return { label: '실시간 연결 실패', tone: 'error' }
+  if (collectionStatus === 'COLLECTING' || streamStatus === 'streaming') return { label: '수집 중', tone: 'info' }
+  if (collectionStatus === 'PENDING' || streamStatus === 'connecting') return { label: 'Span 대기', tone: 'info' }
+  if (hasTrace) return { label: '수집 완료', tone: 'success' }
+  return { label: 'Trace 대기', tone: 'neutral' }
 }
 
 export function getDefaultInspectionEvent(

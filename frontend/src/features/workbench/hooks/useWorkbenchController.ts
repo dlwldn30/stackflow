@@ -1,13 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { buildGraph, getNodeDetail } from '../../../lib/graph'
 import { buildWaterfall, getPrimaryFailureEvent } from '../../../lib/waterfall'
-import type { EventStatus } from '../../../types/trace'
-import { EVENT_STATUS_LABEL, STREAM_STATUS_LABEL, TRACE_COLLECTION_STATUS_LABEL } from '../../../ui/copy'
-import type { StatusTone } from '../../../components/StatusBadge'
 import type { ViewMode } from '../../../ui/copy'
 import { EMPTY_API_DEFINITION, EMPTY_DOMAIN, FALLBACK_API_CATALOG, FALLBACK_PROJECT_STRUCTURE, PROJECT_STATUS_CONTENT } from '../fixtures'
 import { createRequestEntry, filterApis, formatResponseBody } from '../requestModel'
-import { buildFailurePropagationPath, filterTraceHistory, getDefaultInspectionEvent, getInspectorEvent, getTraceOutcome } from '../traceModel'
+import { buildFailurePropagationPath, buildTraceOutcomePresentation, filterTraceHistory, getDefaultInspectionEvent, getInspectorEvent, getTraceCollectionPresentation } from '../traceModel'
 import {
   buildCommonProjectLayers,
   buildDomainStructurePath,
@@ -90,8 +87,9 @@ export function useWorkbenchController() {
     ?? graph.states.find((state) => state.id === primaryFailureNodeId)?.label
     ?? primaryFailureEvent?.component
     ?? null
-  const traceOutcome = runtime.traceDetail ? getTraceOutcome(runtime.traceDetail, primaryFailureEvent) : null
-  const traceCollectionTimedOut = runtime.traceDetail?.traceCollectionStatus === 'TIMED_OUT'
+  const traceOutcome = runtime.traceDetail
+    ? buildTraceOutcomePresentation(runtime.traceDetail, primaryFailureEvent)
+    : null
   const failurePropagationPath = buildFailurePropagationPath(runtime.traceDetail?.events ?? [], primaryFailureEvent)
   const filteredRecentTraces = filterTraceHistory(runtime.recentTraces, runtime.traceHistoryFilter)
   const projectMetrics = buildProjectMetrics(project.projectStructure)
@@ -138,24 +136,11 @@ export function useWorkbenchController() {
         ? '요청 후 Trace 확인'
         : externalTraceConfigured ? 'Trace 설정됨 · 확인 전' : '외부 API 요청'
       : '정적 분석만 가능'
-  const traceDisplayStatus = runtime.streamStatus === 'connection_timeout'
-    ? STREAM_STATUS_LABEL[runtime.streamStatus]
-    : traceCollectionTimedOut
-      ? TRACE_COLLECTION_STATUS_LABEL.TIMED_OUT
-      : runtime.traceDetail?.source === 'OPENTELEMETRY' && runtime.streamStatus !== 'idle'
-        ? TRACE_COLLECTION_STATUS_LABEL[runtime.traceCollectionStatus]
-        : runtime.traceDetail
-          ? EVENT_STATUS_LABEL[runtime.traceDetail.resultStatus]
-          : STREAM_STATUS_LABEL[runtime.streamStatus]
-  const traceDisplayTone: StatusTone = traceCollectionTimedOut
-    ? 'warning'
-    : runtime.streamStatus === 'idle' && runtime.traceDetail
-      ? runtime.traceDetail.resultStatus === 'SUCCESS' ? 'success'
-        : runtime.traceDetail.resultStatus === 'WARNING' ? 'warning' : 'error'
-      : runtime.streamStatus === 'completed' ? 'success'
-        : runtime.streamStatus === 'error' ? 'error'
-          : runtime.streamStatus === 'connection_timeout' ? 'warning'
-            : runtime.streamStatus === 'idle' ? 'neutral' : 'info'
+  const traceCollectionPresentation = getTraceCollectionPresentation(
+    runtime.streamStatus,
+    runtime.traceDetail?.traceCollectionStatus ?? runtime.traceCollectionStatus,
+    Boolean(runtime.traceDetail),
+  )
   const selectedApiMethodLabel = getApiMethodLabel(selectedApi)
   const selectedApiMethodClassName = getApiMethodBadgeClassName(selectedApi)
   const formattedResponseBody = useMemo(() => request.lastResponseBody
@@ -167,9 +152,6 @@ export function useWorkbenchController() {
   const graphFitKey = `${runtime.traceDetail?.traceId ?? 'empty'}-${runtime.traceDetail?.events.length ?? 0}`
   const selectedTraceId = runtime.traceDetail?.traceId
   const setSelectedNodeId = runtime.setSelectedNodeId
-  const currentResultStatus: EventStatus | 'IDLE' = request.externalResponse?.resultStatus
-    ?? runtime.traceDetail?.resultStatus
-    ?? 'IDLE'
   const effectiveProjectStatus = project.analysisState === 'error' || project.analysisResultState === 'none'
     ? 'FAILED'
     : project.projectStructure.analysisStatus
@@ -210,9 +192,7 @@ export function useWorkbenchController() {
       hasDetectedApis: hasUsableApis,
       requestReady: hasUsableApis && hasConcreteMethod,
       traceId: runtime.traceDetail?.traceId ?? null,
-      traceResultStatus: currentResultStatus,
-      traceDisplayStatus,
-      traceEventCount: runtime.traceDetail?.events.length ?? 0,
+      traceCollectionPresentation,
     },
     projectView: {
       ...project, ...projectActions,
@@ -243,7 +223,7 @@ export function useWorkbenchController() {
       selectedNode, inspectorEvent, primaryFailureLabel, traceOutcome,
       failurePropagationPath, filteredRecentTraces, activeRoute, traceComparison,
       traceServiceGroups,
-      traceDisplayTone, traceDisplayStatus, selectedApi, selectedDomain,
+      selectedApi, selectedDomain,
       analysisTarget: project.analysisTarget,
       runtimeSupported, externalTraceConfigured, selectedApiMethodLabel,
     },

@@ -17,9 +17,7 @@ export function StackFlowWorkbench() {
       hasDetectedApis={shell.hasDetectedApis}
       requestReady={shell.requestReady}
       traceId={shell.traceId}
-      traceResultStatus={shell.traceResultStatus}
-      traceDisplayStatus={shell.traceDisplayStatus}
-      traceEventCount={shell.traceEventCount}
+      traceCollectionPresentation={shell.traceCollectionPresentation}
       onViewChange={shell.setActiveView}
     >
       {shell.activeView === 'project' ? <ProjectView model={projectView} /> : null}

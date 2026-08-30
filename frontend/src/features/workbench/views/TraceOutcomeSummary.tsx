@@ -1,48 +1,41 @@
-import { AlertCircle, CheckCircle2, ChevronRight, RotateCcw } from 'lucide-react'
+import { AlertCircle, CheckCircle2, ChevronRight, Radio, RotateCcw } from 'lucide-react'
 import type { TraceDetail, TraceEvent } from '../../../types/trace'
 import { EVENT_STATUS_LABEL } from '../../../ui/copy'
-import type { TraceOutcome } from '../traceModel'
+import type { TraceOutcomePresentation } from '../traceModel'
 
 interface TraceOutcomeSummaryProps {
   trace: TraceDetail
-  outcome: TraceOutcome
+  presentation: TraceOutcomePresentation
   failureEvent: TraceEvent | null
   failureLabel: string | null
   propagationPath: TraceEvent[]
   onInspectFailure: () => void
 }
 
-const OUTCOME_COPY: Record<TraceOutcome, { label: string; detail: string }> = {
-  success: { label: '정상 완료', detail: '실패 없이 요청 처리가 끝났습니다.' },
-  recovered: { label: '복구된 실패', detail: '중간 오류가 발생했지만 fallback으로 요청은 완료됐습니다.' },
-  failure: { label: '요청 실패', detail: '실제 하위 원인 span부터 확인하세요.' },
-  collection_timeout: { label: 'Span 수집 시간 초과', detail: 'HTTP 요청 결과는 유지됐지만 Agent span 수집이 완료되지 않았습니다.' },
-}
-
 export function TraceOutcomeSummary({
   trace,
-  outcome,
+  presentation,
   failureEvent,
   failureLabel,
   propagationPath,
   onInspectFailure,
 }: TraceOutcomeSummaryProps) {
-  const copy = OUTCOME_COPY[outcome]
-  const bySpanId = new Map(trace.events.filter((event) => event.spanId).map((event) => [event.spanId as string, event]))
-  const serviceTransitions = trace.events.filter((event) => {
-    const parent = event.parentSpanId ? bySpanId.get(event.parentSpanId) : null
-    return Boolean(parent?.serviceName && event.serviceName && parent.serviceName !== event.serviceName)
-  }).length
+  const { outcome, resultLabel, resultDetail, collectionTimedOut, serviceTransitions } = presentation
+  const propagationLabel = propagationPath
+    .map((event) => `${event.serviceName ? `${event.serviceName} / ` : ''}${event.eventType}`)
+    .join(' → ')
 
   return (
     <section className={`trace-outcome trace-outcome--${outcome}`} aria-label="Trace 실행 결과">
-      <div className="trace-outcome__metrics">
-        <span><small>결과</small><strong>{copy.label}</strong></span>
-        <span><small>HTTP</small><strong>{trace.httpStatus || '-'}</strong></span>
+      <div className="trace-outcome__metrics trace-outcome__metrics--primary">
+        <span><small>실행 결과</small><strong>{resultLabel}</strong></span>
+        <span><small>HTTP 상태</small><strong>{trace.httpStatus || '-'}</strong></span>
         <span><small>총 소요 시간</small><strong>{trace.durationMs}ms</strong></span>
-        <span><small>Span</small><strong>{trace.events.length}개</strong></span>
+      </div>
+      <div className="trace-outcome__metrics trace-outcome__metrics--scope">
         <span><small>진입 서비스</small><strong>{trace.serviceName ?? '-'}</strong></span>
         <span><small>참여 서비스</small><strong>{trace.serviceNames.length}개 · 경계 {serviceTransitions}회</strong></span>
+        <span><small>수집된 Span</small><strong>{trace.events.length}개</strong></span>
       </div>
 
       {failureEvent ? (
@@ -52,17 +45,13 @@ export function TraceOutcomeSummary({
           </span>
           <div className="trace-cause__body">
             <span>{outcome === 'recovered' ? '복구된 실패' : '주요 실패 원인'}</span>
-            <strong>{failureLabel} · {failureEvent.errorType ?? EVENT_STATUS_LABEL[failureEvent.status]}</strong>
+            <small>{failureEvent.serviceName ? `${failureEvent.serviceName} / ` : ''}{failureLabel}</small>
+            <strong>{failureEvent.errorType ?? EVENT_STATUS_LABEL[failureEvent.status]}</strong>
             <p>{failureEvent.errorMessage ?? `${failureEvent.eventType} 실행 중 문제가 발생했습니다.`}</p>
             {propagationPath.length > 1 ? (
               <div className="trace-propagation" aria-label="오류 전파 경로">
                 <b>오류 전파</b>
-                {propagationPath.map((event, index) => (
-                  <span key={event.spanId ?? event.eventId}>
-                    {index > 0 ? <ChevronRight size={12} aria-hidden="true" /> : null}
-                    {event.serviceName ? `${event.serviceName} / ` : ''}{event.eventType}
-                  </span>
-                ))}
+                <span title={propagationLabel}>{propagationLabel}</span>
               </div>
             ) : null}
           </div>
@@ -71,18 +60,26 @@ export function TraceOutcomeSummary({
             <ChevronRight size={15} aria-hidden="true" />
           </button>
         </div>
-      ) : (
-        <div className={`trace-cause${outcome === 'success' ? ' trace-cause--success' : outcome === 'collection_timeout' ? ' trace-cause--collection-timeout' : ''}`}>
+      ) : !collectionTimedOut ? (
+        <div className="trace-cause trace-cause--success">
           <span className="trace-cause__icon" aria-hidden="true">
-            {outcome === 'collection_timeout' ? <AlertCircle size={17} /> : <CheckCircle2 size={17} />}
+            <CheckCircle2 size={17} />
           </span>
           <div className="trace-cause__body">
-            <span>실행 결과</span>
-            <strong>{copy.label}</strong>
-            <p>{copy.detail}</p>
+            <p>{resultDetail}</p>
           </div>
         </div>
-      )}
+      ) : null}
+
+      {collectionTimedOut ? (
+        <div className="trace-collection-warning" role="status">
+          <Radio size={17} aria-hidden="true" />
+          <div>
+            <strong>Span 수집 시간 초과</strong>
+            <p>{resultDetail} Agent 실행 설정과 Collector 주소를 확인하세요.</p>
+          </div>
+        </div>
+      ) : null}
     </section>
   )
 }
