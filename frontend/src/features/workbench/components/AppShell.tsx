@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react'
-import { EvidenceProgress } from '../../../components/EvidenceProgress'
 import { StatusBadge } from '../../../components/StatusBadge'
 import { WorkflowTabs } from '../../../components/WorkflowTabs'
-import { PROJECT_STATUS_LABEL, getResultStatusLabel } from '../../../ui/copy'
+import { getWorkflowNavigationState } from '../../../components/workflowNavigation'
+import { getResultStatusLabel } from '../../../ui/copy'
 import type { EventStatus, ProjectAnalysisStatus } from '../../../types/trace'
 import type { AnalysisTarget } from '../types'
 import type { ViewMode } from '../../../ui/copy'
@@ -36,6 +36,13 @@ export function AppShell({
   onViewChange,
   children,
 }: AppShellProps) {
+  const activeNavigationState = getWorkflowNavigationState(activeView, {
+    projectStatus,
+    hasDetectedApis,
+    requestReady,
+    traceAvailable: Boolean(traceId),
+  })
+
   return (
     <main className="app-shell">
       <header className={`topbar topbar--${activeView}`}>
@@ -46,12 +53,6 @@ export function AppShell({
             <span>{projectName}</span>
           </div>
         </div>
-        <EvidenceProgress
-          activeView={activeView}
-          analysisReady={projectStatus === 'SUCCESS'}
-          requestReady={requestReady}
-          traceReady={Boolean(traceId)}
-        />
         {activeView === 'runtime' ? (
           <div className="topbar__trace-meta">
             <span><small>Trace ID</small><strong>{traceId?.slice(0, 8) ?? '대기'}</strong></span>
@@ -60,15 +61,17 @@ export function AppShell({
             <span><small>이벤트</small><strong>{traceEventCount}</strong></span>
           </div>
         ) : (
-          <StatusBadge tone={projectStatus === 'SUCCESS' ? 'success' : projectStatus === 'FAILED' ? 'error' : 'warning'}>
-            {PROJECT_STATUS_LABEL[projectStatus]}
+          <StatusBadge tone={activeNavigationState.tone}>
+            {activeNavigationState.label}
           </StatusBadge>
         )}
       </header>
 
       <WorkflowTabs
         activeView={activeView}
+        projectStatus={projectStatus}
         hasDetectedApis={hasDetectedApis}
+        requestReady={requestReady}
         traceAvailable={Boolean(traceId)}
         externalProject={analysisTarget === 'external'}
         onChange={onViewChange}
