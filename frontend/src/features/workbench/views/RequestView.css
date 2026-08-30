@@ -572,11 +572,11 @@
 
   .workspace--api .request-endpoint-explorer {
     position: sticky;
-    top: 131px;
+    top: var(--workbench-sticky-offset);
     grid-column: 1;
     grid-row: 1 / span 2;
     align-self: start;
-    max-height: calc(100vh - 131px);
+    max-height: calc(100vh - var(--workbench-sticky-offset));
     border-right: 1px solid var(--color-line);
     background: var(--color-surface);
     overflow: auto;
@@ -831,11 +831,11 @@
 
 .workspace--api .setup-step--endpoint {
     position: sticky;
-    top: 131px;
+    top: var(--workbench-sticky-offset);
     grid-column: 1;
     grid-row: 1 / span 2;
     align-self: start;
-    max-height: calc(100vh - 131px);
+    max-height: calc(100vh - var(--workbench-sticky-offset));
     border-right: 1px solid var(--color-line);
     border-bottom: 0;
     background: var(--color-surface);
