@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { buildGraph, getNodeDetail } from '../../../lib/graph'
 import { buildWaterfall, getPrimaryFailureEvent } from '../../../lib/waterfall'
 import type { ViewMode } from '../../../ui/copy'
 import { EMPTY_API_DEFINITION, EMPTY_DOMAIN, FALLBACK_API_CATALOG, FALLBACK_PROJECT_STRUCTURE, PROJECT_STATUS_CONTENT } from '../fixtures'
-import { createRequestEntry, filterApis, formatResponseBody } from '../requestModel'
+import { buildRequestResponsePresentation, createRequestEntry, filterApis } from '../requestModel'
 import { buildFailurePropagationPath, buildTraceOutcomePresentation, filterTraceHistory, getDefaultInspectionEvent, getInspectorEvent, getTraceCollectionPresentation } from '../traceModel'
 import {
   buildCommonProjectLayers,
@@ -143,12 +143,15 @@ export function useWorkbenchController() {
   )
   const selectedApiMethodLabel = getApiMethodLabel(selectedApi)
   const selectedApiMethodClassName = getApiMethodBadgeClassName(selectedApi)
-  const formattedResponseBody = useMemo(() => request.lastResponseBody
-    ? JSON.stringify(request.lastResponseBody, null, 2)
-    : null, [request.lastResponseBody])
-  const formattedExternalResponseBody = useMemo(() => request.externalResponse
-    ? formatResponseBody(request.externalResponse.responseBody)
-    : null, [request.externalResponse])
+  const requestResponsePresentation = buildRequestResponsePresentation({
+    externalRunnable,
+    requestState: request.requestState,
+    requestMessage: request.requestMessage,
+    externalResponse: request.externalResponse,
+    traceDetail: runtime.traceDetail,
+    traceCollectionStatus: runtime.traceCollectionStatus,
+    sampleResponseBody: request.lastResponseBody,
+  })
   const graphFitKey = `${runtime.traceDetail?.traceId ?? 'empty'}-${runtime.traceDetail?.events.length ?? 0}`
   const selectedTraceId = runtime.traceDetail?.traceId
   const setSelectedNodeId = runtime.setSelectedNodeId
@@ -212,7 +215,7 @@ export function useWorkbenchController() {
       hasDetectedApis: hasUsableApis, hasConcreteMethod, runtimeSupported, externalRunnable, analyzeOnly,
       externalTraceConfigured, externalTraceVerified, hasIntegrationBoundary,
       estimatedFlow, runtimeModeLabel, selectedApiMethodLabel,
-      selectedApiMethodClassName, formattedResponseBody, formattedExternalResponseBody,
+      selectedApiMethodClassName, requestResponsePresentation,
       traceDetail: runtime.traceDetail,
       traceCollectionStatus: runtime.traceCollectionStatus,
     },

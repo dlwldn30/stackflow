@@ -1,5 +1,5 @@
-import { Activity, Braces, Route } from 'lucide-react'
-import type { ApiDefinition, EstimatedFlowStep } from '../types'
+import { Activity, Braces } from 'lucide-react'
+import type { ApiDefinition } from '../types'
 
 type RequestEvidencePanelProps = {
   selectedApi: ApiDefinition
@@ -9,8 +9,6 @@ type RequestEvidencePanelProps = {
   externalRunnable: boolean
   externalTraceConfigured: boolean
   externalTraceVerified: boolean
-  hasIntegrationBoundary: boolean
-  estimatedFlow: EstimatedFlowStep[]
 }
 
 export function RequestEvidencePanel({
@@ -21,8 +19,6 @@ export function RequestEvidencePanel({
   externalRunnable,
   externalTraceConfigured,
   externalTraceVerified,
-  hasIntegrationBoundary,
-  estimatedFlow,
 }: RequestEvidencePanelProps) {
   return (
     <div className="request-evidence-panel">
@@ -40,12 +36,6 @@ export function RequestEvidencePanel({
           <p>{getReadinessDetail(runtimeSupported, externalRunnable, externalTraceConfigured, externalTraceVerified, selectedApi.methodSpecified)}</p>
         </div>
       </section>
-
-      <details className="request-evidence-disclosure" open>
-        <summary><Route size={15} aria-hidden="true" /><span>예상 경로</span><strong>{estimatedFlow.length}단계</strong></summary>
-        <p>{estimatedFlow.map((step) => step.label).join(' → ') || '예상 경로 없음'}</p>
-        <small>{hasIntegrationBoundary ? '외부 연동 경계를 포함한 정적 분석 결과입니다.' : '코드 layer를 기준으로 만든 예상 흐름입니다.'}</small>
-      </details>
 
       <details className="request-evidence-disclosure">
         <summary><Braces size={15} aria-hidden="true" /><span>분석 근거</span><strong>보기</strong></summary>

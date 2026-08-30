@@ -1,9 +1,11 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { ComponentProps } from 'react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ApiDefinition } from '../types'
+import { buildRequestResponsePresentation } from '../requestModel'
 import { EndpointExplorer } from './EndpointExplorer'
 import { RequestComposer } from './RequestComposer'
+import { RequestResponsePanel } from './RequestResponsePanel'
 
 const api: ApiDefinition = {
   id: 'product-list',
@@ -21,6 +23,8 @@ const api: ApiDefinition = {
   source: 'analyzed',
   buildPath: () => '/lab/products',
 }
+
+afterEach(cleanup)
 
 function requestComposerProps(
   overrides: Partial<ComponentProps<typeof RequestComposer>> = {},
@@ -50,12 +54,8 @@ function requestComposerProps(
     bodyAllowed: false,
     requestState: 'idle',
     requestMessage: 'API를 선택하고 요청을 실행하세요.',
-    externalResponse: null,
-    traceDetail: null,
     traceCollectionStatus: 'DISABLED',
-    formattedExternalResponseBody: null,
-    formattedResponseBody: null,
-    onBackProject: vi.fn(),
+    responseAvailable: false,
     onTargetBaseUrlChange: vi.fn(),
     onProductIdChange: vi.fn(),
     onScenarioChange: vi.fn(),
@@ -69,7 +69,6 @@ function requestComposerProps(
     onRemoveQueryParam: vi.fn(),
     onRemoveRequestHeader: vi.fn(),
     onRunRequest: vi.fn(),
-    onOpenTrace: vi.fn(),
     ...overrides,
   }
 }
@@ -118,18 +117,88 @@ describe('request workspace', () => {
     expect(screen.getByText(/HTTP method가 명시되지 않아 요청을 실행할 수 없습니다/u)).toBeInTheDocument()
   })
 
+  it('keeps execution disabled until a target URL is provided', () => {
+    render(<RequestComposer {...requestComposerProps({ targetBaseUrl: '' })} />)
+
+    expect(screen.getByRole('button', { name: '외부 API 요청' })).toBeDisabled()
+    expect(screen.getByText('요청을 실행하려면 대상 기본 URL을 입력하세요.')).toBeInTheDocument()
+  })
+
+  it('keeps execution disabled while the request body is invalid JSON', () => {
+    render(
+      <RequestComposer
+        {...requestComposerProps({
+          selectedApi: { ...api, method: 'POST' },
+          methodLabel: 'POST',
+          methodClassName: 'method-badge--post',
+          bodyAllowed: true,
+          requestOptionTab: 'body',
+          requestBody: '{invalid',
+        })}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: '외부 API 요청' })).toBeDisabled()
+    expect(screen.getByText('요청 본문은 올바른 JSON 형식이어야 합니다.')).toBeInTheDocument()
+  })
+
   it('marks a truncated external response while preserving its text body', () => {
-    render(<RequestComposer {...requestComposerProps({
+    const presentation = buildRequestResponsePresentation({
+      externalRunnable: true,
+      requestState: 'idle',
+      requestMessage: '',
       externalResponse: {
         method: 'GET', targetUrl: 'http://localhost:8091/lab/products', httpStatus: 200,
         durationMs: 12, resultStatus: 'SUCCESS', contentType: 'application/json',
         responseBody: '{"partial":', responseBodyTruncated: true, errorMessage: null,
         traceId: null, traceCollectionStatus: 'DISABLED',
       },
-      formattedExternalResponseBody: '{"partial":',
-    })} />)
+      traceDetail: null,
+      traceCollectionStatus: 'DISABLED',
+      sampleResponseBody: null,
+    })
+    render(<RequestResponsePanel presentation={presentation} onOpenTrace={vi.fn()} />)
 
     expect(screen.getByText('1MiB 일부')).toBeInTheDocument()
     expect(screen.getByText('{"partial":')).toBeInTheDocument()
+  })
+
+  it('separates a successful HTTP response from a span collection timeout', () => {
+    const presentation = buildRequestResponsePresentation({
+      externalRunnable: true,
+      requestState: 'idle',
+      requestMessage: '',
+      externalResponse: {
+        method: 'GET', targetUrl: 'http://localhost:8091/lab/products', httpStatus: 200,
+        durationMs: 12, resultStatus: 'SUCCESS', contentType: 'application/json',
+        responseBody: '{"ok":true}', responseBodyTruncated: false, errorMessage: null,
+        traceId: 'trace-id', traceCollectionStatus: 'TIMED_OUT',
+      },
+      traceDetail: null,
+      traceCollectionStatus: 'TIMED_OUT',
+      sampleResponseBody: null,
+    })
+    render(<RequestResponsePanel presentation={presentation} onOpenTrace={vi.fn()} />)
+
+    expect(screen.getByRole('heading', { name: '요청 성공' })).toBeInTheDocument()
+    expect(screen.getByText('HTTP 200')).toBeInTheDocument()
+    expect(screen.getByText(/Span 수집 시간이 초과됐습니다/u)).toBeInTheDocument()
+  })
+
+  it('shows a transport failure without inventing an HTTP status', () => {
+    const presentation = buildRequestResponsePresentation({
+      externalRunnable: true,
+      requestState: 'error',
+      requestMessage: '대상 서버에 연결할 수 없습니다.',
+      externalResponse: null,
+      traceDetail: null,
+      traceCollectionStatus: 'DISABLED',
+      sampleResponseBody: null,
+    })
+    render(<RequestResponsePanel presentation={presentation} onOpenTrace={vi.fn()} />)
+
+    expect(screen.getByText('전송 실패')).toBeInTheDocument()
+    expect(screen.getByText('대상 서버에 연결할 수 없습니다.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Trace에서 보기' })).not.toBeInTheDocument()
   })
 })
