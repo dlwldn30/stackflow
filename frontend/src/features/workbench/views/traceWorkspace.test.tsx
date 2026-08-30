@@ -6,6 +6,7 @@ import { buildWaterfall } from '../../../lib/waterfall'
 import { TraceHistoryPanel } from './TraceHistoryPanel'
 import { TraceInspector } from './TraceInspector'
 import { TraceOutcomeSummary } from './TraceOutcomeSummary'
+import { buildTraceOutcomePresentation } from '../traceModel'
 
 const failureEvent: TraceEvent = {
   eventId: 'postgres', traceId: 'trace', component: 'POSTGRESQL', eventType: 'SELECT product', status: 'TIMEOUT',
@@ -30,7 +31,7 @@ describe('Trace workspace presentation', () => {
     render(
       <TraceOutcomeSummary
         trace={detail}
-        outcome="failure"
+        presentation={buildTraceOutcomePresentation(detail, failureEvent)}
         failureEvent={failureEvent}
         failureLabel="SELECT product"
         propagationPath={[failureEvent, { ...failureEvent, eventId: 'service', spanId: 'service', eventType: 'ProductService' }]}
@@ -46,14 +47,18 @@ describe('Trace workspace presentation', () => {
     const { container } = render(
       <TraceOutcomeSummary
         trace={{ ...detail, httpStatus: 200, resultStatus: 'SUCCESS', events: [], traceCollectionStatus: 'TIMED_OUT' }}
-        outcome="collection_timeout"
+        presentation={buildTraceOutcomePresentation(
+          { ...detail, httpStatus: 200, resultStatus: 'SUCCESS', events: [], traceCollectionStatus: 'TIMED_OUT' },
+          null,
+        )}
         failureEvent={null}
         failureLabel={null}
         propagationPath={[]}
         onInspectFailure={vi.fn()}
       />,
     )
-    expect(within(container).getAllByText('Span 수집 시간 초과')).not.toHaveLength(0)
+    expect(within(container).getByText('HTTP 요청 성공')).toBeInTheDocument()
+    expect(within(container).getByText('Span 수집 시간 초과')).toBeInTheDocument()
     expect(within(container).queryByText('요청 실패')).not.toBeInTheDocument()
   })
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ComponentType, EventStatus, GraphNodeState, TraceDetail, TraceEvent, TraceSummary } from '../../types/trace'
-import { buildFailurePropagationPath, filterTraceHistory, getDefaultInspectionEvent, getExceptionLocation, getInspectorEvent, getKeyMetadata, getTraceOutcome, MAX_RECENT_TRACES, resolveCodeLocation, upsertRecentTrace } from './traceModel'
+import { buildFailurePropagationPath, buildTraceOutcomePresentation, filterTraceHistory, getDefaultInspectionEvent, getExceptionLocation, getInspectorEvent, getKeyMetadata, getTraceCollectionPresentation, MAX_RECENT_TRACES, resolveCodeLocation, upsertRecentTrace } from './traceModel'
 
 function event(
   spanId: string,
@@ -43,17 +43,28 @@ function trace(resultStatus: EventStatus, events: TraceEvent[]): TraceDetail {
 describe('trace inspection model', () => {
   it('classifies an internal Redis error followed by success as recovered', () => {
     const redis = event('redis', 'server', 'REDIS', 'ERROR')
-    expect(getTraceOutcome(trace('SUCCESS', [redis]), redis)).toBe('recovered')
+    expect(buildTraceOutcomePresentation(trace('SUCCESS', [redis]), redis).outcome).toBe('recovered')
   })
 
   it('classifies a terminal timeout as failure', () => {
     const postgres = event('postgres', 'server', 'POSTGRESQL', 'TIMEOUT')
-    expect(getTraceOutcome(trace('TIMEOUT', [postgres]), postgres)).toBe('failure')
+    expect(buildTraceOutcomePresentation(trace('TIMEOUT', [postgres]), postgres).outcome).toBe('failure')
   })
 
-  it('classifies span collection timeout separately from the HTTP result', () => {
+  it('keeps a successful HTTP result when span collection times out', () => {
     const timedOut = { ...trace('SUCCESS', []), traceCollectionStatus: 'TIMED_OUT' as const }
-    expect(getTraceOutcome(timedOut, null)).toBe('collection_timeout')
+    expect(buildTraceOutcomePresentation(timedOut, null)).toMatchObject({
+      outcome: 'success',
+      resultLabel: 'HTTP 요청 성공',
+      collectionTimedOut: true,
+    })
+  })
+
+  it('keeps collection lifecycle labels independent from the HTTP result', () => {
+    expect(getTraceCollectionPresentation('streaming', 'COLLECTING', true)).toEqual({ label: '수집 중', tone: 'info' })
+    expect(getTraceCollectionPresentation('error', 'TIMED_OUT', true)).toEqual({ label: 'Span 수집 시간 초과', tone: 'warning' })
+    expect(getTraceCollectionPresentation('idle', 'COMPLETED', true)).toEqual({ label: '수집 완료', tone: 'success' })
+    expect(getTraceCollectionPresentation('idle', 'DISABLED', false)).toEqual({ label: 'Trace 대기', tone: 'neutral' })
   })
 
   it('selects the server span for a successful trace', () => {

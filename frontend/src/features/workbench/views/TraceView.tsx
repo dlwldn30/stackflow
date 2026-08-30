@@ -17,7 +17,7 @@ export function TraceView({ model }: TraceViewProps) {
   const {
     traceDetail, recentTraces, traceHistoryFilter, setTraceHistoryFilter,
     filteredRecentTraces, selectTrace, selectedDomain, selectedApi,
-    selectedApiMethodLabel, traceDisplayTone, traceDisplayStatus,
+    selectedApiMethodLabel,
     runtimeSupported, externalTraceConfigured, analysisTarget, setActiveView,
     traceOutcome, primaryFailureEvent, primaryFailureLabel,
     failurePropagationPath, primaryFailureNodeId, setSelectedNodeId,
@@ -57,9 +57,6 @@ export function TraceView({ model }: TraceViewProps) {
                           : '프로젝트 구조에서 Agent 실행 설정을 먼저 생성하세요.'}
                   </p>
                 </div>
-                <StatusBadge tone={traceDisplayTone}>
-                  {traceDisplayStatus}
-                </StatusBadge>
               </div>
 
               {!traceDetail ? (
@@ -76,7 +73,7 @@ export function TraceView({ model }: TraceViewProps) {
                 <>
               <TraceOutcomeSummary
                 trace={traceDetail}
-                outcome={traceOutcome ?? 'success'}
+                presentation={traceOutcome!}
                 failureEvent={primaryFailureEvent}
                 failureLabel={primaryFailureLabel}
                 propagationPath={failurePropagationPath}
