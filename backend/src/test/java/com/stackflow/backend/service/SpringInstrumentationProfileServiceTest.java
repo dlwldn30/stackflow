@@ -46,7 +46,26 @@ class SpringInstrumentationProfileServiceTest {
 					return "ok";
 				}
 
+				public static String normalizeOrder() {
+					return "ok";
+				}
+
 				private void internalOnly() {
+				}
+
+				public record LookupResult(String value) {
+				}
+
+				public static record CachedResult(String value) {
+				}
+
+				public static class Support {
+					public Support() {
+					}
+				}
+
+				public enum State {
+					READY
 				}
 			}
 			""");
@@ -69,8 +88,14 @@ class SpringInstrumentationProfileServiceTest {
 		assertTrue(profile.instrumentedClasses().contains("com.example.order.OrderService"));
 		assertFalse(profile.instrumentedClasses().contains("com.example.order.ApiResponse"));
 		assertTrue(profile.methodsInclude().contains("com.example.order.OrderController[listOrders]"));
-		assertTrue(profile.methodsInclude().contains("com.example.order.OrderService[findOrder]"));
+		assertTrue(profile.methodsInclude().contains(
+			"com.example.order.OrderService[findOrder,normalizeOrder]"
+		));
 		assertFalse(profile.methodsInclude().contains("internalOnly"));
+		assertFalse(profile.methodsInclude().contains("LookupResult"));
+		assertFalse(profile.methodsInclude().contains("CachedResult"));
+		assertFalse(profile.methodsInclude().contains("Support"));
+		assertFalse(profile.methodsInclude().contains("State"));
 		assertTrue(profile.commands().get("gradle").contains("./gradlew bootRun"));
 		assertTrue(profile.commands().get("gradle").contains("-javaagent:/tmp/opentelemetry-javaagent.jar"));
 		assertEquals("PROFILE_GENERATED", profile.connectionStatus().name());

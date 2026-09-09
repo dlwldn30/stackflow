@@ -32,7 +32,10 @@ public class SpringInstrumentationProfileService {
 	private static final Pattern PACKAGE_PATTERN = Pattern.compile("(?m)^\\s*package\\s+([\\w.]+)\\s*;");
 	private static final Pattern TYPE_PATTERN = Pattern.compile("\\b(?:class|interface|record|enum)\\s+(\\w+)");
 	private static final Pattern PUBLIC_METHOD_PATTERN = Pattern.compile(
-		"\\bpublic\\s+(?:<[^>{}]+>\\s+)?[\\w<?>.,\\[\\]\\s]+\\s+(\\w+)\\s*\\("
+		"\\bpublic\\s+"
+			+ "(?!(?:(?:static|final|abstract|strictfp|sealed|non-sealed)\\s+)*"
+			+ "(?:class|interface|record|enum)\\b)"
+			+ "(?:<[^>{}]+>\\s+)?[\\w<?>.,\\[\\]\\s]+\\s+(\\w+)\\s*\\("
 	);
 	private static final String DEFAULT_COLLECTOR = "http://localhost:18080";
 	private static final String DEFAULT_AGENT_PATH = "~/.stackflow/agents/opentelemetry-javaagent.jar";
